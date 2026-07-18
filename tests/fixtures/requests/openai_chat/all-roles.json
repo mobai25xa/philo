@@ -1,0 +1,12 @@
+{
+  "model": "gpt-test",
+  "messages": [
+    { "role": "developer", "content": "developer\ntext" },
+    { "role": "system", "content": "system text" },
+    { "role": "user", "content": "  user text  " },
+    { "role": "assistant", "content": "assistant text" }
+  ],
+  "stream": true,
+  "stream_options": { "include_usage": true },
+  "n": 1
+}

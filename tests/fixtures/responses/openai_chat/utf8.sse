@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-utf8","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"你好🙂"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-utf8","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

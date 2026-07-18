@@ -1,0 +1,4 @@
+data: {"id":"chatcmpl-choice","model":"gpt-test","choices":[{"index":1,"delta":{"content":"not-supported"},"finish_reason":"stop"}]}
+
+data: [DONE]
+

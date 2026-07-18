@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-empty","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-empty","model":"gpt-test","choices":[{"index":0,"delta":{"content":null},"finish_reason":"length"}]}
+
+data: [DONE]
+

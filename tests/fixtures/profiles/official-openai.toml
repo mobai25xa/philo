@@ -1,0 +1,9 @@
+kind = "official-openai"
+provider_id = "official-openai"
+protocol_id = "openai-chat-completions"
+base_url = "https://api.openai.com/v1"
+path = "/chat/completions"
+auth = "bearer"
+api_key_source = "environment:OPENAI_API_KEY"
+redirect_policy = "disabled"
+test_only = false

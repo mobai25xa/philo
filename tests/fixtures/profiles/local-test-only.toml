@@ -1,0 +1,8 @@
+kind = "local-test-only"
+provider_id = "test-only"
+protocol_id = "openai-chat-completions"
+endpoint = "http://127.0.0.1:43123/v1/chat/completions"
+auth = "fixture-only-bearer"
+credential_audience = "exact-loopback-origin"
+redirect_policy = "disabled"
+test_only = true

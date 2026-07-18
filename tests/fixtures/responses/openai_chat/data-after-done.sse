@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-after-done","model":"gpt-test","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+data: {"id":"chatcmpl-after-done","model":"gpt-test","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+

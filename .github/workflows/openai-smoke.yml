@@ -1,0 +1,51 @@
+name: Official OpenAI Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Verified official OpenAI Chat Completions model ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-openai-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: One controlled text stream
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      OPENAI_SMOKE_ENABLED: "true"
+      OPENAI_SMOKE_MODEL: ${{ inputs.model }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      - name: Run the single opt-in smoke request
+        run: cargo test --test openai_smoke official_openai_text_stream_smoke -- --exact --nocapture
+      - name: Record safe smoke metadata
+        if: always()
+        shell: bash
+        run: |
+          safe_model="<invalid>"
+          if [[ "$OPENAI_SMOKE_MODEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            safe_model="$OPENAI_SMOKE_MODEL"
+          fi
+          {
+            echo "## Official OpenAI smoke"
+            echo ""
+            echo "- Date (UTC): $(date -u +%F)"
+            echo "- Contract: philo/openai-chat-p1 1.0.0"
+            echo "- Model: $safe_model"
+            echo "- Result: ${{ job.status }}"
+            echo "- Prompt, output, API key, and provider request ID values: not recorded"
+          } >> "$GITHUB_STEP_SUMMARY"
