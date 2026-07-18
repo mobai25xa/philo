@@ -50,6 +50,9 @@ jobs:
   msrv:
     name: Declared Rust 1.97.1
     runs-on: ubuntu-latest
+    env:
+      # Override rust-toolchain.toml's development "stable" channel for this gate.
+      RUSTUP_TOOLCHAIN: 1.97.1
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -59,6 +62,7 @@ jobs:
         with:
           workspaces: . -> target
           shared-key: msrv-1.97.1
+      - run: rustc --version --verbose
       - run: cargo test --all-targets
 
   features:
