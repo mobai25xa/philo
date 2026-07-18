@@ -1,0 +1,14 @@
+schema_version = 1
+contract_id = "philo/openai-chat-p1"
+contract_version = "1.0.0"
+
+# Fixture entries are added by the implementation task that first consumes them.
+#
+# [[fixture]]
+# id = "request-minimal"
+# path = "requests/minimal.json"
+# purpose = "Encode the minimum official OpenAI streaming request"
+# source = "synthetic"
+# expected = "success"
+# contract_version = "1.0.0"
+# notes = ""
