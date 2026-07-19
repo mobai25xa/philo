@@ -48,19 +48,24 @@ pub mod transport;
 pub use client::{AssistantStream, LlmClient, RequestControl};
 pub use domain::{
     AssistantEvent, AssistantMessage, CapabilitySet, CapabilityStatus, ContentIndex, ContentPart,
-    FinishReason, GenerateRequest, GenerationId, GenerationOptions, ImageContent, ImageDetail,
-    ImageMime, ImageSource, LlmRequest, LocalRequestId, Message, MessageRole, ModelId, ModelRef,
-    OpaqueReasoning, ParallelToolCalls, ProtocolId, ProviderId, ProviderRequestId, ReasoningEffort,
-    ReasoningEffortSupport, RefusalContent, RequestMetadata, RequestTimeout, ResourceLimits,
-    SchemaLimits, SourceIdentity, ThinkingContent, ToolArguments, ToolCall, ToolCallId, ToolChoice,
-    ToolDefinition, ToolLimits, ToolName, ToolSchema, TraceId, Usage, WireToolIndex,
-    collect_assistant_message, validate_tool_options,
+    DiagnosticCode, DialectPolicy, FinishReason, GenerateRequest, GenerationId, GenerationOptions,
+    HistoryCapabilities, HistoryPolicy, IdMapping, ImageContent, ImageDetail, ImageMime,
+    ImageSource, ImageWireFormat, LlmRequest, LocalRequestId, Message, MessageRole,
+    MissingToolResultPolicy, ModelId, ModelRef, NormalizationDiagnostic, NormalizedContext,
+    OpaqueReasoning, ParallelToolCalls, PolicySource, ProtocolId, ProviderId, ProviderRequestId,
+    ReasoningEffort, ReasoningEffortSupport, RefusalContent, RequestMetadata, RequestTimeout,
+    ResourceLimits, SchemaLimits, SourceIdentity, StreamUsagePolicy, StructuredOutputWireFormat,
+    ThinkingContent, ThinkingReplayPolicy, ThinkingWireFormat, ToolArguments, ToolCall, ToolCallId,
+    ToolCallIdPolicy, ToolChoice, ToolChoiceWireFormat, ToolDefinition, ToolLimits, ToolName,
+    ToolResultMessage, ToolResultNamePolicy, ToolSchema, TraceId, UnsupportedContentPolicy, Usage,
+    ValidatedToolCall, WireToolIndex, collect_assistant_message, drop_opaque_reasoning,
+    normalize_history, validate_tool_call, validate_tool_options,
 };
 pub use error::{
-    AuthFailureKind, AuthenticationError, BodySummary, CapabilityError, ErrorStage,
-    HttpStatusError, LlmError, ProtocolError, RetriableHint, SchemaError, SchemaFailure,
-    TimeoutError, ToolValidationError, ToolValidationFailure, TransportError, TruncatedStreamError,
-    UnknownFinishReason, ValidationError, ValidationReason,
+    AuthFailureKind, AuthenticationError, BodySummary, CapabilityError, ErrorStage, HistoryError,
+    HistoryFailure, HttpStatusError, LlmError, ProtocolError, RetriableHint, SchemaError,
+    SchemaFailure, TimeoutError, ToolValidationError, ToolValidationFailure, TransportError,
+    TruncatedStreamError, UnknownFinishReason, ValidationError, ValidationReason,
 };
 pub use observability::{
     LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind, LifecycleIdentity,

@@ -74,6 +74,7 @@ enum MessageRoleWire {
     System,
     User,
     Assistant,
+    Tool,
 }
 
 impl From<MessageRole> for MessageRoleWire {
@@ -83,6 +84,7 @@ impl From<MessageRole> for MessageRoleWire {
             MessageRole::System => Self::System,
             MessageRole::User => Self::User,
             MessageRole::Assistant => Self::Assistant,
+            MessageRole::Tool => Self::Tool,
         }
     }
 }

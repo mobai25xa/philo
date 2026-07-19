@@ -3,6 +3,7 @@
 
 pub mod content;
 pub mod event;
+pub mod history;
 pub mod ids;
 pub mod limits;
 pub mod message;
@@ -15,12 +16,19 @@ pub use content::{
     RefusalContent, SourceIdentity, ThinkingContent,
 };
 pub use event::{AssistantEvent, AssistantMessage, FinishReason, Usage, collect_assistant_message};
+pub use history::{
+    DiagnosticCode, DialectPolicy, HistoryCapabilities, HistoryPolicy, IdMapping, ImageWireFormat,
+    MissingToolResultPolicy, NormalizationDiagnostic, NormalizedContext, PolicySource,
+    StreamUsagePolicy, StructuredOutputWireFormat, ThinkingReplayPolicy, ThinkingWireFormat,
+    ToolCallIdPolicy, ToolChoiceWireFormat, ToolResultNamePolicy, UnsupportedContentPolicy,
+    drop_opaque_reasoning, normalize_history,
+};
 pub use ids::{
     ContentIndex, GenerationId, LocalRequestId, ModelId, ModelRef, ProtocolId, ProviderId,
     ProviderRequestId, ToolCallId, ToolName, TraceId, WireToolIndex,
 };
 pub use limits::ResourceLimits;
-pub use message::{Message, MessageRole};
+pub use message::{Message, MessageRole, ToolResultMessage};
 pub use request::{
     CapabilitySet, CapabilityStatus, GenerateRequest, GenerationOptions, LlmRequest,
     ReasoningEffort, ReasoningEffortSupport, RequestMetadata, RequestTimeout,
@@ -28,5 +36,5 @@ pub use request::{
 pub use schema::{SchemaLimits, ToolSchema};
 pub use tools::{
     ParallelToolCalls, ToolArguments, ToolCall, ToolChoice, ToolDefinition, ToolLimits,
-    validate_tool_options,
+    ValidatedToolCall, validate_tool_call, validate_tool_options,
 };

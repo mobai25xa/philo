@@ -9,7 +9,8 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use crate::error::{SchemaError, SchemaFailure};
+use super::limits::ResourceLimits;
+use crate::error::{SchemaError, SchemaFailure, ToolValidationError, ToolValidationFailure};
 
 /// Official phase-two schema resource limits used by local validators.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,6 +121,20 @@ impl ToolSchema {
     /// Returns whether the schema satisfies the local strict-mode object rules.
     pub fn is_strict_compatible(&self) -> bool {
         self.strict_compatible
+    }
+
+    /// Validates a complete JSON instance against this schema.
+    ///
+    /// Failures never include argument values or secret material. Only field
+    /// paths and stable reason codes are retained.
+    pub fn validate_instance(
+        &self,
+        instance: &Value,
+        limits: SchemaLimits,
+    ) -> Result<(), ToolValidationError> {
+        preflight_instance(instance, limits)?;
+        let root = &self.value;
+        validate_value(root, instance, "#", root, limits)
     }
 }
 
@@ -515,4 +530,314 @@ fn node_is_strict_compatible(value: &Value) -> bool {
         Some(Value::String(_) | Value::Array(_)) | None => true,
         _ => false,
     }
+}
+
+fn preflight_instance(instance: &Value, limits: SchemaLimits) -> Result<(), ToolValidationError> {
+    let encoded = serde_json::to_vec(instance).map_err(|_| {
+        ToolValidationError::new(
+            "arguments",
+            ToolValidationFailure::InvalidJson,
+            Some("#".to_owned()),
+            "arguments must be serializable JSON",
+        )
+    })?;
+    if encoded.len() > ResourceLimits::official().max_tool_arguments_bytes {
+        return Err(ToolValidationError::new(
+            "arguments",
+            ToolValidationFailure::ArgumentsTooLarge,
+            Some("#".to_owned()),
+            "tool arguments exceed the allowed byte limit",
+        ));
+    }
+    if json_depth(instance) > limits.max_schema_depth {
+        return Err(ToolValidationError::new(
+            "arguments",
+            ToolValidationFailure::ArgumentsTooDeep,
+            Some("#".to_owned()),
+            "tool arguments exceed the allowed nesting depth",
+        ));
+    }
+    check_array_lengths(instance, "#", limits)
+}
+
+fn check_array_lengths(
+    value: &Value,
+    path: &str,
+    limits: SchemaLimits,
+) -> Result<(), ToolValidationError> {
+    match value {
+        Value::Array(items) => {
+            if items.len() > limits.max_json_array_items {
+                return Err(ToolValidationError::new(
+                    "arguments",
+                    ToolValidationFailure::ArgumentsTooLarge,
+                    Some(path.to_owned()),
+                    "JSON array exceeds the allowed length",
+                ));
+            }
+            for (index, item) in items.iter().enumerate() {
+                check_array_lengths(item, &format!("{path}/{index}"), limits)?;
+            }
+        }
+        Value::Object(map) => {
+            for (key, child) in map {
+                check_array_lengths(child, &format!("{path}/{key}"), limits)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_value(
+    schema: &Value,
+    instance: &Value,
+    path: &str,
+    root: &Value,
+    limits: SchemaLimits,
+) -> Result<(), ToolValidationError> {
+    let Some(object) = schema.as_object() else {
+        return Err(ToolValidationError::new(
+            "arguments",
+            ToolValidationFailure::SchemaViolation,
+            Some(path.to_owned()),
+            "schema node is not an object",
+        ));
+    };
+
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+        let resolved = resolve_local_ref(root, reference).ok_or_else(|| {
+            ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "local schema reference could not be resolved",
+            )
+        })?;
+        return validate_value(resolved, instance, path, root, limits);
+    }
+
+    if let Some(any_of) = object.get("anyOf").and_then(Value::as_array) {
+        let mut matched = false;
+        for branch in any_of {
+            if validate_value(branch, instance, path, root, limits).is_ok() {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "value matches no anyOf branch",
+            ));
+        }
+    }
+
+    if let Some(type_value) = object.get("type")
+        && !matches_type(type_value, instance)
+    {
+        return Err(ToolValidationError::new(
+            "arguments",
+            ToolValidationFailure::SchemaViolation,
+            Some(path.to_owned()),
+            "value does not match the declared type",
+        ));
+    }
+
+    if let Some(constant) = object.get("const")
+        && instance != constant
+    {
+        return Err(ToolValidationError::new(
+            "arguments",
+            ToolValidationFailure::SchemaViolation,
+            Some(path.to_owned()),
+            "value does not equal const",
+        ));
+    }
+
+    if let Some(enumeration) = object.get("enum").and_then(Value::as_array)
+        && !enumeration.iter().any(|item| item == instance)
+    {
+        return Err(ToolValidationError::new(
+            "arguments",
+            ToolValidationFailure::SchemaViolation,
+            Some(path.to_owned()),
+            "value is not present in enum",
+        ));
+    }
+
+    if let Some(text) = instance.as_str() {
+        if let Some(min) = object.get("minLength").and_then(Value::as_u64)
+            && (text.chars().count() as u64) < min
+        {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "string is shorter than minLength",
+            ));
+        }
+        if let Some(max) = object.get("maxLength").and_then(Value::as_u64)
+            && (text.chars().count() as u64) > max
+        {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "string is longer than maxLength",
+            ));
+        }
+    }
+
+    if let Some(number) = instance.as_f64() {
+        if let Some(min) = object.get("minimum").and_then(Value::as_f64)
+            && number < min
+        {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "number is less than minimum",
+            ));
+        }
+        if let Some(max) = object.get("maximum").and_then(Value::as_f64)
+            && number > max
+        {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "number is greater than maximum",
+            ));
+        }
+    }
+
+    if let Some(items) = instance.as_array() {
+        if items.len() > limits.max_json_array_items {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::ArgumentsTooLarge,
+                Some(path.to_owned()),
+                "JSON array exceeds the allowed length",
+            ));
+        }
+        if let Some(min) = object.get("minItems").and_then(Value::as_u64)
+            && (items.len() as u64) < min
+        {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "array has fewer items than minItems",
+            ));
+        }
+        if let Some(max) = object.get("maxItems").and_then(Value::as_u64)
+            && (items.len() as u64) > max
+        {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "array has more items than maxItems",
+            ));
+        }
+        if let Some(item_schema) = object.get("items") {
+            for (index, item) in items.iter().enumerate() {
+                validate_value(item_schema, item, &format!("{path}/{index}"), root, limits)?;
+            }
+        }
+    }
+
+    if let Some(map) = instance.as_object() {
+        let properties = object
+            .get("properties")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(required) = object.get("required").and_then(Value::as_array) {
+            for (index, name) in required.iter().enumerate() {
+                let Some(name) = name.as_str() else {
+                    continue;
+                };
+                if !map.contains_key(name) {
+                    return Err(ToolValidationError::new(
+                        "arguments",
+                        ToolValidationFailure::SchemaViolation,
+                        Some(format!("{path}/required/{index}")),
+                        "required property is missing",
+                    ));
+                }
+            }
+        }
+        let additional = object
+            .get("additionalProperties")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        for (key, child) in map {
+            if let Some(property_schema) = properties.get(key) {
+                validate_value(
+                    property_schema,
+                    child,
+                    &format!("{path}/{key}"),
+                    root,
+                    limits,
+                )?;
+            } else if !additional {
+                return Err(ToolValidationError::new(
+                    "arguments",
+                    ToolValidationFailure::SchemaViolation,
+                    Some(format!("{path}/{key}")),
+                    "additional property is not allowed",
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn matches_type(type_value: &Value, instance: &Value) -> bool {
+    match type_value {
+        Value::String(kind) => matches_basic_type(kind, instance),
+        Value::Array(kinds) => kinds
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|kind| matches_basic_type(kind, instance)),
+        _ => false,
+    }
+}
+
+fn matches_basic_type(kind: &str, instance: &Value) -> bool {
+    match kind {
+        "object" => instance.is_object(),
+        "array" => instance.is_array(),
+        "string" => instance.is_string(),
+        "number" => instance.as_f64().is_some(),
+        "integer" => {
+            if instance.as_i64().is_some() || instance.as_u64().is_some() {
+                true
+            } else {
+                instance
+                    .as_f64()
+                    .is_some_and(|value| value.fract() == 0.0 && value.is_finite())
+            }
+        }
+        "boolean" => instance.is_boolean(),
+        "null" => instance.is_null(),
+        _ => false,
+    }
+}
+
+fn resolve_local_ref<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
+    if !reference.starts_with("#/") {
+        return None;
+    }
+    let mut current = root;
+    for segment in reference.trim_start_matches("#/").split('/') {
+        let object = current.as_object()?;
+        current = object.get(segment)?;
+    }
+    Some(current)
 }

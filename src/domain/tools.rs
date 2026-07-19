@@ -11,11 +11,13 @@ use std::fmt;
 
 use serde_json::Value;
 
+use super::limits::ResourceLimits;
 use super::request::{CapabilitySet, CapabilityStatus};
-use super::schema::ToolSchema;
+use super::schema::{SchemaLimits, ToolSchema};
 use super::{ToolCallId, ToolName};
 use crate::error::{
-    CapabilityError, LlmError, SchemaError, SchemaFailure, ValidationError, ValidationReason,
+    CapabilityError, LlmError, SchemaError, SchemaFailure, ToolValidationError,
+    ToolValidationFailure, ValidationError, ValidationReason,
 };
 
 /// Official phase-two tool list limits.
@@ -220,6 +222,84 @@ pub enum ParallelToolCalls {
     Enabled,
     /// Disallow parallel tool calls.
     Disabled,
+}
+
+/// A completed tool call that passed JSON and schema validation.
+///
+/// Successful construction does **not** authorize permission checks, user
+/// confirmation, business rules, or tool execution. Applications must make
+/// those decisions separately after unwrapping the call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedToolCall(ToolCall);
+
+impl ValidatedToolCall {
+    /// Returns the validated call.
+    pub fn call(&self) -> &ToolCall {
+        &self.0
+    }
+
+    /// Consumes the wrapper and returns the completed call for application policy.
+    pub fn into_call(self) -> ToolCall {
+        self.0
+    }
+}
+
+/// Validates a completed tool call against a declared tool list.
+///
+/// This checks tool lookup, argument size/depth, and the local schema subset.
+/// Permission, business, confirmation, and execution remain application concerns.
+pub fn validate_tool_call(
+    call: ToolCall,
+    tools: &[ToolDefinition],
+) -> Result<ValidatedToolCall, ToolValidationError> {
+    validate_tool_call_with_limits(
+        call,
+        tools,
+        SchemaLimits::official(),
+        ResourceLimits::official(),
+    )
+}
+
+/// Validates a completed tool call under explicit resource ceilings.
+pub fn validate_tool_call_with_limits(
+    call: ToolCall,
+    tools: &[ToolDefinition],
+    schema_limits: SchemaLimits,
+    resource_limits: ResourceLimits,
+) -> Result<ValidatedToolCall, ToolValidationError> {
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == call.name())
+        .ok_or_else(|| {
+            ToolValidationError::new(
+                "tool_call.name",
+                ToolValidationFailure::UnknownTool,
+                None,
+                "tool call name is not present in the declared tools",
+            )
+        })?;
+
+    let raw = call.arguments().raw_json();
+    if raw.len() > resource_limits.max_tool_arguments_bytes {
+        return Err(ToolValidationError::new(
+            "tool_call.arguments",
+            ToolValidationFailure::ArgumentsTooLarge,
+            Some("#".to_owned()),
+            "tool arguments exceed the allowed byte limit",
+        ));
+    }
+
+    let mut limits = schema_limits;
+    limits.max_schema_depth = limits
+        .max_schema_depth
+        .min(resource_limits.max_schema_depth);
+    limits.max_json_array_items = limits
+        .max_json_array_items
+        .min(resource_limits.max_json_array_items);
+
+    tool.parameters()
+        .validate_instance(call.arguments().value(), limits)?;
+    Ok(ValidatedToolCall(call))
 }
 
 /// Validates tool declarations and selection before they enter request encoding.
