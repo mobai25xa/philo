@@ -8,8 +8,9 @@
 //! or SSE implementation details.
 //!
 //! The protocol adapter supports official `OpenAI` Chat Completions text, function
-//! tools, image inputs, and reasoning-effort request options. Phase-two still does
-//! not execute tools and does not claim third-party thinking dialects.
+//! tools, image inputs, structured output, usage/cost helpers, and reasoning-effort
+//! request options. Phase-two still does not execute tools and does not claim
+//! third-party thinking dialects.
 //!
 //! # Stability
 //!
