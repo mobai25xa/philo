@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-usage","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-usage","model":"gpt-test","choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}
+
+data: [DONE]
+

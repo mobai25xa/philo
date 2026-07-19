@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-unknown","model":"gpt-test","created":123,"object":"chat.completion.chunk","future_top_level":{"ignored":true},"choices":[{"index":0,"logprobs":null,"delta":{"role":"assistant","content":"future","future_delta":17},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-unknown","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}
+
+data: [DONE]
+

@@ -1,0 +1,1 @@
+: heartbeat\r\nevent: message\r\ndata: {"id":"chatcmpl-crlf","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}\r\ndata: {"synthetic_extension":true}\r\n\r\ndata: {"id":"chatcmpl-crlf","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\r\n\r\ndata: [DONE]\r\n\r\n

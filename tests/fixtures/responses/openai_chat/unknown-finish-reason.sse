@@ -1,0 +1,4 @@
+data: {"id":"chatcmpl-unknown-finish","model":"gpt-test","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":"future_reason"}]}
+
+data: [DONE]
+

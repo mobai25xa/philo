@@ -10,6 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  PROPTEST_CASES: "256"
   RUST_BACKTRACE: "1"
 
 jobs:
@@ -26,7 +27,7 @@ jobs:
           workspaces: . -> target
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all-features
+      - run: cargo test --all-targets --all-features
       - run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
@@ -44,11 +45,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
-      - run: cargo test
+      - run: cargo test --all-targets
 
   msrv:
     name: Declared Rust 1.97.1
     runs-on: ubuntu-latest
+    env:
+      # Override rust-toolchain.toml's development "stable" channel for this gate.
+      RUSTUP_TOOLCHAIN: 1.97.1
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -58,7 +62,8 @@ jobs:
         with:
           workspaces: . -> target
           shared-key: msrv-1.97.1
-      - run: cargo test
+      - run: rustc --version --verbose
+      - run: cargo test --all-targets
 
   features:
     name: Feature combinations
@@ -71,6 +76,7 @@ jobs:
           workspaces: . -> target
       - run: cargo check --no-default-features
       - run: cargo check --all-features
+      - run: cargo test --all-targets --no-default-features
 
   dependencies:
     name: Licenses and advisories

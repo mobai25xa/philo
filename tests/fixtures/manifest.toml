@@ -2,13 +2,259 @@ schema_version = 1
 contract_id = "philo/openai-chat-p1"
 contract_version = "1.0.0"
 
-# Fixture entries are added by the implementation task that first consumes them.
-#
-# [[fixture]]
-# id = "request-minimal"
-# path = "requests/minimal.json"
-# purpose = "Encode the minimum official OpenAI streaming request"
-# source = "synthetic"
-# expected = "success"
-# contract_version = "1.0.0"
-# notes = ""
+[[fixture]]
+id = "request-minimal-user"
+path = "requests/openai_chat/minimal-user.json"
+purpose = "Encode the minimum official OpenAI streaming request"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Only required fields plus stream, include_usage, and n=1"
+
+[[fixture]]
+id = "request-all-roles"
+path = "requests/openai_chat/all-roles.json"
+purpose = "Preserve developer, system, user, and assistant role order and text"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Phase one string content shape with exactly one text part per message"
+
+[[fixture]]
+id = "request-temperature-only"
+path = "requests/openai_chat/temperature-only.json"
+purpose = "Encode temperature while omitting max_completion_tokens"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Capability is Supported"
+
+[[fixture]]
+id = "request-max-tokens-only"
+path = "requests/openai_chat/max-tokens-only.json"
+purpose = "Map max_output_tokens to max_completion_tokens"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Never emits legacy max_tokens"
+
+[[fixture]]
+id = "request-all-options"
+path = "requests/openai_chat/all-options.json"
+purpose = "Encode both phase-one optional generation controls"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "temperature and max_completion_tokens are both Supported"
+
+[[fixture]]
+id = "response-text"
+path = "responses/openai_chat/text.sse"
+purpose = "Decode ordered text deltas, finish, usage, and DONE"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Canonical phase-one streaming success"
+
+[[fixture]]
+id = "response-usage-only"
+path = "responses/openai_chat/usage-only.sse"
+purpose = "Accept a final choices-empty usage chunk"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Zero usage remains distinct from missing usage"
+
+[[fixture]]
+id = "response-empty-content"
+path = "responses/openai_chat/empty-content.sse"
+purpose = "Produce one empty text boundary without empty deltas"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Empty and null content do not duplicate text boundaries"
+
+[[fixture]]
+id = "response-unknown-fields"
+path = "responses/openai_chat/unknown-fields.sse"
+purpose = "Ignore non-critical future response fields"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Unknown fields do not enter domain events"
+
+[[fixture]]
+id = "response-unknown-finish"
+path = "responses/openai_chat/unknown-finish-reason.sse"
+purpose = "Fail closed on an unknown finish reason"
+source = "synthetic"
+expected = "error"
+expected_error = "unknown_finish_reason"
+contract_version = "1.0.0"
+notes = "Returns bounded UnknownFinishReason"
+
+[[fixture]]
+id = "response-tool-finish"
+path = "responses/openai_chat/tool-finish.sse"
+purpose = "Reject phase-one tool response semantics"
+source = "synthetic"
+expected = "error"
+expected_error = "unsupported_response_semantics"
+contract_version = "1.0.0"
+notes = "Returns UnsupportedResponseSemantics"
+
+[[fixture]]
+id = "response-nonzero-choice"
+path = "responses/openai_chat/nonzero-choice-index.sse"
+purpose = "Reject a nonzero choice index"
+source = "synthetic"
+expected = "error"
+expected_error = "unsupported_response_semantics"
+contract_version = "1.0.0"
+notes = "Phase one requests n=1 and consumes only index zero"
+
+[[fixture]]
+id = "response-done-without-finish"
+path = "responses/openai_chat/done-without-finish.sse"
+purpose = "Reject DONE without a supported finish reason"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "DONE alone cannot claim success"
+
+[[fixture]]
+id = "response-finish-without-done"
+path = "responses/openai_chat/finish-without-done.sse"
+purpose = "Reject EOF after finish without DONE"
+source = "synthetic"
+expected = "error"
+expected_error = "truncated_stream"
+contract_version = "1.0.0"
+notes = "Returns TruncatedStream"
+
+[[fixture]]
+id = "response-duplicate-finish"
+path = "responses/openai_chat/duplicate-finish.sse"
+purpose = "Reject duplicate finish reasons"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "No Done event is emitted"
+
+[[fixture]]
+id = "response-duplicate-done"
+path = "responses/openai_chat/duplicate-done.sse"
+purpose = "Reject duplicate DONE markers"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "Domain Done is delayed until SSE EOF"
+
+[[fixture]]
+id = "response-data-after-done"
+path = "responses/openai_chat/data-after-done.sse"
+purpose = "Reject data after DONE"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "No successful terminal event precedes the error"
+
+[[fixture]]
+id = "response-json-error-object"
+path = "responses/openai_chat/json-error-object.sse"
+purpose = "Reject an in-stream provider error object"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "Error data is not echoed in diagnostics"
+
+[[fixture]]
+id = "response-malformed-json"
+path = "responses/openai_chat/malformed-json.sse"
+purpose = "Classify malformed JSON without retaining response data"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol_json"
+contract_version = "1.0.0"
+notes = "Reports category and position only"
+
+[[fixture]]
+id = "response-truncated"
+path = "responses/openai_chat/truncated.sse"
+purpose = "Reject EOF before finish and DONE"
+source = "synthetic"
+expected = "error"
+expected_error = "truncated_stream"
+contract_version = "1.0.0"
+notes = "Partial text never becomes a successful result"
+
+[[fixture]]
+id = "response-crlf-heartbeat"
+path = "responses/openai_chat/crlf-heartbeat.escaped-sse"
+purpose = "Decode CRLF framing, a heartbeat comment, and multi-line data"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Backslash escapes are decoded by the fixture contract test to preserve CRLF in an LF-normalized repository"
+
+[[fixture]]
+id = "response-utf8"
+path = "responses/openai_chat/utf8.sse"
+purpose = "Preserve Unicode text across arbitrary byte chunk boundaries"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Contains synthetic CJK and emoji output"
+
+[[fixture]]
+id = "error-openai-json"
+path = "errors/openai-json.json"
+purpose = "Represent a bounded synthetic OpenAI-style JSON error envelope"
+source = "synthetic"
+expected = "error"
+expected_error = "http_status"
+contract_version = "1.0.0"
+notes = "Contains no observed provider body, credential, endpoint, or identifier"
+
+[[fixture]]
+id = "error-plain-text"
+path = "errors/plain-text.txt"
+purpose = "Represent a non-JSON upstream error body"
+source = "synthetic"
+expected = "error"
+expected_error = "http_status"
+contract_version = "1.0.0"
+notes = "Diagnostic consumers retain only the SDK redacted summary"
+
+[[fixture]]
+id = "error-non-utf8"
+path = "errors/non-utf8.hex"
+purpose = "Represent an invalid UTF-8 error body without repository encoding ambiguity"
+source = "synthetic"
+expected = "error"
+expected_error = "http_status"
+contract_version = "1.0.0"
+notes = "ASCII hex decodes to ff 00 80 41 before use"
+
+[[fixture]]
+id = "profile-official-openai"
+path = "profiles/official-openai.toml"
+purpose = "Document the frozen official OpenAI profile safety fields"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Credential value is never stored; only its environment source is named"
+
+[[fixture]]
+id = "profile-local-test-only"
+path = "profiles/local-test-only.toml"
+purpose = "Document the explicit loopback-only test profile boundary"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Not a supported production compatible-endpoint profile"
