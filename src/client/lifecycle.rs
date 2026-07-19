@@ -395,10 +395,11 @@ impl LlmClient {
             )
             .into());
         }
-        request.validate(&self.runtime.capabilities().generation_options())?;
+        let capabilities = self.runtime.capabilities_for(request.model().model());
+        request.validate(&capabilities.generation_options())?;
         emit(observation, LifecycleEventKind::ValidationCompleted);
 
-        let encoded = OpenAiChatRequestAdapter::encode(request, self.runtime.capabilities())?;
+        let encoded = OpenAiChatRequestAdapter::encode(request, &capabilities)?;
         if !self
             .runtime
             .endpoint()

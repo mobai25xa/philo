@@ -1,13 +1,16 @@
 //! Declarative official and test-only provider profiles.
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
+use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::domain::{ProtocolId, ProviderId};
+use crate::domain::{ModelId, ProtocolId, ProviderId};
 use crate::error::LlmError;
 
 use super::auth::{ApiKey, BearerCredential, ClientIdentity};
-use super::capability::{ProtocolDialect, ProviderCapabilities, ProviderTransportOptions};
+use super::capability::{
+    ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
+};
 use super::endpoint::{CredentialAudience, EndpointConfig, resolve_test_only};
 use super::headers::HeaderOperation;
 use super::runtime::ProviderRuntime;
@@ -24,6 +27,7 @@ pub struct ProviderProfile {
     pub(super) provider_headers: Vec<HeaderOperation>,
     pub(super) model_headers: Vec<HeaderOperation>,
     pub(super) capabilities: ProviderCapabilities,
+    pub(super) model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     pub(super) dialect: ProtocolDialect,
     pub(super) transport: ProviderTransportOptions,
     pub(super) test_only: bool,
@@ -41,8 +45,8 @@ impl ProviderProfile {
     }
 
     /// Returns declared capabilities.
-    pub fn capabilities(&self) -> ProviderCapabilities {
-        self.capabilities
+    pub fn capabilities(&self) -> &ProviderCapabilities {
+        &self.capabilities
     }
 
     /// Returns dialect.
@@ -78,6 +82,7 @@ impl fmt::Debug for ProviderProfile {
 pub struct OfficialOpenAiProfile {
     key: ApiKey,
     client_identity: ClientIdentity,
+    model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
 }
 
 impl OfficialOpenAiProfile {
@@ -86,6 +91,7 @@ impl OfficialOpenAiProfile {
         Self {
             key,
             client_identity: ClientIdentity::default(),
+            model_capabilities: BTreeMap::new(),
         }
     }
 
@@ -98,6 +104,14 @@ impl OfficialOpenAiProfile {
     #[must_use]
     pub fn with_client_identity(mut self, identity: ClientIdentity) -> Self {
         self.client_identity = identity;
+        self
+    }
+
+    /// Adds or replaces the declaration for one exact model identifier.
+    #[must_use]
+    pub fn with_model_capabilities(mut self, profile: ModelCapabilityProfile) -> Self {
+        self.model_capabilities
+            .insert(profile.model().clone(), profile);
         self
     }
 
@@ -119,6 +133,7 @@ impl OfficialOpenAiProfile {
             provider_headers: Vec::new(),
             model_headers: Vec::new(),
             capabilities: ProviderCapabilities::official_openai(),
+            model_capabilities: self.model_capabilities,
             dialect: ProtocolDialect::OpenAiChatCompletions,
             transport: ProviderTransportOptions::secure_defaults(),
             test_only: false,
@@ -156,11 +171,21 @@ impl TestOnlyProfile {
                 provider_headers: Vec::new(),
                 model_headers: Vec::new(),
                 capabilities: ProviderCapabilities::official_openai(),
+                model_capabilities: BTreeMap::new(),
                 dialect: ProtocolDialect::OpenAiChatCompletions,
                 transport: ProviderTransportOptions::secure_defaults(),
                 test_only: true,
             },
         })
+    }
+
+    /// Adds or replaces the declaration for one exact model identifier.
+    #[must_use]
+    pub fn with_model_capabilities(mut self, profile: ModelCapabilityProfile) -> Self {
+        self.profile
+            .model_capabilities
+            .insert(profile.model().clone(), profile);
+        self
     }
 
     /// Builds the test runtime.

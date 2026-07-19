@@ -1,0 +1,9 @@
+{
+  "fixture_id": "invalid-schema",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "invalid_schema",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Schema root that is not a JSON object is rejected before request encode"
+}

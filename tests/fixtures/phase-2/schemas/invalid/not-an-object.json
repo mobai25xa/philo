@@ -1,0 +1,10 @@
+{
+  "fixture_id": "schema-not-an-object",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "not_an_object",
+  "schema": true,
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "boolean true is not a valid schema object"
+}

@@ -9,8 +9,8 @@ pub mod runtime;
 
 pub use auth::{ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
 pub use capability::{
-    OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, ProtocolDialect, ProviderCapabilities,
-    ProviderTransportOptions,
+    ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, ProtocolDialect,
+    ProviderCapabilities, ProviderTransportOptions,
 };
 pub use endpoint::{CredentialAudience, EndpointConfig, Origin, RedirectPolicy, ResolvedEndpoint};
 pub use headers::{

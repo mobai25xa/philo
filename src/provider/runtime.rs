@@ -1,16 +1,19 @@
 //! Validated immutable provider runtime.
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
 use http::{HeaderMap, HeaderValue, Method, header};
 
-use crate::domain::{ProtocolId, ProviderId};
+use crate::domain::{ModelId, ProtocolId, ProviderId};
 use crate::error::LlmError;
 
 use super::auth::{AuthContext, AuthProvider, BearerAuth, ClientIdentity};
-use super::capability::{ProtocolDialect, ProviderCapabilities, ProviderTransportOptions};
+use super::capability::{
+    ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
+};
 use super::endpoint::{ResolvedEndpoint, resolve_official, resolve_test_only};
 use super::headers::{HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource, ResolvedHeaders};
 use super::profile::ProviderProfile;
@@ -26,6 +29,7 @@ pub struct ProviderRuntime {
     provider_headers: Arc<[HeaderOperation]>,
     model_headers: Arc<[HeaderOperation]>,
     capabilities: ProviderCapabilities,
+    model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     dialect: ProtocolDialect,
     transport: ProviderTransportOptions,
     pipeline: HeaderPipeline,
@@ -35,6 +39,13 @@ impl ProviderRuntime {
     /// Validates and freezes a profile.
     pub fn build(profile: ProviderProfile) -> Result<Self, LlmError> {
         profile.capabilities.validate()?;
+        for (model, declaration) in &profile.model_capabilities {
+            if model != declaration.model() {
+                return Err(LlmError::Configuration(
+                    "model capability map key does not match its declaration".to_owned(),
+                ));
+            }
+        }
         let endpoint = if profile.test_only {
             resolve_test_only(&profile.endpoint)?
         } else {
@@ -51,6 +62,7 @@ impl ProviderRuntime {
             provider_headers: profile.provider_headers.into(),
             model_headers: profile.model_headers.into(),
             capabilities: profile.capabilities,
+            model_capabilities: profile.model_capabilities,
             dialect: profile.dialect,
             transport: profile.transport,
             pipeline: HeaderPipeline::new(),
@@ -78,8 +90,17 @@ impl ProviderRuntime {
     }
 
     /// Returns immutable capabilities.
-    pub fn capabilities(&self) -> ProviderCapabilities {
-        self.capabilities
+    pub fn capabilities(&self) -> &ProviderCapabilities {
+        &self.capabilities
+    }
+
+    /// Resolves provider defaults plus an exact model capability declaration.
+    pub fn capabilities_for(&self, model: &ModelId) -> ProviderCapabilities {
+        let mut capabilities = self.capabilities.clone();
+        if let Some(profile) = self.model_capabilities.get(model) {
+            capabilities.apply_model(profile);
+        }
+        capabilities
     }
 
     /// Returns dialect.
@@ -151,6 +172,7 @@ impl fmt::Debug for ProviderRuntime {
             .field("auth", &"[REDACTED]")
             .field("client_identity", &self.client_identity)
             .field("capabilities", &self.capabilities)
+            .field("model_capability_count", &self.model_capabilities.len())
             .field("dialect", &self.dialect)
             .field("transport", &self.transport)
             .finish_non_exhaustive()

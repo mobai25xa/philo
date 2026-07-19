@@ -96,6 +96,14 @@ pub enum ValidationReason {
     CapabilityUnknown,
     /// Local metadata key is invalid.
     InvalidMetadata,
+    /// Identifier does not match its frozen character set.
+    InvalidIdentifier,
+    /// A request declared the same tool name more than once.
+    DuplicateToolName,
+    /// Tool-choice or parallel options were set without tools.
+    EmptyToolList,
+    /// A specific tool choice referenced an undeclared tool.
+    UnknownTool,
 }
 impl fmt::Display for ValidationReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -436,6 +444,140 @@ impl TimeoutError {
     }
 }
 
+/// Local schema compilation or strictness failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SchemaFailure {
+    /// Schema root or node is not a JSON object.
+    NotAnObject,
+    /// A supported keyword has an invalid type or combination.
+    InvalidKeywordType,
+    /// A keyword is outside the frozen phase-two subset.
+    UnsupportedKeyword,
+    /// A remote `$ref` was present.
+    RemoteReference,
+    /// A local `$ref` could not be resolved.
+    UnresolvedLocalReference,
+    /// Schema size or maxItems exceeded limits.
+    TooLarge,
+    /// Schema nesting exceeded limits.
+    TooDeep,
+    /// Strict mode requires `additionalProperties: false`.
+    StrictObjectMissingAdditionalPropertiesFalse,
+    /// Strict mode requires every property to be listed in `required`.
+    StrictPropertyNotRequired,
+}
+
+/// A safe schema failure with a field path and non-sensitive summary.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct SchemaError {
+    field: String,
+    reason: SchemaFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl SchemaError {
+    /// Creates a schema error. The message must not contain schema values.
+    pub fn new(
+        field: impl Into<String>,
+        reason: SchemaFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> SchemaFailure {
+        self.reason
+    }
+
+    /// Returns the optional JSON Pointer path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
+/// Tool-call argument validation failure codes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ToolValidationFailure {
+    /// Arguments are not complete JSON.
+    InvalidJson,
+    /// Arguments do not satisfy the tool schema.
+    SchemaViolation,
+    /// No matching tool was declared.
+    UnknownTool,
+    /// Arguments exceeded the configured size limit.
+    ArgumentsTooLarge,
+    /// Arguments exceeded the configured nesting limit.
+    ArgumentsTooDeep,
+}
+
+/// A safe tool argument validation failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct ToolValidationError {
+    field: String,
+    reason: ToolValidationFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl ToolValidationError {
+    /// Creates a tool validation error without retaining argument values.
+    pub fn new(
+        field: impl Into<String>,
+        reason: ToolValidationFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> ToolValidationFailure {
+        self.reason
+    }
+
+    /// Returns the optional JSON Pointer path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
 /// All public SDK failures.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -449,6 +591,12 @@ pub enum LlmError {
     /// Capability failure.
     #[error("capability: {0}")]
     Capability(#[from] CapabilityError),
+    /// Schema compilation failure.
+    #[error("schema: {0}")]
+    Schema(#[from] SchemaError),
+    /// Tool argument validation failure.
+    #[error("tool validation: {0}")]
+    ToolValidation(#[from] ToolValidationError),
     /// Authentication, permission, quota, or rate-limit failure.
     #[error("{0}")]
     Authentication(#[from] AuthenticationError),

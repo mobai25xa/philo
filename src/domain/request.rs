@@ -6,13 +6,14 @@
     clippy::too_many_lines
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderName};
 use tokio::time::Instant;
 
-use super::{Message, MessageRole, ModelRef};
+use super::tools::{ParallelToolCalls, ToolChoice, ToolDefinition, validate_tool_options};
+use super::{ContentPart, Message, MessageRole, ModelRef};
 use crate::error::{CapabilityError, LlmError, ValidationError, ValidationReason};
 
 /// A three-state capability declaration used for fail-closed validation.
@@ -26,13 +27,64 @@ pub enum CapabilityStatus {
     Unknown,
 }
 
-/// Capabilities required by phase-one generation options.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Provider-independent reasoning effort requested from a capable model.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ReasoningEffort {
+    /// Disable reasoning when the selected model supports this value.
+    None,
+    /// Minimal reasoning effort.
+    Minimal,
+    /// Low reasoning effort.
+    Low,
+    /// Medium reasoning effort.
+    Medium,
+    /// High reasoning effort.
+    High,
+    /// Extra-high reasoning effort.
+    XHigh,
+    /// Maximum reasoning effort when exposed by the selected model.
+    Max,
+}
+
+/// Exact set of reasoning effort values supported by a model.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum ReasoningEffortSupport {
+    /// The model explicitly does not support reasoning effort.
+    Unsupported,
+    /// Model support has not been declared.
+    #[default]
+    Unknown,
+    /// The model supports exactly the contained values.
+    Supported(BTreeSet<ReasoningEffort>),
+}
+
+/// Capabilities required by provider-independent generation options and content.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilitySet {
     /// Temperature support.
     pub temperature: CapabilityStatus,
     /// Max-output-token support.
     pub max_output_tokens: CapabilityStatus,
+    /// Function tool support.
+    pub function_tools: CapabilityStatus,
+    /// Required tool-choice support.
+    pub tool_choice_required: CapabilityStatus,
+    /// Specific function tool-choice support.
+    pub tool_choice_specific: CapabilityStatus,
+    /// Parallel tool-call support.
+    pub parallel_tool_calls: CapabilityStatus,
+    /// Strict function-schema support.
+    pub strict_tools: CapabilityStatus,
+    /// Image input support.
+    pub vision_input: CapabilityStatus,
+    /// Original image-detail support.
+    pub image_detail_original: CapabilityStatus,
+    /// JSON object response-format support.
+    pub response_format_json_object: CapabilityStatus,
+    /// JSON schema response-format support.
+    pub response_format_json_schema: CapabilityStatus,
+    /// Exact reasoning efforts supported by the selected model.
+    pub reasoning_efforts: ReasoningEffortSupport,
 }
 
 impl Default for CapabilitySet {
@@ -40,6 +92,16 @@ impl Default for CapabilitySet {
         Self {
             temperature: CapabilityStatus::Supported,
             max_output_tokens: CapabilityStatus::Supported,
+            function_tools: CapabilityStatus::Unknown,
+            tool_choice_required: CapabilityStatus::Unknown,
+            tool_choice_specific: CapabilityStatus::Unknown,
+            parallel_tool_calls: CapabilityStatus::Unknown,
+            strict_tools: CapabilityStatus::Unknown,
+            vision_input: CapabilityStatus::Unknown,
+            image_detail_original: CapabilityStatus::Unknown,
+            response_format_json_object: CapabilityStatus::Unknown,
+            response_format_json_schema: CapabilityStatus::Unknown,
+            reasoning_efforts: ReasoningEffortSupport::Unknown,
         }
     }
 }
@@ -120,6 +182,9 @@ impl RequestTimeout {
 pub struct GenerationOptions {
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
+    tools: Vec<ToolDefinition>,
+    tool_choice: Option<ToolChoice>,
+    parallel_tool_calls: Option<ParallelToolCalls>,
     timeout: Option<RequestTimeout>,
     headers: HeaderMap,
     metadata: RequestMetadata,
@@ -137,6 +202,21 @@ impl GenerationOptions {
     /// Sets maximum output tokens.
     pub fn with_max_output_tokens(mut self, value: u32) -> Self {
         self.max_output_tokens = Some(value);
+        self
+    }
+    /// Declares function tools for this request.
+    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
+        self.tools = tools;
+        self
+    }
+    /// Sets the tool selection strategy.
+    pub fn with_tool_choice(mut self, choice: ToolChoice) -> Self {
+        self.tool_choice = Some(choice);
+        self
+    }
+    /// Sets whether parallel tool calls may be produced.
+    pub fn with_parallel_tool_calls(mut self, value: ParallelToolCalls) -> Self {
+        self.parallel_tool_calls = Some(value);
         self
     }
     /// Sets a relative timeout.
@@ -166,6 +246,18 @@ impl GenerationOptions {
     /// Returns max output tokens.
     pub fn max_output_tokens(&self) -> Option<u32> {
         self.max_output_tokens
+    }
+    /// Returns declared tools.
+    pub fn tools(&self) -> &[ToolDefinition] {
+        &self.tools
+    }
+    /// Returns tool selection strategy when set.
+    pub fn tool_choice(&self) -> Option<&ToolChoice> {
+        self.tool_choice.as_ref()
+    }
+    /// Returns parallel tool-call preference when set.
+    pub fn parallel_tool_calls(&self) -> Option<ParallelToolCalls> {
+        self.parallel_tool_calls
     }
     /// Returns timeout/deadline.
     pub fn timeout(&self) -> Option<RequestTimeout> {
@@ -247,9 +339,17 @@ impl GenerateRequest {
                 )
                 .into());
             }
+            let ContentPart::Text { text } = &message.content()[0] else {
+                return Err(ValidationError::new(
+                    format!("messages[{index}].content[0]"),
+                    ValidationReason::TextPartCount,
+                    "phase one requires text content",
+                )
+                .into());
+            };
             if message.role() == MessageRole::User {
                 has_user = true;
-                if message.content()[0].as_text().trim().is_empty() {
+                if text.trim().is_empty() {
                     return Err(ValidationError::new(
                         format!("messages[{index}].content[0]"),
                         ValidationReason::EmptyUserText,
@@ -297,6 +397,12 @@ impl GenerateRequest {
             }
             check_capability("max_output_tokens", capabilities.max_output_tokens)?;
         }
+        validate_tool_options(
+            self.options.tools(),
+            self.options.tool_choice(),
+            self.options.parallel_tool_calls(),
+            capabilities,
+        )?;
         if let Some(RequestTimeout::At(deadline)) = self.options.timeout
             && deadline <= Instant::now()
         {

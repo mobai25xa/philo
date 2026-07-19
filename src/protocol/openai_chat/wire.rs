@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::MessageRole;
 
+use super::tool_wire::{ToolChoiceWire, ToolWire};
+
 #[derive(Serialize)]
 pub(super) struct ChatCompletionRequestWire<'a> {
     model: &'a str,
@@ -15,6 +17,12 @@ pub(super) struct ChatCompletionRequestWire<'a> {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ToolWire<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<ToolChoiceWire<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
 }
 
 impl<'a> ChatCompletionRequestWire<'a> {
@@ -23,6 +31,9 @@ impl<'a> ChatCompletionRequestWire<'a> {
         messages: Vec<MessageWire<'a>>,
         temperature: Option<f64>,
         max_completion_tokens: Option<u32>,
+        tools: Option<Vec<ToolWire<'a>>>,
+        tool_choice: Option<ToolChoiceWire<'a>>,
+        parallel_tool_calls: Option<bool>,
     ) -> Self {
         Self {
             model,
@@ -34,6 +45,9 @@ impl<'a> ChatCompletionRequestWire<'a> {
             n: 1,
             temperature,
             max_completion_tokens,
+            tools,
+            tool_choice,
+            parallel_tool_calls,
         }
     }
 }
@@ -81,6 +95,7 @@ struct StreamOptionsWire {
 #[derive(Deserialize)]
 pub(super) struct ChatCompletionChunkWire {
     pub(super) id: Option<String>,
+    pub(super) object: Option<String>,
     pub(super) model: Option<String>,
     #[serde(default)]
     pub(super) choices: Vec<ChoiceWire>,
@@ -103,8 +118,28 @@ pub(super) struct ChoiceWire {
 pub(super) struct DeltaWire {
     pub(super) role: Option<String>,
     pub(super) content: Option<String>,
-    pub(super) tool_calls: Option<serde_json::Value>,
+    pub(super) refusal: Option<String>,
+    pub(super) tool_calls: Option<Vec<ToolCallDeltaWire>>,
     pub(super) function_call: Option<serde_json::Value>,
+    #[serde(flatten)]
+    pub(super) extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ToolCallDeltaWire {
+    pub(super) index: i64,
+    pub(super) id: Option<String>,
+    #[serde(rename = "type")]
+    pub(super) kind: Option<String>,
+    pub(super) function: Option<FunctionDeltaWire>,
+    #[serde(flatten)]
+    pub(super) extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct FunctionDeltaWire {
+    pub(super) name: Option<String>,
+    pub(super) arguments: Option<String>,
     #[serde(flatten)]
     pub(super) extra: BTreeMap<String, serde_json::Value>,
 }

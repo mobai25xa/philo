@@ -5,6 +5,7 @@ use crate::domain::{CapabilityStatus, GenerateRequest, MessageRole};
 use crate::error::{CapabilityError, LlmError, ProtocolError};
 use crate::provider::ProviderCapabilities;
 
+use super::tool_wire::{encode_parallel_tool_calls, encode_tool_choice, encode_tools};
 use super::wire::{ChatCompletionRequestWire, MessageWire};
 
 const CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
@@ -28,7 +29,7 @@ impl OpenAiChatRequestAdapter {
     /// Validates capabilities and encodes a domain request without performing I/O.
     pub(crate) fn encode(
         request: &GenerateRequest,
-        capabilities: ProviderCapabilities,
+        capabilities: &ProviderCapabilities,
     ) -> Result<EncodedOpenAiChatRequest, LlmError> {
         request.validate(&capabilities.generation_options())?;
         require_capability("stream", "streaming", capabilities.streaming)?;
@@ -56,11 +57,26 @@ impl OpenAiChatRequestAdapter {
             messages.push(MessageWire::new(message.role(), content.as_text()));
         }
 
+        let capabilities_for_tools = capabilities.generation_options();
+        let tools = encode_tools(request.options().tools(), &capabilities_for_tools)?;
+        let tool_choice = encode_tool_choice(
+            request.options().tools(),
+            request.options().tool_choice(),
+            &capabilities_for_tools,
+        )?;
+        let parallel_tool_calls = encode_parallel_tool_calls(
+            request.options().parallel_tool_calls(),
+            &capabilities_for_tools,
+        )?;
+
         let wire = ChatCompletionRequestWire::new(
             request.model().model().as_str(),
             messages,
             request.options().temperature(),
             request.options().max_output_tokens(),
+            tools,
+            tool_choice,
+            parallel_tool_calls,
         );
         let body = serde_json::to_vec(&wire).map_err(|_| {
             LlmError::from(ProtocolError::new(
@@ -109,7 +125,8 @@ mod tests {
     use serde_json::Value;
 
     use crate::domain::{
-        CapabilityStatus, GenerateRequest, GenerationOptions, Message, ModelRef, RequestMetadata,
+        CapabilityStatus, GenerateRequest, GenerationOptions, Message, ModelRef, ParallelToolCalls,
+        ReasoningEffortSupport, RequestMetadata, ToolChoice, ToolDefinition, ToolName, ToolSchema,
     };
     use crate::error::LlmError;
     use crate::provider::{OfficialOpenAiProfile, ProviderCapabilities};
@@ -126,6 +143,23 @@ mod tests {
         include_str!("../../../tests/fixtures/requests/openai_chat/max-tokens-only.json");
     const ALL_OPTIONS: &str =
         include_str!("../../../tests/fixtures/requests/openai_chat/all-options.json");
+    const TOOL_MINIMAL_AUTO: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-minimal-auto.json");
+    const TOOL_NONE: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-none.json");
+    const TOOL_REQUIRED: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-required.json");
+    const TOOL_SPECIFIC: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-specific.json");
+    const TOOL_STRICT: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-strict.json");
+    const PARALLEL_TOOLS: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/tools/parallel-tools-enabled.json");
+    const TOOL_DESCRIPTION_OMITTED: &str = include_str!(
+        "../../../tests/fixtures/phase-2/requests/tools/tool-description-omitted.json"
+    );
+    const TOOL_SCHEMA_NESTED: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-schema-nested.json");
 
     fn capabilities() -> ProviderCapabilities {
         ProviderCapabilities {
@@ -134,7 +168,43 @@ mod tests {
             max_completion_tokens: CapabilityStatus::Supported,
             streaming: CapabilityStatus::Supported,
             streaming_usage: CapabilityStatus::Supported,
+            function_tools: CapabilityStatus::Unknown,
+            tool_choice_required: CapabilityStatus::Unknown,
+            tool_choice_specific: CapabilityStatus::Unknown,
+            parallel_tool_calls: CapabilityStatus::Unknown,
+            strict_tools: CapabilityStatus::Unknown,
+            vision_input: CapabilityStatus::Unknown,
+            image_detail_original: CapabilityStatus::Unknown,
+            response_format_json_object: CapabilityStatus::Unknown,
+            response_format_json_schema: CapabilityStatus::Unknown,
+            reasoning_efforts: ReasoningEffortSupport::Unknown,
         }
+    }
+
+    fn tools_capabilities() -> ProviderCapabilities {
+        let mut current = capabilities();
+        current.function_tools = CapabilityStatus::Supported;
+        current.tool_choice_required = CapabilityStatus::Supported;
+        current.tool_choice_specific = CapabilityStatus::Supported;
+        current.parallel_tool_calls = CapabilityStatus::Supported;
+        current.strict_tools = CapabilityStatus::Supported;
+        current
+    }
+
+    fn weather_schema() -> ToolSchema {
+        ToolSchema::new(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "city": { "type": "string" }
+            },
+            "required": ["city"],
+            "additionalProperties": false
+        }))
+        .unwrap()
+    }
+
+    fn weather_tool() -> ToolDefinition {
+        ToolDefinition::new(ToolName::new("get_weather").unwrap(), weather_schema())
     }
 
     fn request(messages: Vec<Message>) -> GenerateRequest {
@@ -144,7 +214,7 @@ mod tests {
         )
     }
 
-    fn encoded_value(request: &GenerateRequest, capabilities: ProviderCapabilities) -> Value {
+    fn encoded_value(request: &GenerateRequest, capabilities: &ProviderCapabilities) -> Value {
         let encoded = OpenAiChatRequestAdapter::encode(request, capabilities).unwrap();
         serde_json::from_slice(&encoded.body).unwrap()
     }
@@ -158,7 +228,7 @@ mod tests {
     fn minimal_request_matches_golden_and_protocol_intent() {
         let encoded = OpenAiChatRequestAdapter::encode(
             &request(vec![Message::user("Hello")]),
-            capabilities(),
+            &capabilities(),
         )
         .unwrap();
         let value: Value = serde_json::from_slice(&encoded.body).unwrap();
@@ -185,7 +255,7 @@ mod tests {
             Message::user("  user text  "),
             Message::assistant("assistant text"),
         ]);
-        golden(&encoded_value(&request, capabilities()), ALL_ROLES);
+        golden(&encoded_value(&request, &capabilities()), ALL_ROLES);
     }
 
     #[test]
@@ -196,23 +266,26 @@ mod tests {
             .clone()
             .with_options(GenerationOptions::new().with_temperature(0.75));
         golden(
-            &encoded_value(&temperature, capabilities()),
+            &encoded_value(&temperature, &capabilities()),
             TEMPERATURE_ONLY,
         );
 
         let max_tokens = base
             .clone()
             .with_options(GenerationOptions::new().with_max_output_tokens(256));
-        golden(&encoded_value(&max_tokens, capabilities()), MAX_TOKENS_ONLY);
+        golden(
+            &encoded_value(&max_tokens, &capabilities()),
+            MAX_TOKENS_ONLY,
+        );
 
         let all = base.clone().with_options(
             GenerationOptions::new()
                 .with_temperature(0.75)
                 .with_max_output_tokens(256),
         );
-        golden(&encoded_value(&all, capabilities()), ALL_OPTIONS);
+        golden(&encoded_value(&all, &capabilities()), ALL_OPTIONS);
 
-        let minimal = encoded_value(&base, capabilities());
+        let minimal = encoded_value(&base, &capabilities());
         golden(&minimal, MINIMAL);
         assert_no_null(&minimal);
         assert!(minimal.get("temperature").is_none());
@@ -225,7 +298,7 @@ mod tests {
         unavailable.temperature = CapabilityStatus::Unknown;
         unavailable.max_completion_tokens = CapabilityStatus::Unsupported;
         assert!(
-            OpenAiChatRequestAdapter::encode(&request(vec![Message::user("Hello")]), unavailable,)
+            OpenAiChatRequestAdapter::encode(&request(vec![Message::user("Hello")]), &unavailable,)
                 .is_ok()
         );
     }
@@ -238,7 +311,7 @@ mod tests {
             temperature_capabilities.temperature = status;
             let temperature = request(vec![Message::user("Hello")])
                 .with_options(GenerationOptions::new().with_temperature(1.0));
-            let result = OpenAiChatRequestAdapter::encode(&temperature, temperature_capabilities)
+            let result = OpenAiChatRequestAdapter::encode(&temperature, &temperature_capabilities)
                 .map(|_| transport_calls.set(transport_calls.get() + 1));
             assert_capability_error(&result, "temperature", status);
             assert_eq!(transport_calls.get(), 0);
@@ -248,7 +321,7 @@ mod tests {
             let max_tokens = request(vec![Message::user("Hello")])
                 .with_options(GenerationOptions::new().with_max_output_tokens(8));
             assert_capability_error(
-                &OpenAiChatRequestAdapter::encode(&max_tokens, max_capabilities),
+                &OpenAiChatRequestAdapter::encode(&max_tokens, &max_capabilities),
                 "max_output_tokens",
                 status,
             );
@@ -265,7 +338,7 @@ mod tests {
                     Message::developer("instruction"),
                     Message::user("Hello"),
                 ]),
-                current,
+                &current,
             );
             assert_capability_error(&result, "messages[0].role", status);
         }
@@ -279,7 +352,7 @@ mod tests {
             assert_capability_error(
                 &OpenAiChatRequestAdapter::encode(
                     &request(vec![Message::user("Hello")]),
-                    streaming,
+                    &streaming,
                 ),
                 "stream",
                 status,
@@ -288,7 +361,7 @@ mod tests {
             let mut usage = capabilities();
             usage.streaming_usage = status;
             assert_capability_error(
-                &OpenAiChatRequestAdapter::encode(&request(vec![Message::user("Hello")]), usage),
+                &OpenAiChatRequestAdapter::encode(&request(vec![Message::user("Hello")]), &usage),
                 "stream_options.include_usage",
                 status,
             );
@@ -297,7 +370,7 @@ mod tests {
 
     #[test]
     fn forbidden_fields_and_provider_metadata_never_enter_json() {
-        let value = encoded_value(&request(vec![Message::user("Hello")]), capabilities());
+        let value = encoded_value(&request(vec![Message::user("Hello")]), &capabilities());
         let forbidden = [
             "max_tokens",
             "tools",
@@ -312,6 +385,152 @@ mod tests {
         assert_no_forbidden_keys(&value, &forbidden);
         assert_eq!(value["model"], "gpt-test");
         assert!(!value.to_string().contains("routing-alias"));
+    }
+
+    #[test]
+    fn tool_request_goldens_match_and_omit_defaults() {
+        let capabilities = tools_capabilities();
+        let base = request(vec![Message::user("Hello")]);
+
+        let auto = base
+            .clone()
+            .with_options(GenerationOptions::new().with_tools(vec![weather_tool()]));
+        golden(&encoded_value(&auto, &capabilities), TOOL_MINIMAL_AUTO);
+        let auto_value = encoded_value(&auto, &capabilities);
+        assert!(auto_value.get("tool_choice").is_none());
+
+        let none = base.clone().with_options(
+            GenerationOptions::new()
+                .with_tools(vec![weather_tool()])
+                .with_tool_choice(ToolChoice::None),
+        );
+        golden(&encoded_value(&none, &capabilities), TOOL_NONE);
+
+        let required = base.clone().with_options(
+            GenerationOptions::new()
+                .with_tools(vec![weather_tool()])
+                .with_tool_choice(ToolChoice::Required),
+        );
+        golden(&encoded_value(&required, &capabilities), TOOL_REQUIRED);
+
+        let specific = base.clone().with_options(
+            GenerationOptions::new()
+                .with_tools(vec![weather_tool()])
+                .with_tool_choice(ToolChoice::Specific {
+                    name: ToolName::new("get_weather").unwrap(),
+                }),
+        );
+        golden(&encoded_value(&specific, &capabilities), TOOL_SPECIFIC);
+
+        let strict = base
+            .clone()
+            .with_options(GenerationOptions::new().with_tools(vec![
+            weather_tool()
+                .with_description("Get weather")
+                .unwrap()
+                .with_strict(true),
+        ]));
+        golden(&encoded_value(&strict, &capabilities), TOOL_STRICT);
+
+        let parallel = base.clone().with_options(
+            GenerationOptions::new()
+                .with_tools(vec![
+                    weather_tool(),
+                    ToolDefinition::new(
+                        ToolName::new("get_time").unwrap(),
+                        ToolSchema::new(serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "timezone": { "type": "string" }
+                            },
+                            "required": ["timezone"],
+                            "additionalProperties": false
+                        }))
+                        .unwrap(),
+                    ),
+                ])
+                .with_parallel_tool_calls(ParallelToolCalls::Enabled),
+        );
+        golden(&encoded_value(&parallel, &capabilities), PARALLEL_TOOLS);
+
+        let omitted = base
+            .clone()
+            .with_options(GenerationOptions::new().with_tools(vec![
+            ToolDefinition::new(
+                ToolName::new("lookup").unwrap(),
+                ToolSchema::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
+                }))
+                .unwrap(),
+            ),
+        ]));
+        golden(
+            &encoded_value(&omitted, &capabilities),
+            TOOL_DESCRIPTION_OMITTED,
+        );
+
+        let nested = base.with_options(GenerationOptions::new().with_tools(vec![
+            ToolDefinition::new(
+                ToolName::new("search").unwrap(),
+                ToolSchema::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "object",
+                            "properties": {
+                                "term": { "type": "string" },
+                                "limit": { "type": "integer" }
+                            },
+                            "required": ["term", "limit"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }))
+                .unwrap(),
+            ),
+        ]));
+        golden(&encoded_value(&nested, &capabilities), TOOL_SCHEMA_NESTED);
+    }
+
+    #[test]
+    fn tool_capabilities_fail_closed_before_transport() {
+        let tools_request = request(vec![Message::user("Hello")])
+            .with_options(GenerationOptions::new().with_tools(vec![weather_tool()]));
+        for status in [CapabilityStatus::Unsupported, CapabilityStatus::Unknown] {
+            let mut current = tools_capabilities();
+            current.function_tools = status;
+            assert_capability_error(
+                &OpenAiChatRequestAdapter::encode(&tools_request, &current),
+                "tools",
+                status,
+            );
+        }
+
+        let required_request = request(vec![Message::user("Hello")]).with_options(
+            GenerationOptions::new()
+                .with_tools(vec![weather_tool()])
+                .with_tool_choice(ToolChoice::Required),
+        );
+        let mut current = tools_capabilities();
+        current.tool_choice_required = CapabilityStatus::Unknown;
+        assert_capability_error(
+            &OpenAiChatRequestAdapter::encode(&required_request, &current),
+            "tool_choice",
+            CapabilityStatus::Unknown,
+        );
+    }
+
+    #[test]
+    fn p1_text_request_remains_unchanged_when_tools_are_absent() {
+        golden(
+            &encoded_value(&request(vec![Message::user("Hello")]), &capabilities()),
+            MINIMAL,
+        );
     }
 
     #[test]
@@ -330,7 +549,7 @@ mod tests {
         let before_max = request.options().max_output_tokens();
         let before_metadata: Vec<_> = request.options().metadata().iter().collect();
 
-        OpenAiChatRequestAdapter::encode(&request, capabilities()).unwrap();
+        OpenAiChatRequestAdapter::encode(&request, &capabilities()).unwrap();
 
         assert_eq!(request.model(), &before_model);
         assert_eq!(request.messages(), before_messages);

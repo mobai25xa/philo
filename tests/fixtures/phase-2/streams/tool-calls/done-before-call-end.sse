@@ -1,0 +1,4 @@
+data: {"id":"chatcmpl-tool-done-early","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_early","type":"function","function":{"name":"tool","arguments":"{}"}}]},"finish_reason":null}]}
+
+data: [DONE]
+

@@ -5,9 +5,13 @@
 
 mod request;
 mod state;
+mod tool_wire;
 mod wire;
 
 #[allow(unused_imports)]
 pub(crate) use request::{EncodedOpenAiChatRequest, OpenAiChatRequestAdapter};
 #[allow(unused_imports)]
-pub(crate) use state::{OpenAiChatEventStream, OpenAiChatStreamContext, decode_openai_chat_stream};
+pub(crate) use state::{
+    OpenAiChatEventStream, OpenAiChatStreamContext, decode_openai_chat_stream,
+    decode_openai_chat_stream_with_limits,
+};

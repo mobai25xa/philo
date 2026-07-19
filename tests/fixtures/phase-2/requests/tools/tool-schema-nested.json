@@ -1,0 +1,34 @@
+{
+  "model": "gpt-test",
+  "messages": [
+    { "role": "user", "content": "Hello" }
+  ],
+  "stream": true,
+  "stream_options": { "include_usage": true },
+  "n": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "object",
+              "properties": {
+                "term": { "type": "string" },
+                "limit": { "type": "integer" }
+              },
+              "required": ["term", "limit"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["query"],
+          "additionalProperties": false
+        },
+        "strict": false
+      }
+    }
+  ]
+}

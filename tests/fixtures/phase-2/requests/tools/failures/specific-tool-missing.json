@@ -1,0 +1,9 @@
+{
+  "fixture_id": "specific-tool-missing",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "specific_tool_missing",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "tool_choice.specific names a tool that is not declared"
+}

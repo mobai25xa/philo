@@ -42,7 +42,9 @@ impl LifecycleErrorCategory {
     pub(crate) fn from_error(error: &LlmError) -> Self {
         match error {
             LlmError::Configuration(_) => Self::Configuration,
-            LlmError::Validation(_) => Self::Validation,
+            LlmError::Validation(_) | LlmError::Schema(_) | LlmError::ToolValidation(_) => {
+                Self::Validation
+            }
             LlmError::Capability(_) => Self::Capability,
             LlmError::Authentication(error) => Self::Authentication(error.kind()),
             LlmError::Transport(error) => Self::Transport(error.stage()),

@@ -2,15 +2,17 @@
 
 `philo` is an experimental, streaming-first Rust SDK for LLM applications.
 
-Phase one is intentionally narrow: native Rust with Tokio, the official OpenAI Chat Completions endpoint, Bearer authentication, text messages, and SSE streaming. Tools, reasoning, images, third-party Provider profiles, automatic retry, and arbitrary request-body extensions are not yet supported.
+The working protocol implementation is intentionally narrow: native Rust with Tokio, the official OpenAI Chat Completions endpoint, Bearer authentication, text messages, and SSE streaming. Tools, reasoning, images, third-party Provider profiles, automatic retry, and arbitrary request-body extensions are not yet supported by the wire adapter.
 
-The behavior contract is `philo/openai-chat-p1` version `1.0.0`. Architecture and implementation planning are maintained alongside the SDK project; the crate remains independently buildable after clone.
+The text protocol behavior contract is `philo/openai-chat-p1` version `1.0.0`. The provider-independent Domain v2 and exact-model capability baseline follow `philo/openai-chat-p2` version `1.0.0`. Architecture and implementation planning are maintained alongside the SDK project; the crate remains independently buildable after clone.
 
 ## Status
 
 The crate is `0.x` and its Rust API is experimental. The phase-one protocol behavior is frozen; API changes before 1.0 are documented in release notes.
 
-The current implementation includes provider-independent request/event types, the official OpenAI provider runtime, public `LlmClient::stream/complete` entry points, typed errors and identifiers, structured value-free lifecycle observations, a private Chat request/response protocol implementation, and a rustls-backed transport.
+The current implementation includes provider-independent multi-content and completed-tool-call types, ordered Domain v2 events/collector, exact `ModelId` capability profiles, the official OpenAI provider runtime, public `LlmClient::stream/complete` entry points, typed errors and identifiers, structured value-free lifecycle observations, a private text-only Chat request/response implementation, and a rustls-backed transport.
+
+Domain v2 types are an architectural boundary, not a wire-support claim. Tool declarations/schema, tool request encoding, streamed tool-call decoding, image encoding, and reasoning request mapping are delivered by later phase-two tasks.
 
 ## Minimal Complete Call
 
@@ -57,10 +59,11 @@ The library never creates a Tokio runtime. Applications provide the runtime.
 ## Metadata Example
 
 ```rust
-use philo::{PHASE_ONE_CONTRACT_ID, SDK_NAME};
+use philo::{PHASE_ONE_CONTRACT_ID, PHASE_TWO_CONTRACT_ID, SDK_NAME};
 
 assert_eq!(SDK_NAME, "philo");
 assert_eq!(PHASE_ONE_CONTRACT_ID, "philo/openai-chat-p1");
+assert_eq!(PHASE_TWO_CONTRACT_ID, "philo/openai-chat-p2");
 ```
 
 ## Security Defaults
@@ -80,10 +83,12 @@ See [`SECURITY.md`](./SECURITY.md) for reporting and handling expectations.
 
 ## Limitations
 
-Phase one does not support tools/function calls, thinking/reasoning controls,
-images, audio, structured outputs, prompt-cache controls, third-party Provider
-profiles, the Responses API, automatic retry, arbitrary `extra_body`, or dangerous
-header overrides. Unsupported or unknown response semantics fail closed.
+The current official OpenAI wire adapter does not support tools/function calls,
+thinking/reasoning controls, images, audio, structured outputs, prompt-cache
+controls, third-party Provider profiles, the Responses API, automatic retry,
+arbitrary `extra_body`, or dangerous header overrides. Domain types may reserve a
+validated representation for later phase-two tasks; unsupported or unknown wire
+semantics still fail closed.
 
 ## License
 
