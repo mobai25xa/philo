@@ -1,0 +1,23 @@
+{
+  "fixture_id": "schema-array-enum",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "success",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "units": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["c", "f"]
+        }
+      }
+    },
+    "required": ["units"],
+    "additionalProperties": false
+  },
+  "strict_compatible": true,
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Array plus enum values are inside the frozen keyword subset"
+}

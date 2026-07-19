@@ -455,6 +455,12 @@ mod wire {
         let schema = ToolSchema::new(valid["schema"].clone()).unwrap();
         assert!(schema.is_strict_compatible());
 
+        for name in ["valid/nullable-anyof.json", "valid/array-enum.json"] {
+            let document: Value =
+                serde_json::from_str(&std::fs::read_to_string(root.join(name)).unwrap()).unwrap();
+            ToolSchema::new(document["schema"].clone()).unwrap();
+        }
+
         let invalid: Value = serde_json::from_str(
             &std::fs::read_to_string(root.join("invalid/not-an-object.json")).unwrap(),
         )
@@ -475,6 +481,17 @@ mod wire {
                 .unwrap_err()
                 .reason(),
             SchemaFailure::UnsupportedKeyword
+        );
+
+        let remote: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("unsupported-keywords/remote-ref.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ToolSchema::new(remote["schema"].clone())
+                .unwrap_err()
+                .reason(),
+            SchemaFailure::RemoteReference
         );
     }
 }

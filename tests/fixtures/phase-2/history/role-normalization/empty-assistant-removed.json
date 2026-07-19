@@ -1,0 +1,10 @@
+{
+  "fixture_id": "history-empty-assistant-removed",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "success",
+  "scenario": "empty-assistant-message-removed",
+  "expected_diagnostic": "RemovedEmptyAssistant",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Empty assistant turns are dropped with a count-only diagnostic"
+}

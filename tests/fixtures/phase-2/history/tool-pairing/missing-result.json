@@ -1,0 +1,10 @@
+{
+  "fixture_id": "history-tool-pairing-missing-result",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "missing_tool_result",
+  "scenario": "assistant-toolcall-without-result",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Official MissingToolResultPolicy is Reject"
+}

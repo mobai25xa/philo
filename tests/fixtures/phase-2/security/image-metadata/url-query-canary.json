@@ -1,0 +1,11 @@
+{
+  "fixture_id": "security-image-url-query-canary",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "success",
+  "url": "https://example.com/image.png?token=query-canary-secret",
+  "canary": "query-canary-secret",
+  "scenario": "image-url-debug-redaction",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Image Debug must not retain raw URL query secrets"
+}

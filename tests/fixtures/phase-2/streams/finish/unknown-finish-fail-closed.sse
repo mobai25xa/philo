@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-unknown-finish","model":"gpt-test","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-unknown-finish","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"weird_reason"}]}
+
+data: [DONE]
+

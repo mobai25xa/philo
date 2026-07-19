@@ -311,8 +311,8 @@ mod tests {
     use crate::domain::{
         CapabilityStatus, ContentPart, GenerateRequest, GenerationOptions, ImageContent,
         ImageDetail, ImageMime, Message, MessageRole, ModelRef, ParallelToolCalls, ReasoningEffort,
-        ReasoningEffortSupport, RequestMetadata, ThinkingRequest, ToolChoice, ToolDefinition,
-        ToolName, ToolSchema,
+        ReasoningEffortSupport, RequestMetadata, ResponseFormat, StructuredSchema, ThinkingRequest,
+        ToolChoice, ToolDefinition, ToolName, ToolSchema,
     };
     use crate::error::LlmError;
     use crate::provider::{OfficialOpenAiProfile, ProviderCapabilities};
@@ -355,6 +355,11 @@ mod tests {
     );
     const REASONING_HIGH: &str = include_str!(
         "../../../tests/fixtures/phase-2/requests/thinking/reasoning-effort-high.json"
+    );
+    const JSON_OBJECT: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/structured-output/json-object.json");
+    const JSON_SCHEMA_STRICT: &str = include_str!(
+        "../../../tests/fixtures/phase-2/requests/structured-output/json-schema-strict.json"
     );
 
     fn capabilities() -> ProviderCapabilities {
@@ -405,6 +410,13 @@ mod tests {
             ReasoningEffort::XHigh,
             ReasoningEffort::Max,
         ]));
+        current
+    }
+
+    fn structured_capabilities() -> ProviderCapabilities {
+        let mut current = capabilities();
+        current.response_format_json_object = CapabilityStatus::Supported;
+        current.response_format_json_schema = CapabilityStatus::Supported;
         current
     }
 
@@ -791,6 +803,45 @@ mod tests {
             .with_options(GenerationOptions::new().with_reasoning(ThinkingRequest::Disabled));
         let disabled_value = encoded_value(&disabled, &reasoning_capabilities());
         assert_eq!(disabled_value["reasoning_effort"], "none");
+    }
+
+    #[test]
+    fn structured_output_request_goldens_match_and_omit_text_default() {
+        let capabilities = structured_capabilities();
+        let base = request(vec![Message::user("Return JSON")]);
+        assert!(
+            encoded_value(&base, &capabilities)
+                .get("response_format")
+                .is_none()
+        );
+
+        let object = base.clone().with_options(
+            GenerationOptions::new().with_response_format(ResponseFormat::JsonObject),
+        );
+        golden(&encoded_value(&object, &capabilities), JSON_OBJECT);
+
+        let schema = StructuredSchema::new(
+            "answer_object",
+            None,
+            ToolSchema::new(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "answer": { "type": "integer" }
+                },
+                "required": ["answer"],
+                "additionalProperties": false
+            }))
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let schema_request = request(vec![Message::user("Return an answer object")]).with_options(
+            GenerationOptions::new().with_response_format(ResponseFormat::JsonSchema(schema)),
+        );
+        golden(
+            &encoded_value(&schema_request, &capabilities),
+            JSON_SCHEMA_STRICT,
+        );
     }
 
     #[test]

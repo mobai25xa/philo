@@ -1,0 +1,20 @@
+{
+  "fixture_id": "schema-invalid-argument-required",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "schema_violation",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "city": { "type": "string" }
+    },
+    "required": ["city"],
+    "additionalProperties": false
+  },
+  "arguments": {
+    "units": "c"
+  },
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Argument validation reports a field path without raw values"
+}

@@ -948,6 +948,7 @@ fn record_field_names<'a>(
 mod tests {
     use bytes::Bytes;
     use futures_util::{StreamExt as _, stream};
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -979,6 +980,34 @@ mod tests {
             out.extend_from_slice(b"\n\n");
         }
         out
+    }
+
+    fn property_config() -> ProptestConfig {
+        let mut config = ProptestConfig::default();
+        if std::env::var_os("PROPTEST_CASES").is_none() {
+            config.cases = 96;
+        }
+        config
+    }
+
+    fn partition_bytes(input: &[u8], sizes: &[usize]) -> Vec<Bytes> {
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+        for size in sizes {
+            if offset == input.len() {
+                break;
+            }
+            let end = offset.saturating_add((*size).max(1)).min(input.len());
+            chunks.push(Bytes::copy_from_slice(&input[offset..end]));
+            offset = end;
+        }
+        if offset < input.len() {
+            chunks.push(Bytes::copy_from_slice(&input[offset..]));
+        }
+        if chunks.is_empty() {
+            chunks.push(Bytes::copy_from_slice(input));
+        }
+        chunks
     }
 
     #[tokio::test]
@@ -1280,6 +1309,9 @@ mod tests {
                 "../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
             ),
             include_bytes!("../../../tests/fixtures/responses/openai_chat/text.sse"),
+            include_bytes!(
+                "../../../tests/fixtures/phase-2/streams/usage/usage-only-after-stop.sse"
+            ),
         ];
 
         for fixture in fixtures {
@@ -1317,6 +1349,164 @@ mod tests {
                 assert_eq!(split, baseline, "cut at {cut}");
             }
         }
+    }
+
+    proptest! {
+        #![proptest_config(property_config())]
+
+        #[test]
+        fn phase2_tool_arguments_random_split_is_stable(
+            chunk_sizes in prop::collection::vec(1usize..48, 0..64),
+        ) {
+            let fixtures: &[&[u8]] = &[
+                include_bytes!("../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse"),
+                include_bytes!(
+                    "../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+                ),
+                include_bytes!(
+                    "../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
+                ),
+                include_bytes!(
+                    "../../../tests/fixtures/phase-2/streams/tool-calls/name-split.sse"
+                ),
+            ];
+
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            for fixture in fixtures {
+                let baseline = runtime
+                    .block_on(decode(fixture))
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                let chunks = partition_bytes(fixture, &chunk_sizes)
+                    .into_iter()
+                    .map(Ok)
+                    .collect();
+                let actual = runtime
+                    .block_on(decode_owned(chunks))
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                prop_assert_eq!(actual, baseline);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn phase2_unknown_finish_fails_closed() {
+        let results = decode(include_bytes!(
+            "../../../tests/fixtures/phase-2/streams/finish/unknown-finish-fail-closed.sse"
+        ))
+        .await;
+        let errors: Vec<_> = results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .collect();
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(errors[0], LlmError::UnknownFinishReason(_)));
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::Done { .. })))
+        );
+    }
+
+    #[tokio::test]
+    async fn phase2_tool_stream_preserves_parallel_calls() {
+        let events = decode(include_bytes!(
+            "../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+        ))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+        let ends: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                AssistantEvent::ToolCallEnd { call, .. } => Some(call.name().as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ends, vec!["alpha", "beta"]);
+    }
+
+    #[tokio::test]
+    async fn usage_only_after_stop_merges_without_extra_text() {
+        let events = decode(include_bytes!(
+            "../../../tests/fixtures/phase-2/streams/usage/usage-only-after-stop.sse"
+        ))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AssistantEvent::TextDelta { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, AssistantEvent::Usage(_)))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, AssistantEvent::DetailedUsage(_)))
+        );
+        assert_eq!(
+            events.last(),
+            Some(&AssistantEvent::Done {
+                finish_reason: FinishReason::Stop
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn official_reasoning_content_is_ignored_and_usage_tokens_are_kept() {
+        let events = decode(include_bytes!(
+            "../../../tests/fixtures/phase-2/streams/thinking/official-reasoning-content-ignored.sse"
+        ))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AssistantEvent::ThinkingStart { .. }
+                | AssistantEvent::ThinkingDelta { .. }
+                | AssistantEvent::ThinkingEnd { .. }
+        )));
+        let detailed = events
+            .iter()
+            .find_map(|event| match event {
+                AssistantEvent::DetailedUsage(details) => Some(details),
+                _ => None,
+            })
+            .expect("detailed usage");
+        assert_eq!(detailed.reasoning_tokens(), TokenCount::Known(1));
+        assert!(events.iter().any(
+            |event| matches!(event, AssistantEvent::TextDelta { delta, .. } if delta == "final")
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_tool_argument_json_fails_without_tool_call_end() {
+        let results = decode(include_bytes!(
+            "../../../tests/fixtures/phase-2/streams/malformed/tool-arguments-invalid-json.sse"
+        ))
+        .await;
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::ToolCallEnd { .. })))
+        );
+        assert!(matches!(results.last(), Some(Err(LlmError::Protocol(_)))));
     }
 
     #[tokio::test]

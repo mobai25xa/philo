@@ -1,6 +1,8 @@
-# Phase-One Fixtures
+# Phase Fixtures
 
 Fixtures are added with the implementation task that consumes them. This directory starts with the metadata contract so fixtures cannot become unexplained response dumps.
+
+Phase-two fixtures live under `phase-2/` and cover tools, multimodal requests, structured output, tool streams, history metadata, schema validation, and security canaries. Synthetic P3 thinking-boundary fixtures are tagged `protocol: synthetic-p3-boundary` and are not Official OpenAI conformance.
 
 Every fixture entry in [`manifest.toml`](./manifest.toml) must include:
 

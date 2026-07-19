@@ -1,0 +1,10 @@
+{
+  "fixture_id": "history-replay-cross-model-opaque-drop",
+  "protocol": "synthetic-p3-boundary",
+  "source": "synthetic",
+  "expected": "success",
+  "scenario": "different-model-drops-opaque-and-emits-diagnostic",
+  "redaction_status": "synthetic-no-secrets",
+  "known_limitation": "Official OpenAI Chat does not produce opaque reasoning signatures",
+  "notes": "Synthetic P3 boundary fixture only; not Official OpenAI conformance"
+}

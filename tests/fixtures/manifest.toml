@@ -569,3 +569,191 @@ expected = "error"
 expected_error = "protocol"
 contract_version = "1.0.0"
 notes = "Covered with reduced ResourceLimits in unit tests"
+
+[[fixture]]
+id = "p2-request-json-object"
+path = "phase-2/requests/structured-output/json-object.json"
+purpose = "Encode JSON object response_format"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "response_format.type is json_object"
+
+[[fixture]]
+id = "p2-request-json-schema-strict"
+path = "phase-2/requests/structured-output/json-schema-strict.json"
+purpose = "Encode strict JSON Schema response_format"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "json_schema.strict is true under response_format"
+
+[[fixture]]
+id = "p2-stream-usage-only-after-stop"
+path = "phase-2/streams/usage/usage-only-after-stop.sse"
+purpose = "Merge usage-only chunk after stop finish"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Usage-only choices empty chunk after finish"
+
+[[fixture]]
+id = "p2-stream-unknown-finish-fail-closed"
+path = "phase-2/streams/finish/unknown-finish-fail-closed.sse"
+purpose = "Fail closed on unknown finish reason"
+source = "synthetic"
+expected = "error"
+expected_error = "unknown_finish_reason"
+contract_version = "1.0.0"
+notes = "Unknown finish never emits successful Done"
+
+[[fixture]]
+id = "p2-stream-tool-arguments-invalid-json"
+path = "phase-2/streams/malformed/tool-arguments-invalid-json.sse"
+purpose = "Reject invalid JSON tool arguments at finish"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "No ToolCallEnd when arguments are not complete JSON"
+
+[[fixture]]
+id = "p2-stream-official-reasoning-content-ignored"
+path = "phase-2/streams/thinking/official-reasoning-content-ignored.sse"
+purpose = "Ignore reasoning_content wire field for Official Chat"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Official Chat maps reasoning_tokens in usage only; no Thinking events"
+
+[[fixture]]
+id = "p2-history-tool-pairing-success"
+path = "phase-2/history/tool-pairing/success-call-result.json"
+purpose = "Document successful tool call and result pairing"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Consumed by phase2 history contract tests"
+
+[[fixture]]
+id = "p2-history-tool-pairing-missing-result"
+path = "phase-2/history/tool-pairing/missing-result.json"
+purpose = "Document missing tool result rejection"
+source = "synthetic"
+expected = "error"
+expected_error = "missing_tool_result"
+contract_version = "1.0.0"
+notes = "Official MissingToolResultPolicy is Reject"
+
+[[fixture]]
+id = "p2-history-tool-pairing-duplicate-result"
+path = "phase-2/history/tool-pairing/duplicate-result.json"
+purpose = "Document duplicate tool result rejection"
+source = "synthetic"
+expected = "error"
+expected_error = "duplicate_tool_result"
+contract_version = "1.0.0"
+notes = "Each call id accepts one result"
+
+[[fixture]]
+id = "p2-history-replay-same-source-opaque"
+path = "phase-2/history/replay/same-source-opaque.json"
+purpose = "Synthetic P3 boundary for same-source opaque retention"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "protocol synthetic-p3-boundary; not Official OpenAI conformance"
+
+[[fixture]]
+id = "p2-history-replay-cross-model-opaque-drop"
+path = "phase-2/history/replay/cross-model-opaque-drop.json"
+purpose = "Synthetic P3 boundary for cross-model opaque drop"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "protocol synthetic-p3-boundary; not Official OpenAI conformance"
+
+[[fixture]]
+id = "p2-history-empty-assistant-removed"
+path = "phase-2/history/role-normalization/empty-assistant-removed.json"
+purpose = "Document empty assistant removal diagnostic"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "RemovedEmptyAssistant diagnostic code"
+
+[[fixture]]
+id = "p2-history-tool-result-image-rejected"
+path = "phase-2/history/multimodal/tool-result-image-rejected.json"
+purpose = "Document tool result image reject policy"
+source = "synthetic"
+expected = "error"
+expected_error = "unsupported_content"
+contract_version = "1.0.0"
+notes = "Official OpenAI P2 rejects tool result images"
+
+[[fixture]]
+id = "p2-security-argument-canary"
+path = "phase-2/security/sensitive-arguments/argument-canary.json"
+purpose = "Prove sensitive tool argument canaries never leak"
+source = "synthetic"
+expected = "error"
+expected_error = "schema_violation"
+contract_version = "1.0.0"
+notes = "Canary text is synthetic test input only"
+
+[[fixture]]
+id = "p2-security-image-url-query-canary"
+path = "phase-2/security/image-metadata/url-query-canary.json"
+purpose = "Prove image URL query secrets never enter Debug"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Canary is synthetic"
+
+[[fixture]]
+id = "p2-security-opaque-thinking-canary"
+path = "phase-2/security/opaque-thinking/opaque-canary.json"
+purpose = "Prove thinking visible and opaque canaries stay redacted"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "protocol synthetic-p3-boundary"
+
+[[fixture]]
+id = "p2-schema-valid-nullable-anyof"
+path = "phase-2/schemas/valid/nullable-anyof.json"
+purpose = "Compile nullable anyOf branches"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Nullable unions use anyOf with type null"
+
+[[fixture]]
+id = "p2-schema-valid-array-enum"
+path = "phase-2/schemas/valid/array-enum.json"
+purpose = "Compile array items with enum"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Array and enum keywords are supported"
+
+[[fixture]]
+id = "p2-schema-invalid-missing-required"
+path = "phase-2/schemas/invalid/missing-required-type.json"
+purpose = "Argument validation fails for missing required fields"
+source = "synthetic"
+expected = "error"
+expected_error = "schema_violation"
+contract_version = "1.0.0"
+notes = "Used by validation path tests"
+
+[[fixture]]
+id = "p2-schema-unsupported-remote-ref"
+path = "phase-2/schemas/unsupported-keywords/remote-ref.json"
+purpose = "Reject remote schema references"
+source = "synthetic"
+expected = "error"
+expected_error = "remote_reference"
+contract_version = "1.0.0"
+notes = "No network access during schema compile"
