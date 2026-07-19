@@ -8,8 +8,8 @@ use futures_core::Stream;
 use super::wire::{ChatCompletionChunkWire, ChoiceWire, DeltaWire, ToolCallDeltaWire, UsageWire};
 use crate::domain::{
     AssistantEvent, ContentIndex, FinishReason, GenerationId, LocalRequestId, ModelRef,
-    ProviderRequestId, ResourceLimits, ToolArguments, ToolCall, ToolCallId, ToolName, Usage,
-    WireToolIndex,
+    ProviderRequestId, ResourceLimits, TokenCount, ToolArguments, ToolCall, ToolCallId, ToolName,
+    Usage, UsageDetails, UsageMergeOutcome, WireToolIndex, merge_usage_details,
 };
 use crate::error::{
     ErrorStage, LlmError, ProtocolError, TruncatedStreamError, UnknownFinishReason,
@@ -138,7 +138,7 @@ struct ChatStateMachine {
     total_tool_argument_bytes: usize,
     finish_reason: Option<FinishReason>,
     seen_done: bool,
-    usage: Option<Usage>,
+    usage_details: Option<UsageDetails>,
     generation_id: Option<GenerationId>,
     response_model: Option<String>,
     unknown_fields: BTreeSet<String>,
@@ -154,7 +154,7 @@ impl fmt::Debug for ChatStateMachine {
             .field("tool_calls", &self.tool_order.len())
             .field("finish_seen", &self.finish_reason.is_some())
             .field("done_seen", &self.seen_done)
-            .field("usage_seen", &self.usage.is_some())
+            .field("usage_seen", &self.usage_details.is_some())
             .field("generation_id_seen", &self.generation_id.is_some())
             .field("response_model_seen", &self.response_model.is_some())
             .field("unknown_field_count", &self.unknown_fields.len())
@@ -208,7 +208,7 @@ impl ChatStateMachine {
             total_tool_argument_bytes: 0,
             finish_reason: None,
             seen_done: false,
-            usage: None,
+            usage_details: None,
             generation_id: None,
             response_model: None,
             unknown_fields: BTreeSet::new(),
@@ -279,15 +279,21 @@ impl ChatStateMachine {
         if let Some(choice) = chunk.choices.first() {
             self.apply_choice(choice, prepared.finish_reason, &mut events)?;
         }
-        if let Some(usage) = prepared.usage {
-            if let Some(previous) = self.usage {
-                if previous != usage {
-                    return Err(Self::protocol("conflicting duplicate usage"));
+        if let Some(details) = prepared.usage {
+            let (merged, outcome) = merge_usage_details(self.usage_details, details)
+                .map_err(|error| Self::protocol(error.message()))?;
+            match outcome {
+                UsageMergeOutcome::Unchanged => {}
+                UsageMergeOutcome::EmitP1 { details } => {
+                    let usage = core_usage_from_details(details).map_err(Self::protocol)?;
+                    events.push(AssistantEvent::Usage(usage));
+                    events.push(AssistantEvent::DetailedUsage(details));
                 }
-            } else {
-                self.usage = Some(usage);
-                events.push(AssistantEvent::Usage(usage));
+                UsageMergeOutcome::EmitDetailed { details } => {
+                    events.push(AssistantEvent::DetailedUsage(details));
+                }
             }
+            self.usage_details = Some(merged);
         }
         Ok(events)
     }
@@ -624,7 +630,7 @@ impl ChatStateMachine {
                     self.end_tool_call(wire_index, events)?;
                 }
             }
-            FinishReason::Stop | FinishReason::Length | FinishReason::ContentFilter => {
+            FinishReason::Stop | FinishReason::Length => {
                 if !self.tools.is_empty() {
                     return Err(Self::protocol(
                         "non-tool finish reason received with tool call deltas",
@@ -643,6 +649,19 @@ impl ChatStateMachine {
                     events.push(AssistantEvent::TextStart { index });
                     self.close_text_if_open(events);
                 }
+            }
+            FinishReason::ContentFilter => {
+                if !self.tools.is_empty() {
+                    return Err(Self::protocol(
+                        "content_filter finish reason received with tool call deltas",
+                    ));
+                }
+                // Official OpenAI Profile maps content_filter to a typed protocol error.
+                // The finish reason remains available on the error path, but no success Done.
+                self.finish_reason = Some(reason.clone());
+                return Err(Self::protocol(
+                    "content_filter finish reason is not a successful completion",
+                ));
             }
             FinishReason::Unknown(raw) => {
                 return Err(UnknownFinishReason::new(bounded_label(&raw, 64)).into());
@@ -737,7 +756,7 @@ impl ChatStateMachine {
 
 struct PreparedChunk {
     finish_reason: Option<FinishReason>,
-    usage: Option<Usage>,
+    usage: Option<UsageDetails>,
 }
 
 impl PreparedChunk {
@@ -759,7 +778,7 @@ impl PreparedChunk {
         } else {
             None
         };
-        let usage = chunk.usage.as_ref().map(validate_usage).transpose()?;
+        let usage = chunk.usage.as_ref().map(parse_usage_details).transpose()?;
         Ok(Self {
             finish_reason,
             usage,
@@ -801,37 +820,64 @@ impl PreparedChunk {
     }
 }
 
-fn validate_usage(wire: &UsageWire) -> Result<Usage, LlmError> {
-    // Phase-two keeps the P1 public Usage event for complete core counters only.
-    // Optional/incomplete usage and reasoning token details are reserved for P2-012.
-    let (Some(prompt), Some(completion), Some(total)) = (
-        wire.prompt_tokens,
-        wire.completion_tokens,
-        wire.total_tokens,
-    ) else {
+fn parse_usage_details(wire: &UsageWire) -> Result<UsageDetails, LlmError> {
+    let input = optional_token_count(wire.prompt_tokens, "usage.prompt_tokens")?;
+    let output = optional_token_count(wire.completion_tokens, "usage.completion_tokens")?;
+    let total = optional_token_count(wire.total_tokens, "usage.total_tokens")?;
+    let cached_input = optional_token_count(
+        wire.prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cached_tokens),
+        "usage.prompt_tokens_details.cached_tokens",
+    )?;
+    let cache_write = optional_token_count(
+        wire.prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cache_write_tokens),
+        "usage.prompt_tokens_details.cache_write_tokens",
+    )?;
+    let reasoning = optional_token_count(
+        wire.completion_tokens_details
+            .as_ref()
+            .and_then(|details| details.reasoning_tokens),
+        "usage.completion_tokens_details.reasoning_tokens",
+    )?;
+
+    let details = UsageDetails::new(input, output, total, cached_input, cache_write, reasoning);
+    details
+        .validate_relationships()
+        .map_err(|error| ChatStateMachine::protocol(error.message()))?;
+    if !details.has_any_known() {
         return Err(ChatStateMachine::protocol(
-            "usage core token counts are incomplete",
+            "usage object did not report any token counts",
         ));
-    };
-    let input = u64::try_from(prompt)
-        .map_err(|_| ChatStateMachine::protocol("usage token count must be non-negative"))?;
-    let output = u64::try_from(completion)
-        .map_err(|_| ChatStateMachine::protocol("usage token count must be non-negative"))?;
-    let total = u64::try_from(total)
-        .map_err(|_| ChatStateMachine::protocol("usage token count must be non-negative"))?;
-    if let Some(details) = &wire.completion_tokens_details
-        && let Some(reasoning) = details.reasoning_tokens
-    {
-        let reasoning = u64::try_from(reasoning).map_err(|_| {
-            ChatStateMachine::protocol("reasoning token count must be non-negative")
-        })?;
-        if reasoning > output {
-            return Err(ChatStateMachine::protocol(
-                "reasoning tokens must not exceed completion tokens",
-            ));
+    }
+    Ok(details)
+}
+
+fn optional_token_count(value: Option<i64>, field: &str) -> Result<TokenCount, LlmError> {
+    match value {
+        None => Ok(TokenCount::Unknown),
+        Some(raw) => {
+            let count = u64::try_from(raw)
+                .map_err(|_| ChatStateMachine::protocol(format!("{field} must be non-negative")))?;
+            Ok(TokenCount::Known(count))
         }
     }
-    Usage::new(input, output, total).map_err(Into::into)
+}
+
+fn core_usage_from_details(details: UsageDetails) -> Result<Usage, &'static str> {
+    match (
+        details.input_tokens(),
+        details.output_tokens(),
+        details.total_tokens(),
+    ) {
+        (TokenCount::Known(input), TokenCount::Known(output), TokenCount::Known(total)) => {
+            Usage::new(input, output, total)
+                .map_err(|_| "usage total does not equal input + output")
+        }
+        _ => Err("core usage counters are incomplete"),
+    }
 }
 
 fn parse_finish_reason(raw: &str) -> Result<FinishReason, LlmError> {
@@ -944,7 +990,7 @@ mod tests {
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-        assert_eq!(events.len(), 7);
+        assert_eq!(events.len(), 8);
         assert!(matches!(
             &events[0],
             AssistantEvent::Start {
@@ -983,8 +1029,9 @@ mod tests {
             events[5],
             AssistantEvent::Usage(Usage::new(2, 1, 3).unwrap())
         );
+        assert!(matches!(events[6], AssistantEvent::DetailedUsage(_)));
         assert_eq!(
-            events[6],
+            events[7],
             AssistantEvent::Done {
                 finish_reason: FinishReason::Stop
             }
@@ -1283,6 +1330,10 @@ mod tests {
                 |error| matches!(error, LlmError::UnknownFinishReason(_)),
             ),
             (
+                include_bytes!("../../../tests/fixtures/responses/openai_chat/content-filter.sse"),
+                |error| matches!(error, LlmError::Protocol(_)),
+            ),
+            (
                 include_bytes!(
                     "../../../tests/fixtures/responses/openai_chat/nonzero-choice-index.sse"
                 ),
@@ -1506,7 +1557,7 @@ mod tests {
                 total_tool_argument_bytes: 32,
                 finish_reason: Some(FinishReason::ToolCalls),
                 seen_done: true,
-                usage: None,
+                usage_details: None,
                 generation_id: None,
                 response_model: None,
                 unknown_fields: BTreeSet::new(),

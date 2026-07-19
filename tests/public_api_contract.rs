@@ -51,8 +51,12 @@ fn primary_public_surface_does_not_name_private_implementation_types() {
                     "reqwest type leaked in {relative}"
                 );
             }
+            // Structured output intentionally exposes serde_json::Value on the frozen
+            // AssistantMessage / collector surface. All other public lines stay free of it.
+            let structured_output_surface = normalized.contains("structured_output")
+                || normalized.contains("collect_assistant_message_for_format");
             assert!(
-                !normalized.contains("serde_json::value"),
+                structured_output_surface || !normalized.contains("serde_json::value"),
                 "JSON value leaked in {relative}"
             );
             assert!(
@@ -84,18 +88,18 @@ fn request_api_has_no_arbitrary_body_or_non_scope_controls() {
         "audio:",
         "prompt_cache",
         "retry:",
-        "response_format",
     ] {
         assert!(
             !generation_options.contains(forbidden),
             "non-scope request control: {forbidden}"
         );
     }
-    // Phase-two freezes tools/tool_choice/parallel_tool_calls/reasoning on GenerationOptions.
+    // Phase-two freezes tools/tool_choice/parallel_tool_calls/reasoning/response_format.
     assert!(generation_options.contains("tools:"));
     assert!(generation_options.contains("tool_choice:"));
     assert!(generation_options.contains("parallel_tool_calls:"));
     assert!(generation_options.contains("reasoning:"));
+    assert!(generation_options.contains("response_format:"));
 }
 
 #[test]

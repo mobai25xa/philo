@@ -12,11 +12,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use futures_util::{Stream, StreamExt};
 
 pub use super::ids::{GenerationId, LocalRequestId, ProviderRequestId};
+use super::schema::SchemaLimits;
+use super::structured::ResponseFormat;
+use super::usage::UsageDetails;
 use super::{
     ContentIndex, ContentPart, ModelRef, RefusalContent, ThinkingContent, ToolCall, ToolCallId,
     WireToolIndex,
 };
-use crate::error::{LlmError, ProtocolError, TruncatedStreamError};
+use crate::error::{
+    LlmError, ProtocolError, StructuredOutputError, StructuredOutputFailure, TruncatedStreamError,
+};
 
 /// Token accounting supplied by a provider.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,8 +169,10 @@ pub enum AssistantEvent {
         /// Completed call safe for later schema validation.
         call: ToolCall,
     },
-    /// Reports token usage; absence means unknown.
+    /// Reports complete P1 core token usage; absence means unknown.
     Usage(Usage),
+    /// Reports detailed token usage, including optional/incomplete fields.
+    DetailedUsage(UsageDetails),
     /// Ends the generation exactly once.
     Done {
         /// Normalized completion reason.
@@ -190,6 +197,8 @@ pub struct AssistantMessage {
     content: Vec<ContentPart>,
     text: String,
     usage: Option<Usage>,
+    usage_details: Option<UsageDetails>,
+    structured_output: Option<serde_json::Value>,
     finish_reason: FinishReason,
     local_request_id: Option<LocalRequestId>,
     provider_request_id: Option<ProviderRequestId>,
@@ -207,9 +216,19 @@ impl AssistantMessage {
         &self.text
     }
 
-    /// Returns usage, or `None` when the provider omitted it.
+    /// Returns usage, or `None` when the provider omitted complete core counters.
     pub fn usage(&self) -> Option<Usage> {
         self.usage
+    }
+
+    /// Returns detailed usage when any usage snapshot was observed.
+    pub fn usage_details(&self) -> Option<UsageDetails> {
+        self.usage_details
+    }
+
+    /// Returns validated structured output when requested and successful.
+    pub fn structured_output(&self) -> Option<&serde_json::Value> {
+        self.structured_output.as_ref()
     }
 
     /// Returns finish reason.
@@ -245,7 +264,24 @@ impl AssistantMessage {
 }
 
 /// Collects one stream into an assistant message. It never performs a request.
+///
+/// This is equivalent to [`collect_assistant_message_for_format`] with
+/// [`ResponseFormat::Text`].
 pub async fn collect_assistant_message<S>(stream: S) -> Result<AssistantMessage, LlmError>
+where
+    S: Stream<Item = Result<AssistantEvent, LlmError>>,
+{
+    collect_assistant_message_for_format(stream, &ResponseFormat::Text).await
+}
+
+/// Collects one stream and validates structured output according to `response_format`.
+///
+/// Validation happens after the stream ends successfully. Intermediate text deltas
+/// are not schema-validated. This function never performs a network request.
+pub async fn collect_assistant_message_for_format<S>(
+    stream: S,
+    response_format: &ResponseFormat,
+) -> Result<AssistantMessage, LlmError>
 where
     S: Stream<Item = Result<AssistantEvent, LlmError>>,
 {
@@ -254,7 +290,98 @@ where
     while let Some(item) = stream.next().await {
         state.accept(item?)?;
     }
-    state.finish().map_err(Into::into)
+    let mut message = state.finish().map_err(LlmError::from)?;
+    message.structured_output = validate_structured_output(&message, response_format)?;
+    Ok(message)
+}
+
+fn validate_structured_output(
+    message: &AssistantMessage,
+    response_format: &ResponseFormat,
+) -> Result<Option<serde_json::Value>, LlmError> {
+    match response_format {
+        ResponseFormat::Text => Ok(None),
+        ResponseFormat::JsonObject | ResponseFormat::JsonSchema(_) => {
+            let has_tool_call = message
+                .content
+                .iter()
+                .any(|part| matches!(part, ContentPart::ToolCall(_)));
+            let has_refusal = message
+                .content
+                .iter()
+                .any(|part| matches!(part, ContentPart::Refusal(_)));
+            if matches!(message.finish_reason, FinishReason::ToolCalls) || has_tool_call {
+                return Ok(None);
+            }
+            if has_refusal {
+                return Ok(None);
+            }
+            if matches!(message.finish_reason, FinishReason::Length) {
+                return Err(StructuredOutputError::new(
+                    "structured_output",
+                    StructuredOutputFailure::Truncated,
+                    None,
+                    "structured output was truncated before completion",
+                )
+                .into());
+            }
+            if matches!(
+                message.finish_reason,
+                FinishReason::ContentFilter | FinishReason::Unknown(_)
+            ) {
+                return Err(ProtocolError::new(
+                    "structured output is unavailable for a non-success finish reason",
+                )
+                .into());
+            }
+            if !matches!(message.finish_reason, FinishReason::Stop) {
+                return Err(ProtocolError::new(
+                    "structured output requires a successful text finish",
+                )
+                .into());
+            }
+
+            let parsed =
+                serde_json::from_str::<serde_json::Value>(message.text()).map_err(|_| {
+                    StructuredOutputError::new(
+                        "structured_output",
+                        StructuredOutputFailure::InvalidJson,
+                        None,
+                        "assistant text is not valid JSON",
+                    )
+                })?;
+
+            match response_format {
+                ResponseFormat::JsonObject => {
+                    if !parsed.is_object() {
+                        return Err(StructuredOutputError::new(
+                            "structured_output",
+                            StructuredOutputFailure::SchemaViolation,
+                            Some("#".to_owned()),
+                            "json_object response must be a JSON object",
+                        )
+                        .into());
+                    }
+                    Ok(Some(parsed))
+                }
+                ResponseFormat::JsonSchema(schema) => {
+                    schema
+                        .schema()
+                        .validate_instance(&parsed, SchemaLimits::official())
+                        .map_err(|error| {
+                            StructuredOutputError::new(
+                                "structured_output",
+                                StructuredOutputFailure::SchemaViolation,
+                                error.path().map(str::to_owned),
+                                "assistant text failed the requested response schema",
+                            )
+                        })?;
+                    Ok(Some(parsed))
+                }
+                ResponseFormat::Text => Ok(None),
+            }
+        }
+    }
 }
 
 enum OpenBlock {
@@ -279,6 +406,7 @@ struct Collector {
     tool_wire_indexes: BTreeSet<WireToolIndex>,
     tool_call_ids: BTreeSet<ToolCallId>,
     usage: Option<Usage>,
+    usage_details: Option<UsageDetails>,
     finish_reason: Option<FinishReason>,
     local_request_id: Option<LocalRequestId>,
     provider_request_id: Option<ProviderRequestId>,
@@ -448,6 +576,15 @@ impl Collector {
                     self.usage = Some(usage);
                 }
             }
+            AssistantEvent::DetailedUsage(details) => {
+                if let Some(previous) = self.usage_details {
+                    if previous != details {
+                        return Err(Self::protocol("conflicting DetailedUsage events"));
+                    }
+                } else {
+                    self.usage_details = Some(details);
+                }
+            }
             AssistantEvent::Done { finish_reason } => {
                 if !self.open.is_empty() {
                     return Err(Self::protocol(
@@ -514,6 +651,8 @@ impl Collector {
             content,
             text,
             usage: self.usage,
+            usage_details: self.usage_details,
+            structured_output: None,
             finish_reason,
             local_request_id: self.local_request_id,
             provider_request_id: self.provider_request_id,

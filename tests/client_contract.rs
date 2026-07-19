@@ -101,9 +101,13 @@ async fn stream_and_complete_form_one_vertical_pipeline() {
         event,
         AssistantEvent::TextDelta { delta, .. } if delta == "hello"
     )));
-    assert_eq!(
-        events[events.len() - 2],
-        AssistantEvent::Usage(Usage::new(2, 1, 3).unwrap())
+    assert!(events.iter().any(|event| {
+        matches!(event, AssistantEvent::Usage(usage) if *usage == Usage::new(2, 1, 3).unwrap())
+    }));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AssistantEvent::DetailedUsage(_)))
     );
     assert_eq!(
         events.last(),
@@ -115,6 +119,7 @@ async fn stream_and_complete_form_one_vertical_pipeline() {
     let message = client.complete(request()).await.unwrap();
     assert_eq!(message.text(), "world");
     assert_eq!(message.usage(), Some(Usage::new(2, 1, 3).unwrap()));
+    assert!(message.usage_details().is_some());
     assert_eq!(
         message.provider_request_id().unwrap().as_str(),
         "req-complete"

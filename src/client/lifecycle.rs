@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::domain::{
     AssistantEvent, AssistantMessage, GenerateRequest, LocalRequestId, ProviderRequestId,
-    RequestTimeout, TraceId, collect_assistant_message,
+    RequestTimeout, TraceId, collect_assistant_message_for_format,
 };
 use crate::error::{
     ErrorStage, HttpStatusError, LlmError, ProtocolError, RetriableHint, TimeoutError,
@@ -189,7 +189,9 @@ impl Stream for AssistantStream {
                     AssistantEvent::TextDelta { delta, .. } if !delta.is_empty() => {
                         stream.completion_state.partial_output = true;
                     }
-                    AssistantEvent::Usage(_) => stream.completion_state.usage_known = true,
+                    AssistantEvent::Usage(_) | AssistantEvent::DetailedUsage(_) => {
+                        stream.completion_state.usage_known = true;
+                    }
                     AssistantEvent::Done { finish_reason } => {
                         emit(
                             stream.observation.as_ref(),
@@ -358,8 +360,13 @@ impl LlmClient {
     /// Returns the first error from request startup or streamed response processing.
     pub async fn complete(&self, request: GenerateRequest) -> Result<AssistantMessage, LlmError> {
         let model = request.model().clone();
+        let response_format = request.options().response_format().clone();
         let stream = self.stream(request).await?;
-        Ok(collect_assistant_message(stream).await?.with_model(model))
+        Ok(
+            collect_assistant_message_for_format(stream, &response_format)
+                .await?
+                .with_model(model),
+        )
     }
 
     /// Completes one request using caller-retained cancellation and telemetry controls.
@@ -373,8 +380,13 @@ impl LlmClient {
         control: RequestControl,
     ) -> Result<AssistantMessage, LlmError> {
         let model = request.model().clone();
+        let response_format = request.options().response_format().clone();
         let stream = self.stream_with_control(request, control).await?;
-        Ok(collect_assistant_message(stream).await?.with_model(model))
+        Ok(
+            collect_assistant_message_for_format(stream, &response_format)
+                .await?
+                .with_model(model),
+        )
     }
 
     async fn start_stream(

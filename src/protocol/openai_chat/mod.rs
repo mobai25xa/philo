@@ -5,6 +5,7 @@
 
 mod request;
 mod state;
+mod structured_wire;
 mod tool_wire;
 mod wire;
 

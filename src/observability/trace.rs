@@ -45,7 +45,9 @@ impl LifecycleErrorCategory {
             LlmError::Validation(_)
             | LlmError::Schema(_)
             | LlmError::ToolValidation(_)
-            | LlmError::History(_) => Self::Validation,
+            | LlmError::History(_)
+            | LlmError::StructuredOutput(_)
+            | LlmError::Cost(_) => Self::Validation,
             LlmError::Capability(_) => Self::Capability,
             LlmError::Authentication(error) => Self::Authentication(error.kind()),
             LlmError::Transport(error) => Self::Transport(error.stage()),

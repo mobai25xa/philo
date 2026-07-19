@@ -653,6 +653,126 @@ impl HistoryError {
     }
 }
 
+/// Structured-output validation failure codes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum StructuredOutputFailure {
+    /// Final assistant text is not valid JSON.
+    InvalidJson,
+    /// Final assistant text fails the requested schema or object shape.
+    SchemaViolation,
+    /// Generation ended with a truncated output before complete structured text.
+    Truncated,
+}
+
+/// A safe structured-output validation failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct StructuredOutputError {
+    field: String,
+    reason: StructuredOutputFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl StructuredOutputError {
+    /// Creates a structured-output error without retaining model text.
+    pub fn new(
+        field: impl Into<String>,
+        reason: StructuredOutputFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> StructuredOutputFailure {
+        self.reason
+    }
+
+    /// Returns the optional JSON Pointer path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
+/// Cost estimation failure codes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CostFailure {
+    /// Token accounting relationships are inconsistent.
+    InconsistentUsage,
+    /// Checked monetary arithmetic overflowed.
+    Overflow,
+    /// Currency code is not a valid uppercase ISO-4217 value.
+    InvalidCurrency,
+    /// Price profile fields are invalid.
+    InvalidPriceProfile,
+}
+
+/// A safe local cost estimation failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct CostError {
+    field: String,
+    reason: CostFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl CostError {
+    /// Creates a cost error without retaining usage or price values.
+    pub fn new(
+        field: impl Into<String>,
+        reason: CostFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> CostFailure {
+        self.reason
+    }
+
+    /// Returns the optional location path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
 /// All public SDK failures.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -675,6 +795,12 @@ pub enum LlmError {
     /// History normalization failure.
     #[error("history: {0}")]
     History(#[from] HistoryError),
+    /// Structured-output validation failure.
+    #[error("structured output: {0}")]
+    StructuredOutput(#[from] StructuredOutputError),
+    /// Local cost estimation failure.
+    #[error("cost: {0}")]
+    Cost(#[from] CostError),
     /// Authentication, permission, quota, or rate-limit failure.
     #[error("{0}")]
     Authentication(#[from] AuthenticationError),

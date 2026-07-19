@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::domain::{ImageDetail, MessageRole};
 
+use super::structured_wire::ResponseFormatWire;
 use super::tool_wire::{ToolChoiceWire, ToolWire};
 
 #[derive(Serialize)]
@@ -26,6 +27,8 @@ pub(super) struct ChatCompletionRequestWire<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormatWire<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<ReasoningEffortWire>,
 }
 
@@ -39,6 +42,7 @@ impl<'a> ChatCompletionRequestWire<'a> {
         tools: Option<Vec<ToolWire<'a>>>,
         tool_choice: Option<ToolChoiceWire<'a>>,
         parallel_tool_calls: Option<bool>,
+        response_format: Option<ResponseFormatWire<'a>>,
         reasoning_effort: Option<ReasoningEffortWire>,
     ) -> Self {
         Self {
@@ -54,6 +58,7 @@ impl<'a> ChatCompletionRequestWire<'a> {
             tools,
             tool_choice,
             parallel_tool_calls,
+            response_format,
             reasoning_effort,
         }
     }

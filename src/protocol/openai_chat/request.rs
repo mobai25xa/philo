@@ -10,6 +10,7 @@ use crate::domain::{
 use crate::error::{CapabilityError, LlmError, ProtocolError, ValidationError, ValidationReason};
 use crate::provider::ProviderCapabilities;
 
+use super::structured_wire::ResponseFormatWire;
 use super::tool_wire::{encode_parallel_tool_calls, encode_tool_choice, encode_tools};
 use super::wire::{
     AssistantToolCallWire, ChatCompletionRequestWire, ImageUrlWire, MessageContentPartWire,
@@ -71,6 +72,7 @@ impl OpenAiChatRequestAdapter {
             &capabilities_for_tools,
         )?;
         let reasoning_effort = encode_reasoning_effort(request.options().reasoning());
+        let response_format = ResponseFormatWire::from_domain(request.options().response_format());
 
         let wire = ChatCompletionRequestWire::new(
             request.model().model().as_str(),
@@ -80,6 +82,7 @@ impl OpenAiChatRequestAdapter {
             tools,
             tool_choice,
             parallel_tool_calls,
+            response_format,
             reasoning_effort,
         );
         let body = serde_json::to_vec(&wire).map_err(|_| {

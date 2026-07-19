@@ -94,6 +94,16 @@ contract_version = "1.0.0"
 notes = "Returns bounded UnknownFinishReason"
 
 [[fixture]]
+id = "response-content-filter"
+path = "responses/openai_chat/content-filter.sse"
+purpose = "Fail closed on content_filter finish reason without success Done"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "Official OpenAI profile maps content_filter to a typed protocol error"
+
+[[fixture]]
 id = "response-tool-finish"
 path = "responses/openai_chat/tool-finish.sse"
 purpose = "Reject incomplete tool-call finish without name or arguments"

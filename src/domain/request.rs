@@ -12,6 +12,7 @@ use std::time::Duration;
 use http::{HeaderMap, HeaderName};
 use tokio::time::Instant;
 
+use super::structured::ResponseFormat;
 use super::tools::{ParallelToolCalls, ToolChoice, ToolDefinition, validate_tool_options};
 use super::{
     ContentPart, ImageDetail, ImageSource, Message, MessageRole, ModelRef, ResourceLimits,
@@ -197,6 +198,7 @@ pub struct GenerationOptions {
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
     reasoning: ThinkingRequest,
+    response_format: ResponseFormat,
     tools: Vec<ToolDefinition>,
     tool_choice: Option<ToolChoice>,
     parallel_tool_calls: Option<ParallelToolCalls>,
@@ -222,6 +224,11 @@ impl GenerationOptions {
     /// Sets the domain reasoning intent.
     pub fn with_reasoning(mut self, reasoning: ThinkingRequest) -> Self {
         self.reasoning = reasoning;
+        self
+    }
+    /// Sets the structured response format. Defaults to [`ResponseFormat::Text`].
+    pub fn with_response_format(mut self, response_format: ResponseFormat) -> Self {
+        self.response_format = response_format;
         self
     }
     /// Declares function tools for this request.
@@ -270,6 +277,10 @@ impl GenerationOptions {
     /// Returns reasoning intent.
     pub fn reasoning(&self) -> ThinkingRequest {
         self.reasoning
+    }
+    /// Returns the structured response format.
+    pub fn response_format(&self) -> &ResponseFormat {
+        &self.response_format
     }
     /// Returns declared tools.
     pub fn tools(&self) -> &[ToolDefinition] {
@@ -514,6 +525,7 @@ impl GenerateRequest {
             check_capability("max_output_tokens", capabilities.max_output_tokens)?;
         }
         validate_reasoning_request(self.options.reasoning(), &capabilities.reasoning_efforts)?;
+        validate_response_format(self.options.response_format(), capabilities)?;
         validate_tool_options(
             self.options.tools(),
             self.options.tool_choice(),
@@ -620,6 +632,23 @@ fn validate_assistant_request_message(message: &Message, index: usize) -> Result
         }
     }
     Ok(())
+}
+
+fn validate_response_format(
+    response_format: &ResponseFormat,
+    capabilities: &CapabilitySet,
+) -> Result<(), LlmError> {
+    match response_format {
+        ResponseFormat::Text => Ok(()),
+        ResponseFormat::JsonObject => check_capability(
+            "response_format.json_object",
+            capabilities.response_format_json_object,
+        ),
+        ResponseFormat::JsonSchema(_) => check_capability(
+            "response_format.json_schema",
+            capabilities.response_format_json_schema,
+        ),
+    }
 }
 
 fn validate_reasoning_request(

@@ -9,6 +9,7 @@ pub mod limits;
 pub mod message;
 pub mod request;
 pub mod schema;
+pub mod structured;
 pub mod tools;
 pub mod usage;
 
@@ -16,7 +17,10 @@ pub use content::{
     ContentPart, ImageContent, ImageDetail, ImageMime, ImageSource, OpaqueReasoning,
     RefusalContent, SourceIdentity, ThinkingContent,
 };
-pub use event::{AssistantEvent, AssistantMessage, FinishReason, Usage, collect_assistant_message};
+pub use event::{
+    AssistantEvent, AssistantMessage, FinishReason, Usage, collect_assistant_message,
+    collect_assistant_message_for_format,
+};
 pub use history::{
     DiagnosticCode, DialectPolicy, HistoryCapabilities, HistoryPolicy, IdMapping, ImageWireFormat,
     MissingToolResultPolicy, NormalizationDiagnostic, NormalizedContext, PolicySource,
@@ -35,8 +39,12 @@ pub use request::{
     ReasoningEffort, ReasoningEffortSupport, RequestMetadata, RequestTimeout, ThinkingRequest,
 };
 pub use schema::{SchemaLimits, ToolSchema};
+pub use structured::{ResponseFormat, StructuredSchema};
 pub use tools::{
     ParallelToolCalls, ToolArguments, ToolCall, ToolChoice, ToolDefinition, ToolLimits,
     ValidatedToolCall, validate_tool_call, validate_tool_options,
 };
-pub use usage::{TokenCount, UsageDetails};
+pub use usage::{
+    CostEstimate, CurrencyCode, MoneyAmount, PriceProfile, TokenCount, UsageDetails,
+    UsageMergeOutcome, estimate_cost, merge_usage_details,
+};
