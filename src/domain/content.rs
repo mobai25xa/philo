@@ -1,12 +1,14 @@
 //! Provider-independent content blocks.
-#![allow(clippy::must_use_candidate)]
+#![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
 use std::fmt;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bytes::Bytes;
 use url::Url;
 
-use super::{GenerationId, ModelId, ProtocolId, ProviderId, ToolCall};
+use super::{GenerationId, ModelId, ProtocolId, ProviderId, ResourceLimits, ToolCall};
+use crate::error::{ValidationError, ValidationReason};
 
 /// Provider-independent content part preserving generation order.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,6 +62,54 @@ pub struct ImageContent {
 }
 
 impl ImageContent {
+    /// Creates image content from an HTTPS URL after deterministic preflight.
+    pub fn from_url(url: Url, detail: ImageDetail) -> Result<Self, ValidationError> {
+        validate_https_image_url(&url)?;
+        Ok(Self {
+            source: ImageSource::Url(url),
+            detail,
+        })
+    }
+
+    /// Creates image content from an HTTPS URL string after deterministic preflight.
+    pub fn parse_url(url: &str, detail: ImageDetail) -> Result<Self, ValidationError> {
+        let parsed = Url::parse(url).map_err(|_| {
+            ValidationError::new(
+                "image.url",
+                ValidationReason::InvalidIdentifier,
+                "image URL is not a valid absolute URL",
+            )
+        })?;
+        Self::from_url(parsed, detail)
+    }
+
+    /// Creates image content from inline bytes after MIME and magic validation.
+    pub fn from_inline(
+        mime: ImageMime,
+        bytes: Bytes,
+        detail: ImageDetail,
+    ) -> Result<Self, ValidationError> {
+        validate_inline_image(mime, &bytes, ResourceLimits::official())?;
+        Ok(Self {
+            source: ImageSource::Inline { mime, bytes },
+            detail,
+        })
+    }
+
+    /// Creates image content from a validated image data URL.
+    pub fn from_data_url(
+        data_url: impl Into<String>,
+        detail: ImageDetail,
+    ) -> Result<Self, ValidationError> {
+        let data_url = data_url.into();
+        let (mime, payload) = parse_image_data_url(&data_url)?;
+        validate_inline_image(mime, &payload, ResourceLimits::official())?;
+        Ok(Self {
+            source: ImageSource::DataUrl(data_url),
+            detail,
+        })
+    }
+
     /// Returns the image source.
     pub fn source(&self) -> &ImageSource {
         &self.source
@@ -68,11 +118,6 @@ impl ImageContent {
     /// Returns the requested image detail.
     pub fn detail(&self) -> ImageDetail {
         self.detail
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn from_validated(source: ImageSource, detail: ImageDetail) -> Self {
-        Self { source, detail }
     }
 }
 
@@ -88,7 +133,7 @@ impl fmt::Debug for ImageContent {
 /// Supported image source representations.
 #[derive(Clone, Eq, PartialEq)]
 pub enum ImageSource {
-    /// Provider-fetched HTTPS URL. P2-009 owns public validated construction.
+    /// Provider-fetched HTTPS URL.
     Url(Url),
     /// Inline validated image bytes.
     Inline {
@@ -135,6 +180,28 @@ pub enum ImageMime {
     Webp,
     /// GIF image.
     Gif,
+}
+
+impl ImageMime {
+    /// Returns the official `image/*` media type string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Webp => "image/webp",
+            Self::Gif => "image/gif",
+        }
+    }
+
+    fn from_media_type(value: &str) -> Option<Self> {
+        match value {
+            "image/png" => Some(Self::Png),
+            "image/jpeg" => Some(Self::Jpeg),
+            "image/webp" => Some(Self::Webp),
+            "image/gif" => Some(Self::Gif),
+            _ => None,
+        }
+    }
 }
 
 /// Provider image-detail intent.
@@ -196,6 +263,13 @@ impl SourceIdentity {
     /// Returns the source generation identifier.
     pub fn generation_id(&self) -> Option<&GenerationId> {
         self.generation_id.as_ref()
+    }
+
+    /// Reports whether this identity shares provider, model, and protocol with `other`.
+    pub fn matches_source(&self, other: &Self) -> bool {
+        self.provider == other.provider
+            && self.model == other.model
+            && self.protocol == other.protocol
     }
 }
 
@@ -311,4 +385,150 @@ impl fmt::Debug for RefusalContent {
             .field("text_bytes", &self.text.len())
             .finish_non_exhaustive()
     }
+}
+
+fn validate_https_image_url(url: &Url) -> Result<(), ValidationError> {
+    if url.scheme() != "https" {
+        return Err(ValidationError::new(
+            "image.url",
+            ValidationReason::InvalidIdentifier,
+            "image URL must use the https scheme",
+        ));
+    }
+    let encoded = url.as_str();
+    if encoded.len() > ResourceLimits::official().max_image_url_bytes {
+        return Err(ValidationError::new(
+            "image.url",
+            ValidationReason::OutOfRange,
+            "image URL exceeds the frozen UTF-8 byte limit",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_inline_image(
+    mime: ImageMime,
+    bytes: &[u8],
+    limits: ResourceLimits,
+) -> Result<(), ValidationError> {
+    if bytes.is_empty() {
+        return Err(ValidationError::new(
+            "image.bytes",
+            ValidationReason::Empty,
+            "inline image payload must be non-empty",
+        ));
+    }
+    if bytes.len() > limits.max_inline_image_bytes {
+        return Err(ValidationError::new(
+            "image.bytes",
+            ValidationReason::OutOfRange,
+            "inline image exceeds the frozen byte limit",
+        ));
+    }
+    if !matches_magic_bytes(mime, bytes) {
+        return Err(ValidationError::new(
+            "image.bytes",
+            ValidationReason::InvalidIdentifier,
+            "inline image magic bytes do not match the declared MIME type",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_image_data_url(data_url: &str) -> Result<(ImageMime, Bytes), ValidationError> {
+    if data_url.contains('\n') || data_url.contains('\r') {
+        return Err(ValidationError::new(
+            "image.data_url",
+            ValidationReason::InvalidIdentifier,
+            "image data URL must not contain line breaks",
+        ));
+    }
+    let Some(rest) = data_url.strip_prefix("data:") else {
+        return Err(ValidationError::new(
+            "image.data_url",
+            ValidationReason::InvalidIdentifier,
+            "image data URL must start with data:",
+        ));
+    };
+    let Some((header, payload)) = rest.split_once(',') else {
+        return Err(ValidationError::new(
+            "image.data_url",
+            ValidationReason::InvalidIdentifier,
+            "image data URL must contain a base64 payload separator",
+        ));
+    };
+    if header.starts_with(' ')
+        || header.ends_with(' ')
+        || payload.starts_with(' ')
+        || header.contains(' ')
+    {
+        return Err(ValidationError::new(
+            "image.data_url",
+            ValidationReason::InvalidIdentifier,
+            "image data URL must not contain whitespace around the header or comma",
+        ));
+    }
+    let Some((media_type, encoding)) = header.split_once(';') else {
+        return Err(ValidationError::new(
+            "image.data_url",
+            ValidationReason::InvalidIdentifier,
+            "image data URL must declare a base64 encoding",
+        ));
+    };
+    if encoding != "base64" {
+        return Err(ValidationError::new(
+            "image.data_url",
+            ValidationReason::InvalidIdentifier,
+            "image data URL must use base64 encoding",
+        ));
+    }
+    let mime = ImageMime::from_media_type(media_type).ok_or_else(|| {
+        ValidationError::new(
+            "image.data_url",
+            ValidationReason::InvalidIdentifier,
+            "image data URL MIME type is not supported",
+        )
+    })?;
+    if payload.is_empty() {
+        return Err(ValidationError::new(
+            "image.data_url",
+            ValidationReason::Empty,
+            "image data URL payload must be non-empty",
+        ));
+    }
+    let decoded = BASE64_STANDARD.decode(payload.as_bytes()).map_err(|_| {
+        ValidationError::new(
+            "image.data_url",
+            ValidationReason::InvalidIdentifier,
+            "image data URL payload is not valid base64",
+        )
+    })?;
+    Ok((mime, Bytes::from(decoded)))
+}
+
+fn matches_magic_bytes(mime: ImageMime, bytes: &[u8]) -> bool {
+    match mime {
+        ImageMime::Png => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+        ImageMime::Jpeg => {
+            bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+        }
+        ImageMime::Webp => bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        ImageMime::Gif => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+    }
+}
+
+/// Encodes inline bytes into a frozen image data URL at the wire boundary.
+pub(crate) fn encode_inline_data_url(mime: ImageMime, bytes: &[u8]) -> String {
+    format!(
+        "data:{};base64,{}",
+        mime.as_str(),
+        BASE64_STANDARD.encode(bytes)
+    )
+}
+
+/// Returns MIME and decoded payload for a Domain data URL already validated at construction.
+pub(crate) fn decode_validated_data_url(
+    data_url: &str,
+) -> Result<(ImageMime, Bytes), ValidationError> {
+    parse_image_data_url(data_url)
 }

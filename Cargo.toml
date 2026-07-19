@@ -16,6 +16,7 @@ rustls-tls = ["reqwest/rustls-tls", "dep:rustls"]
 tracing = ["dep:tracing"]
 
 [dependencies]
+base64 = "0.22"
 bytes = "1.10"
 futures-core = "0.3.31"
 futures-util = { version = "0.3.31", default-features = false, features = ["async-await", "std"] }

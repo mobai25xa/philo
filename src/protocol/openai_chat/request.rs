@@ -1,12 +1,20 @@
+use std::borrow::Cow;
+
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, header};
 
-use crate::domain::{CapabilityStatus, GenerateRequest, MessageRole};
-use crate::error::{CapabilityError, LlmError, ProtocolError};
+use crate::domain::{
+    CapabilityStatus, ContentPart, GenerateRequest, ImageContent, ImageSource, Message,
+    MessageRole, ReasoningEffort, ResourceLimits, ThinkingRequest, ToolCall, content,
+};
+use crate::error::{CapabilityError, LlmError, ProtocolError, ValidationError, ValidationReason};
 use crate::provider::ProviderCapabilities;
 
 use super::tool_wire::{encode_parallel_tool_calls, encode_tool_choice, encode_tools};
-use super::wire::{ChatCompletionRequestWire, MessageWire};
+use super::wire::{
+    AssistantToolCallWire, ChatCompletionRequestWire, ImageUrlWire, MessageContentPartWire,
+    MessageContentWire, MessageWire, ReasoningEffortWire,
+};
 
 const CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
 
@@ -48,13 +56,7 @@ impl OpenAiChatRequestAdapter {
                     capabilities.developer_role,
                 )?;
             }
-            let [content] = message.content() else {
-                return Err(ProtocolError::new(
-                    "validated phase-one message did not contain exactly one text part",
-                )
-                .into());
-            };
-            messages.push(MessageWire::new(message.role(), content.as_text()));
+            messages.push(encode_message(message, index)?);
         }
 
         let capabilities_for_tools = capabilities.generation_options();
@@ -68,6 +70,7 @@ impl OpenAiChatRequestAdapter {
             request.options().parallel_tool_calls(),
             &capabilities_for_tools,
         )?;
+        let reasoning_effort = encode_reasoning_effort(request.options().reasoning());
 
         let wire = ChatCompletionRequestWire::new(
             request.model().model().as_str(),
@@ -77,12 +80,21 @@ impl OpenAiChatRequestAdapter {
             tools,
             tool_choice,
             parallel_tool_calls,
+            reasoning_effort,
         );
         let body = serde_json::to_vec(&wire).map_err(|_| {
             LlmError::from(ProtocolError::new(
                 "failed to serialize validated OpenAI Chat request",
             ))
         })?;
+        if body.len() > ResourceLimits::official().max_request_body_bytes {
+            return Err(ValidationError::new(
+                "request_body",
+                ValidationReason::OutOfRange,
+                "encoded request body exceeds the frozen size limit",
+            )
+            .into());
+        }
 
         let mut protocol_headers = HeaderMap::with_capacity(2);
         protocol_headers.insert(
@@ -103,6 +115,172 @@ impl OpenAiChatRequestAdapter {
     }
 }
 
+fn encode_message(message: &Message, index: usize) -> Result<MessageWire<'_>, LlmError> {
+    match message.role() {
+        MessageRole::Developer | MessageRole::System => {
+            let text = single_text(message, index)?;
+            Ok(MessageWire::text(message.role(), text))
+        }
+        MessageRole::User => encode_user_message(message),
+        MessageRole::Assistant => encode_assistant_message(message, index),
+        MessageRole::Tool => {
+            let result = message.tool_result().ok_or_else(|| {
+                ProtocolError::new("tool role message is missing a tool result payload")
+            })?;
+            let text = match result.content() {
+                [ContentPart::Text { text }] if !text.is_empty() => text.as_str(),
+                _ => {
+                    return Err(ProtocolError::new(
+                        "official tool results require exactly one non-empty text part",
+                    )
+                    .into());
+                }
+            };
+            Ok(MessageWire::tool_result(
+                result.tool_call_id().as_str(),
+                text,
+            ))
+        }
+    }
+}
+
+fn encode_user_message(message: &Message) -> Result<MessageWire<'_>, LlmError> {
+    let parts = message.content();
+    if parts.is_empty() {
+        return Err(ProtocolError::new("user message content is empty").into());
+    }
+    if let [ContentPart::Text { text }] = parts {
+        if text.trim().is_empty() {
+            return Err(ProtocolError::new("user text must contain non-whitespace").into());
+        }
+        return Ok(MessageWire::text(MessageRole::User, text));
+    }
+
+    let mut wire_parts = Vec::with_capacity(parts.len());
+    for part in parts {
+        match part {
+            ContentPart::Text { text } => {
+                wire_parts.push(MessageContentPartWire::Text { text });
+            }
+            ContentPart::Image(image) => {
+                wire_parts.push(encode_image_part(image)?);
+            }
+            ContentPart::Thinking(_) | ContentPart::Refusal(_) | ContentPart::ToolCall(_) => {
+                return Err(
+                    ProtocolError::new("user messages only accept text and image parts").into(),
+                );
+            }
+        }
+    }
+    Ok(MessageWire::parts(MessageRole::User, wire_parts))
+}
+
+fn encode_assistant_message(message: &Message, index: usize) -> Result<MessageWire<'_>, LlmError> {
+    let mut text_parts = Vec::new();
+    let mut tool_calls = Vec::new();
+    let mut seen_tool_call = false;
+
+    for (part_index, part) in message.content().iter().enumerate() {
+        match part {
+            ContentPart::Text { text } => {
+                if seen_tool_call {
+                    return Err(ProtocolError::new(
+                        "assistant text after tool calls is not allowed",
+                    )
+                    .into());
+                }
+                text_parts.push(text.as_str());
+            }
+            ContentPart::ToolCall(call) => {
+                seen_tool_call = true;
+                tool_calls.push(encode_assistant_tool_call(call));
+            }
+            ContentPart::Image(_) | ContentPart::Thinking(_) | ContentPart::Refusal(_) => {
+                return Err(ValidationError::new(
+                    format!("messages[{index}].content[{part_index}]"),
+                    ValidationReason::TextPartCount,
+                    "official assistant history only accepts text and tool calls",
+                )
+                .into());
+            }
+        }
+    }
+
+    if tool_calls.is_empty() {
+        if text_parts.is_empty() {
+            return Err(ProtocolError::new("assistant message content is empty").into());
+        }
+        if text_parts.len() == 1 {
+            return Ok(MessageWire::text(MessageRole::Assistant, text_parts[0]));
+        }
+        return Ok(MessageWire::assistant(
+            Some(MessageContentWire::OwnedText(text_parts.concat())),
+            None,
+        ));
+    }
+
+    let content = if text_parts.is_empty() {
+        None
+    } else if text_parts.len() == 1 {
+        Some(MessageContentWire::Text(text_parts[0]))
+    } else {
+        Some(MessageContentWire::OwnedText(text_parts.concat()))
+    };
+    Ok(MessageWire::assistant(content, Some(tool_calls)))
+}
+
+fn encode_assistant_tool_call(call: &ToolCall) -> AssistantToolCallWire<'_> {
+    AssistantToolCallWire::new(
+        call.id().as_str(),
+        call.name().as_str(),
+        call.arguments().raw_json(),
+    )
+}
+
+fn encode_image_part(image: &ImageContent) -> Result<MessageContentPartWire<'_>, LlmError> {
+    let url = match image.source() {
+        ImageSource::Url(url) => Cow::Borrowed(url.as_str()),
+        ImageSource::DataUrl(data_url) => {
+            content::decode_validated_data_url(data_url).map_err(LlmError::from)?;
+            Cow::Borrowed(data_url.as_str())
+        }
+        ImageSource::Inline { mime, bytes } => {
+            Cow::Owned(content::encode_inline_data_url(*mime, bytes))
+        }
+    };
+    Ok(MessageContentPartWire::ImageUrl {
+        image_url: ImageUrlWire::new(url, image.detail()),
+    })
+}
+
+fn encode_reasoning_effort(request: ThinkingRequest) -> Option<ReasoningEffortWire> {
+    match request {
+        ThinkingRequest::ProviderDefault => None,
+        ThinkingRequest::Disabled => Some(ReasoningEffortWire::None),
+        ThinkingRequest::Effort(effort) => Some(match effort {
+            ReasoningEffort::None => ReasoningEffortWire::None,
+            ReasoningEffort::Minimal => ReasoningEffortWire::Minimal,
+            ReasoningEffort::Low => ReasoningEffortWire::Low,
+            ReasoningEffort::Medium => ReasoningEffortWire::Medium,
+            ReasoningEffort::High => ReasoningEffortWire::High,
+            ReasoningEffort::XHigh => ReasoningEffortWire::XHigh,
+            ReasoningEffort::Max => ReasoningEffortWire::Max,
+        }),
+    }
+}
+
+fn single_text(message: &Message, index: usize) -> Result<&str, LlmError> {
+    match message.content() {
+        [ContentPart::Text { text }] if !text.is_empty() => Ok(text.as_str()),
+        _ => Err(ValidationError::new(
+            format!("messages[{index}].content"),
+            ValidationReason::TextPartCount,
+            "developer and system messages require exactly one non-empty text part",
+        )
+        .into()),
+    }
+}
+
 fn require_capability(
     field: &str,
     capability: &str,
@@ -120,13 +298,18 @@ fn require_capability(
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::collections::BTreeSet;
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use bytes::Bytes;
     use http::header;
     use serde_json::Value;
 
     use crate::domain::{
-        CapabilityStatus, GenerateRequest, GenerationOptions, Message, ModelRef, ParallelToolCalls,
-        ReasoningEffortSupport, RequestMetadata, ToolChoice, ToolDefinition, ToolName, ToolSchema,
+        CapabilityStatus, ContentPart, GenerateRequest, GenerationOptions, ImageContent,
+        ImageDetail, ImageMime, Message, MessageRole, ModelRef, ParallelToolCalls, ReasoningEffort,
+        ReasoningEffortSupport, RequestMetadata, ThinkingRequest, ToolChoice, ToolDefinition,
+        ToolName, ToolSchema,
     };
     use crate::error::LlmError;
     use crate::provider::{OfficialOpenAiProfile, ProviderCapabilities};
@@ -160,6 +343,16 @@ mod tests {
     );
     const TOOL_SCHEMA_NESTED: &str =
         include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-schema-nested.json");
+    const IMAGE_URL: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/multimodal/text-one-url-image.json");
+    const IMAGE_INLINE: &str =
+        include_str!("../../../tests/fixtures/phase-2/requests/multimodal/text-inline-image.json");
+    const IMAGE_INTERLEAVED: &str = include_str!(
+        "../../../tests/fixtures/phase-2/requests/multimodal/text-image-interleaved.json"
+    );
+    const REASONING_HIGH: &str = include_str!(
+        "../../../tests/fixtures/phase-2/requests/thinking/reasoning-effort-high.json"
+    );
 
     fn capabilities() -> ProviderCapabilities {
         ProviderCapabilities {
@@ -188,6 +381,27 @@ mod tests {
         current.tool_choice_specific = CapabilityStatus::Supported;
         current.parallel_tool_calls = CapabilityStatus::Supported;
         current.strict_tools = CapabilityStatus::Supported;
+        current
+    }
+
+    fn vision_capabilities() -> ProviderCapabilities {
+        let mut current = capabilities();
+        current.vision_input = CapabilityStatus::Supported;
+        current.image_detail_original = CapabilityStatus::Supported;
+        current
+    }
+
+    fn reasoning_capabilities() -> ProviderCapabilities {
+        let mut current = capabilities();
+        current.reasoning_efforts = ReasoningEffortSupport::Supported(BTreeSet::from([
+            ReasoningEffort::None,
+            ReasoningEffort::Minimal,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Max,
+        ]));
         current
     }
 
@@ -222,6 +436,10 @@ mod tests {
     fn golden(value: &Value, fixture: &str) {
         let expected: Value = serde_json::from_str(fixture).unwrap();
         assert_eq!(value, &expected);
+    }
+
+    fn png_bytes() -> Bytes {
+        Bytes::from_static(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 1, 2, 3])
     }
 
     #[test]
@@ -290,6 +508,7 @@ mod tests {
         assert_no_null(&minimal);
         assert!(minimal.get("temperature").is_none());
         assert!(minimal.get("max_completion_tokens").is_none());
+        assert!(minimal.get("reasoning_effort").is_none());
     }
 
     #[test]
@@ -396,8 +615,6 @@ mod tests {
             .clone()
             .with_options(GenerationOptions::new().with_tools(vec![weather_tool()]));
         golden(&encoded_value(&auto, &capabilities), TOOL_MINIMAL_AUTO);
-        let auto_value = encoded_value(&auto, &capabilities);
-        assert!(auto_value.get("tool_choice").is_none());
 
         let none = base.clone().with_options(
             GenerationOptions::new()
@@ -498,6 +715,114 @@ mod tests {
     }
 
     #[test]
+    fn multimodal_request_goldens_preserve_content_order() {
+        let interleaved = request(vec![Message::new(
+            MessageRole::User,
+            vec![
+                ContentPart::text("compare"),
+                ContentPart::Image(
+                    ImageContent::parse_url("https://example.com/a.png", ImageDetail::High)
+                        .unwrap(),
+                ),
+                ContentPart::text("with this"),
+            ],
+        )]);
+        golden(
+            &encoded_value(&interleaved, &vision_capabilities()),
+            IMAGE_INTERLEAVED,
+        );
+
+        let url_only = request(vec![Message::new(
+            MessageRole::User,
+            vec![
+                ContentPart::text("describe"),
+                ContentPart::Image(
+                    ImageContent::parse_url("https://example.com/cat.png", ImageDetail::Auto)
+                        .unwrap(),
+                ),
+            ],
+        )]);
+        golden(&encoded_value(&url_only, &vision_capabilities()), IMAGE_URL);
+
+        let inline = request(vec![Message::new(
+            MessageRole::User,
+            vec![
+                ContentPart::text("inline"),
+                ContentPart::Image(
+                    ImageContent::from_inline(ImageMime::Png, png_bytes(), ImageDetail::Low)
+                        .unwrap(),
+                ),
+            ],
+        )]);
+        golden(
+            &encoded_value(&inline, &vision_capabilities()),
+            IMAGE_INLINE,
+        );
+        let inline_value = encoded_value(&inline, &vision_capabilities());
+        let url = inline_value["messages"][0]["content"][1]["image_url"]["url"]
+            .as_str()
+            .unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        let payload = url.strip_prefix("data:image/png;base64,").unwrap();
+        assert_eq!(
+            BASE64_STANDARD.decode(payload).unwrap(),
+            png_bytes().as_ref()
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_is_omitted_by_default_and_encoded_when_supported() {
+        let base = request(vec![Message::user("Hello")]);
+        let default_value = encoded_value(&base, &reasoning_capabilities());
+        assert!(default_value.get("reasoning_effort").is_none());
+
+        let high = base.with_options(
+            GenerationOptions::new().with_reasoning(ThinkingRequest::Effort(ReasoningEffort::High)),
+        );
+        golden(
+            &encoded_value(&high, &reasoning_capabilities()),
+            REASONING_HIGH,
+        );
+
+        let disabled = request(vec![Message::user("Hello")])
+            .with_options(GenerationOptions::new().with_reasoning(ThinkingRequest::Disabled));
+        let disabled_value = encoded_value(&disabled, &reasoning_capabilities());
+        assert_eq!(disabled_value["reasoning_effort"], "none");
+    }
+
+    #[test]
+    fn image_and_reasoning_capabilities_fail_closed() {
+        let image_request = request(vec![Message::new(
+            MessageRole::User,
+            vec![
+                ContentPart::text("look"),
+                ContentPart::Image(
+                    ImageContent::parse_url("https://example.com/a.png", ImageDetail::Auto)
+                        .unwrap(),
+                ),
+            ],
+        )]);
+        for status in [CapabilityStatus::Unsupported, CapabilityStatus::Unknown] {
+            let mut current = vision_capabilities();
+            current.vision_input = status;
+            assert_capability_error(
+                &OpenAiChatRequestAdapter::encode(&image_request, &current),
+                "messages.image",
+                status,
+            );
+        }
+
+        let reasoning_request = request(vec![Message::user("Hello")]).with_options(
+            GenerationOptions::new().with_reasoning(ThinkingRequest::Effort(ReasoningEffort::Low)),
+        );
+        assert_capability_error(
+            &OpenAiChatRequestAdapter::encode(&reasoning_request, &capabilities()),
+            "reasoning",
+            CapabilityStatus::Unknown,
+        );
+    }
+
+    #[test]
     fn tool_capabilities_fail_closed_before_transport() {
         let tools_request = request(vec![Message::user("Hello")])
             .with_options(GenerationOptions::new().with_tools(vec![weather_tool()]));
@@ -563,7 +888,7 @@ mod tests {
 
     #[test]
     fn api_key_cannot_enter_the_encoded_body() {
-        let secret = "sk-canary-p1-011-never-serialize";
+        let secret = "********************************";
         let profile = OfficialOpenAiProfile::from_api_key(secret)
             .unwrap()
             .profile()

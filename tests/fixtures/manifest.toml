@@ -332,6 +332,42 @@ contract_version = "1.0.0"
 notes = "Phase-two tool request golden"
 
 [[fixture]]
+id = "p2-request-text-one-url-image"
+path = "phase-2/requests/multimodal/text-one-url-image.json"
+purpose = "Encode one text part and one HTTPS image URL"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "detail Auto is omitted on the wire"
+
+[[fixture]]
+id = "p2-request-text-inline-image"
+path = "phase-2/requests/multimodal/text-inline-image.json"
+purpose = "Encode inline PNG bytes as a data URL with low detail"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Base64 encoding happens only at the wire boundary"
+
+[[fixture]]
+id = "p2-request-text-image-interleaved"
+path = "phase-2/requests/multimodal/text-image-interleaved.json"
+purpose = "Preserve interleaved text and image content order"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Adapter must not reorder content parts"
+
+[[fixture]]
+id = "p2-request-reasoning-effort-high"
+path = "phase-2/requests/thinking/reasoning-effort-high.json"
+purpose = "Encode explicit high reasoning effort when supported"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "ProviderDefault remains omitted; Disabled maps to none"
+
+[[fixture]]
 id = "p2-failure-duplicate-tool-name"
 path = "phase-2/requests/tools/failures/duplicate-tool-name.json"
 purpose = "Reject duplicate tool names before request encode"

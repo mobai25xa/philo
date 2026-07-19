@@ -802,12 +802,35 @@ impl PreparedChunk {
 }
 
 fn validate_usage(wire: &UsageWire) -> Result<Usage, LlmError> {
-    let input = u64::try_from(wire.prompt_tokens)
+    // Phase-two keeps the P1 public Usage event for complete core counters only.
+    // Optional/incomplete usage and reasoning token details are reserved for P2-012.
+    let (Some(prompt), Some(completion), Some(total)) = (
+        wire.prompt_tokens,
+        wire.completion_tokens,
+        wire.total_tokens,
+    ) else {
+        return Err(ChatStateMachine::protocol(
+            "usage core token counts are incomplete",
+        ));
+    };
+    let input = u64::try_from(prompt)
         .map_err(|_| ChatStateMachine::protocol("usage token count must be non-negative"))?;
-    let output = u64::try_from(wire.completion_tokens)
+    let output = u64::try_from(completion)
         .map_err(|_| ChatStateMachine::protocol("usage token count must be non-negative"))?;
-    let total = u64::try_from(wire.total_tokens)
+    let total = u64::try_from(total)
         .map_err(|_| ChatStateMachine::protocol("usage token count must be non-negative"))?;
+    if let Some(details) = &wire.completion_tokens_details
+        && let Some(reasoning) = details.reasoning_tokens
+    {
+        let reasoning = u64::try_from(reasoning).map_err(|_| {
+            ChatStateMachine::protocol("reasoning token count must be non-negative")
+        })?;
+        if reasoning > output {
+            return Err(ChatStateMachine::protocol(
+                "reasoning tokens must not exceed completion tokens",
+            ));
+        }
+    }
     Usage::new(input, output, total).map_err(Into::into)
 }
 

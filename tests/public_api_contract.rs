@@ -85,17 +85,17 @@ fn request_api_has_no_arbitrary_body_or_non_scope_controls() {
         "prompt_cache",
         "retry:",
         "response_format",
-        "reasoning:",
     ] {
         assert!(
             !generation_options.contains(forbidden),
             "non-scope request control: {forbidden}"
         );
     }
-    // Phase-two freezes tools/tool_choice/parallel_tool_calls on GenerationOptions.
+    // Phase-two freezes tools/tool_choice/parallel_tool_calls/reasoning on GenerationOptions.
     assert!(generation_options.contains("tools:"));
     assert!(generation_options.contains("tool_choice:"));
     assert!(generation_options.contains("parallel_tool_calls:"));
+    assert!(generation_options.contains("reasoning:"));
 }
 
 #[test]

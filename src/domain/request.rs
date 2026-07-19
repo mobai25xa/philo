@@ -13,7 +13,9 @@ use http::{HeaderMap, HeaderName};
 use tokio::time::Instant;
 
 use super::tools::{ParallelToolCalls, ToolChoice, ToolDefinition, validate_tool_options};
-use super::{ContentPart, Message, MessageRole, ModelRef};
+use super::{
+    ContentPart, ImageDetail, ImageSource, Message, MessageRole, ModelRef, ResourceLimits,
+};
 use crate::error::{CapabilityError, LlmError, ValidationError, ValidationReason};
 
 /// A three-state capability declaration used for fail-closed validation.
@@ -56,6 +58,18 @@ pub enum ReasoningEffortSupport {
     Unknown,
     /// The model supports exactly the contained values.
     Supported(BTreeSet<ReasoningEffort>),
+}
+
+/// Domain reasoning intent that remains separate from wire field names.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ThinkingRequest {
+    /// Explicitly request `none` reasoning effort when supported.
+    Disabled,
+    /// Request one of the frozen effort values.
+    Effort(ReasoningEffort),
+    /// Leave the provider default in place by omitting the wire field.
+    #[default]
+    ProviderDefault,
 }
 
 /// Capabilities required by provider-independent generation options and content.
@@ -182,6 +196,7 @@ impl RequestTimeout {
 pub struct GenerationOptions {
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
+    reasoning: ThinkingRequest,
     tools: Vec<ToolDefinition>,
     tool_choice: Option<ToolChoice>,
     parallel_tool_calls: Option<ParallelToolCalls>,
@@ -202,6 +217,11 @@ impl GenerationOptions {
     /// Sets maximum output tokens.
     pub fn with_max_output_tokens(mut self, value: u32) -> Self {
         self.max_output_tokens = Some(value);
+        self
+    }
+    /// Sets the domain reasoning intent.
+    pub fn with_reasoning(mut self, reasoning: ThinkingRequest) -> Self {
+        self.reasoning = reasoning;
         self
     }
     /// Declares function tools for this request.
@@ -246,6 +266,10 @@ impl GenerationOptions {
     /// Returns max output tokens.
     pub fn max_output_tokens(&self) -> Option<u32> {
         self.max_output_tokens
+    }
+    /// Returns reasoning intent.
+    pub fn reasoning(&self) -> ThinkingRequest {
+        self.reasoning
     }
     /// Returns declared tools.
     pub fn tools(&self) -> &[ToolDefinition] {
@@ -310,7 +334,7 @@ impl GenerateRequest {
     pub fn options(&self) -> &GenerationOptions {
         &self.options
     }
-    /// Validates all phase-one request rules before a transport can be called.
+    /// Validates phase-two request rules before a transport can be called.
     pub fn validate(&self, capabilities: &CapabilitySet) -> Result<(), LlmError> {
         if self.model.provider().as_str().is_empty() {
             return Err(ValidationError::new(
@@ -329,33 +353,103 @@ impl GenerateRequest {
             .into());
         }
         let mut has_user = false;
+        let mut has_non_empty_user_text = false;
+        let mut image_count = 0usize;
+        let mut needs_original_detail = false;
+        let limits = ResourceLimits::official();
+
         for (index, message) in self.messages.iter().enumerate() {
-            let count = message.content().len();
-            if count != 1 {
-                return Err(ValidationError::new(
-                    format!("messages[{index}].content"),
-                    ValidationReason::TextPartCount,
-                    "phase one requires exactly one text part",
-                )
-                .into());
-            }
-            let ContentPart::Text { text } = &message.content()[0] else {
-                return Err(ValidationError::new(
-                    format!("messages[{index}].content[0]"),
-                    ValidationReason::TextPartCount,
-                    "phase one requires text content",
-                )
-                .into());
-            };
-            if message.role() == MessageRole::User {
-                has_user = true;
-                if text.trim().is_empty() {
-                    return Err(ValidationError::new(
-                        format!("messages[{index}].content[0]"),
-                        ValidationReason::EmptyUserText,
-                        "user text must contain non-whitespace",
-                    )
-                    .into());
+            match message.role() {
+                MessageRole::Tool => {
+                    let Some(result) = message.tool_result() else {
+                        return Err(ValidationError::new(
+                            format!("messages[{index}]"),
+                            ValidationReason::TextPartCount,
+                            "tool role requires a tool result payload",
+                        )
+                        .into());
+                    };
+                    let [ContentPart::Text { text }] = result.content() else {
+                        return Err(ValidationError::new(
+                            format!("messages[{index}].content"),
+                            ValidationReason::TextPartCount,
+                            "official tool results require exactly one text part",
+                        )
+                        .into());
+                    };
+                    if text.is_empty() {
+                        return Err(ValidationError::new(
+                            format!("messages[{index}].content[0]"),
+                            ValidationReason::Empty,
+                            "official tool results require non-empty text",
+                        )
+                        .into());
+                    }
+                }
+                MessageRole::Developer | MessageRole::System => {
+                    validate_single_text_message(message, index)?;
+                }
+                MessageRole::User => {
+                    has_user = true;
+                    if message.content().is_empty() {
+                        return Err(ValidationError::new(
+                            format!("messages[{index}].content"),
+                            ValidationReason::Empty,
+                            "user messages require at least one content part",
+                        )
+                        .into());
+                    }
+                    for (part_index, part) in message.content().iter().enumerate() {
+                        match part {
+                            ContentPart::Text { text } => {
+                                if !text.trim().is_empty() {
+                                    has_non_empty_user_text = true;
+                                }
+                            }
+                            ContentPart::Image(image) => {
+                                image_count = image_count.saturating_add(1);
+                                if matches!(image.detail(), ImageDetail::Original) {
+                                    needs_original_detail = true;
+                                }
+                                match image.source() {
+                                    ImageSource::Url(url)
+                                        if url.as_str().len() > limits.max_image_url_bytes =>
+                                    {
+                                        return Err(ValidationError::new(
+                                            format!("messages[{index}].content[{part_index}]"),
+                                            ValidationReason::OutOfRange,
+                                            "image URL exceeds the frozen UTF-8 byte limit",
+                                        )
+                                        .into());
+                                    }
+                                    ImageSource::Inline { bytes, .. }
+                                        if bytes.len() > limits.max_inline_image_bytes =>
+                                    {
+                                        return Err(ValidationError::new(
+                                            format!("messages[{index}].content[{part_index}]"),
+                                            ValidationReason::OutOfRange,
+                                            "inline image exceeds the frozen byte limit",
+                                        )
+                                        .into());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            ContentPart::Thinking(_)
+                            | ContentPart::Refusal(_)
+                            | ContentPart::ToolCall(_) => {
+                                return Err(ValidationError::new(
+                                    format!("messages[{index}].content[{part_index}]"),
+                                    ValidationReason::TextPartCount,
+                                    "user messages only accept text and image parts",
+                                )
+                                .into());
+                            }
+                        }
+                    }
+                }
+                MessageRole::Assistant => {
+                    validate_assistant_request_message(message, index)?;
                 }
             }
         }
@@ -366,6 +460,28 @@ impl GenerateRequest {
                 "at least one user message is required",
             )
             .into());
+        }
+        if !has_non_empty_user_text {
+            return Err(ValidationError::new(
+                "messages",
+                ValidationReason::EmptyUserText,
+                "at least one user text part must contain non-whitespace",
+            )
+            .into());
+        }
+        if image_count > 0 {
+            check_capability("messages.image", capabilities.vision_input)?;
+        }
+        if image_count > limits.max_images {
+            return Err(ValidationError::new(
+                "messages.image",
+                ValidationReason::OutOfRange,
+                "image count exceeds the frozen request limit",
+            )
+            .into());
+        }
+        if needs_original_detail {
+            check_capability("image.detail", capabilities.image_detail_original)?;
         }
         if let Some(value) = self.options.temperature {
             if !value.is_finite() {
@@ -397,6 +513,7 @@ impl GenerateRequest {
             }
             check_capability("max_output_tokens", capabilities.max_output_tokens)?;
         }
+        validate_reasoning_request(self.options.reasoning(), &capabilities.reasoning_efforts)?;
         validate_tool_options(
             self.options.tools(),
             self.options.tool_choice(),
@@ -436,6 +553,103 @@ impl GenerateRequest {
             }
         }
         Ok(())
+    }
+}
+
+fn validate_single_text_message(message: &Message, index: usize) -> Result<(), LlmError> {
+    if message.content().len() != 1 {
+        return Err(ValidationError::new(
+            format!("messages[{index}].content"),
+            ValidationReason::TextPartCount,
+            "developer and system messages require exactly one text part",
+        )
+        .into());
+    }
+    let ContentPart::Text { text } = &message.content()[0] else {
+        return Err(ValidationError::new(
+            format!("messages[{index}].content[0]"),
+            ValidationReason::TextPartCount,
+            "developer and system messages require text content",
+        )
+        .into());
+    };
+    if text.is_empty() {
+        return Err(ValidationError::new(
+            format!("messages[{index}].content[0]"),
+            ValidationReason::Empty,
+            "developer and system text must be non-empty",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_assistant_request_message(message: &Message, index: usize) -> Result<(), LlmError> {
+    if message.content().is_empty() {
+        return Err(ValidationError::new(
+            format!("messages[{index}].content"),
+            ValidationReason::Empty,
+            "assistant messages require at least one content part",
+        )
+        .into());
+    }
+    let mut seen_tool_call = false;
+    for (part_index, part) in message.content().iter().enumerate() {
+        match part {
+            ContentPart::Text { .. } => {
+                if seen_tool_call {
+                    return Err(ValidationError::new(
+                        format!("messages[{index}].content[{part_index}]"),
+                        ValidationReason::TextPartCount,
+                        "assistant text after tool calls is not allowed",
+                    )
+                    .into());
+                }
+            }
+            ContentPart::ToolCall(_) => {
+                seen_tool_call = true;
+            }
+            ContentPart::Image(_) | ContentPart::Thinking(_) | ContentPart::Refusal(_) => {
+                return Err(ValidationError::new(
+                    format!("messages[{index}].content[{part_index}]"),
+                    ValidationReason::TextPartCount,
+                    "official assistant request messages only accept text and tool calls",
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_reasoning_request(
+    request: ThinkingRequest,
+    support: &ReasoningEffortSupport,
+) -> Result<(), LlmError> {
+    match request {
+        ThinkingRequest::ProviderDefault => Ok(()),
+        ThinkingRequest::Disabled => match support {
+            ReasoningEffortSupport::Supported(values)
+                if values.contains(&ReasoningEffort::None) =>
+            {
+                Ok(())
+            }
+            ReasoningEffortSupport::Supported(_) | ReasoningEffortSupport::Unsupported => {
+                Err(CapabilityError::new("reasoning", "reasoning_effort", "Unsupported").into())
+            }
+            ReasoningEffortSupport::Unknown => {
+                Err(CapabilityError::new("reasoning", "reasoning_effort", "Unknown").into())
+            }
+        },
+        ThinkingRequest::Effort(effort) => match support {
+            ReasoningEffortSupport::Supported(values) if values.contains(&effort) => Ok(()),
+            ReasoningEffortSupport::Supported(_) | ReasoningEffortSupport::Unsupported => {
+                Err(CapabilityError::new("reasoning", "reasoning_effort", "Unsupported").into())
+            }
+            ReasoningEffortSupport::Unknown => {
+                Err(CapabilityError::new("reasoning", "reasoning_effort", "Unknown").into())
+            }
+        },
     }
 }
 

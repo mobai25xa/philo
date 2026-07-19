@@ -10,6 +10,7 @@ pub mod message;
 pub mod request;
 pub mod schema;
 pub mod tools;
+pub mod usage;
 
 pub use content::{
     ContentPart, ImageContent, ImageDetail, ImageMime, ImageSource, OpaqueReasoning,
@@ -21,7 +22,7 @@ pub use history::{
     MissingToolResultPolicy, NormalizationDiagnostic, NormalizedContext, PolicySource,
     StreamUsagePolicy, StructuredOutputWireFormat, ThinkingReplayPolicy, ThinkingWireFormat,
     ToolCallIdPolicy, ToolChoiceWireFormat, ToolResultNamePolicy, UnsupportedContentPolicy,
-    drop_opaque_reasoning, normalize_history,
+    apply_thinking_replay_policy, drop_opaque_reasoning, normalize_history,
 };
 pub use ids::{
     ContentIndex, GenerationId, LocalRequestId, ModelId, ModelRef, ProtocolId, ProviderId,
@@ -31,10 +32,11 @@ pub use limits::ResourceLimits;
 pub use message::{Message, MessageRole, ToolResultMessage};
 pub use request::{
     CapabilitySet, CapabilityStatus, GenerateRequest, GenerationOptions, LlmRequest,
-    ReasoningEffort, ReasoningEffortSupport, RequestMetadata, RequestTimeout,
+    ReasoningEffort, ReasoningEffortSupport, RequestMetadata, RequestTimeout, ThinkingRequest,
 };
 pub use schema::{SchemaLimits, ToolSchema};
 pub use tools::{
     ParallelToolCalls, ToolArguments, ToolCall, ToolChoice, ToolDefinition, ToolLimits,
     ValidatedToolCall, validate_tool_call, validate_tool_options,
 };
+pub use usage::{TokenCount, UsageDetails};

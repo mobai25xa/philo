@@ -7,9 +7,9 @@
 //! `OpenAI` Chat wire/state types remain private; callers do not need reqwest, JSON,
 //! or SSE implementation details.
 //!
-//! The protocol adapter still supports official `OpenAI` Chat Completions text
-//! streaming only. Phase-two domain types do not by themselves claim wire support
-//! for tools, reasoning, or images.
+//! The protocol adapter supports official `OpenAI` Chat Completions text, function
+//! tools, image inputs, and reasoning-effort request options. Phase-two still does
+//! not execute tools and does not claim third-party thinking dialects.
 //!
 //! # Stability
 //!
@@ -55,10 +55,11 @@ pub use domain::{
     OpaqueReasoning, ParallelToolCalls, PolicySource, ProtocolId, ProviderId, ProviderRequestId,
     ReasoningEffort, ReasoningEffortSupport, RefusalContent, RequestMetadata, RequestTimeout,
     ResourceLimits, SchemaLimits, SourceIdentity, StreamUsagePolicy, StructuredOutputWireFormat,
-    ThinkingContent, ThinkingReplayPolicy, ThinkingWireFormat, ToolArguments, ToolCall, ToolCallId,
-    ToolCallIdPolicy, ToolChoice, ToolChoiceWireFormat, ToolDefinition, ToolLimits, ToolName,
-    ToolResultMessage, ToolResultNamePolicy, ToolSchema, TraceId, UnsupportedContentPolicy, Usage,
-    ValidatedToolCall, WireToolIndex, collect_assistant_message, drop_opaque_reasoning,
+    ThinkingContent, ThinkingReplayPolicy, ThinkingRequest, ThinkingWireFormat, TokenCount,
+    ToolArguments, ToolCall, ToolCallId, ToolCallIdPolicy, ToolChoice, ToolChoiceWireFormat,
+    ToolDefinition, ToolLimits, ToolName, ToolResultMessage, ToolResultNamePolicy, ToolSchema,
+    TraceId, UnsupportedContentPolicy, Usage, UsageDetails, ValidatedToolCall, WireToolIndex,
+    apply_thinking_replay_policy, collect_assistant_message, drop_opaque_reasoning,
     normalize_history, validate_tool_call, validate_tool_options,
 };
 pub use error::{
@@ -218,13 +219,6 @@ mod tests {
             GenerateRequest::new(model(), vec![]),
             GenerateRequest::new(model(), vec![Message::assistant("answer only")]),
             GenerateRequest::new(model(), vec![Message::user(" \t\n")]),
-            GenerateRequest::new(
-                model(),
-                vec![Message::new(
-                    MessageRole::User,
-                    vec![ContentPart::text("a"), ContentPart::text("b")],
-                )],
-            ),
             valid_request().with_options(GenerationOptions::new().with_temperature(-0.1)),
             valid_request().with_options(GenerationOptions::new().with_temperature(2.1)),
             valid_request().with_options(GenerationOptions::new().with_max_output_tokens(0)),
@@ -233,6 +227,17 @@ mod tests {
             assert!(request.validate(&CapabilitySet::default()).is_err());
         }
         assert!(valid_request().validate(&CapabilitySet::default()).is_ok());
+        assert!(
+            GenerateRequest::new(
+                model(),
+                vec![Message::new(
+                    MessageRole::User,
+                    vec![ContentPart::text("a"), ContentPart::text("b")],
+                )],
+            )
+            .validate(&CapabilitySet::default())
+            .is_ok()
+        );
     }
 
     fn events() -> Vec<Result<AssistantEvent, LlmError>> {

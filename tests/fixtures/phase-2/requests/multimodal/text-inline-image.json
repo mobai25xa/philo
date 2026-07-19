@@ -1,0 +1,21 @@
+{
+  "model": "gpt-test",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "inline" },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgoAAQID",
+            "detail": "low"
+          }
+        }
+      ]
+    }
+  ],
+  "stream": true,
+  "stream_options": { "include_usage": true },
+  "n": 1
+}

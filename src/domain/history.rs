@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::request::CapabilityStatus;
 use super::{
-    ContentPart, Message, MessageRole, OpaqueReasoning, ToolCall, ToolCallId, ToolName,
-    ToolResultMessage,
+    ContentPart, Message, MessageRole, OpaqueReasoning, ThinkingContent, ToolCall, ToolCallId,
+    ToolName, ToolResultMessage,
 };
 use crate::error::{HistoryError, HistoryFailure};
 
@@ -961,4 +961,53 @@ impl DiagnosticCounter {
 pub fn drop_opaque_reasoning(opaque: &OpaqueReasoning) -> NormalizationDiagnostic {
     let _ = opaque;
     NormalizationDiagnostic::new(DiagnosticCode::DroppedThinkingOpaque, 1)
+}
+
+/// Pure thinking replay helper for Official and synthetic P3 boundary tests.
+///
+/// Official `OpenAI` history always uses [`ThinkingReplayPolicy::DropAll`].
+/// [`ThinkingReplayPolicy::SameSourceOnly`] is retained as a pure domain helper
+/// for phase-three dialect fixtures and never mutates the input slice.
+pub fn apply_thinking_replay_policy(
+    thinking: &ThinkingContent,
+    policy: ThinkingReplayPolicy,
+    target: Option<&super::SourceIdentity>,
+) -> (Option<ThinkingContent>, Vec<NormalizationDiagnostic>) {
+    match policy {
+        ThinkingReplayPolicy::DropAll => {
+            let mut diagnostics = Vec::new();
+            if thinking.opaque().is_some() {
+                diagnostics.push(NormalizationDiagnostic::new(
+                    DiagnosticCode::DroppedThinkingOpaque,
+                    1,
+                ));
+            }
+            (None, diagnostics)
+        }
+        ThinkingReplayPolicy::SameSourceOnly => {
+            let Some(opaque) = thinking.opaque() else {
+                return (Some(thinking.clone()), Vec::new());
+            };
+            let Some(target) = target else {
+                return (
+                    Some(ThinkingContent::new(thinking.text())),
+                    vec![NormalizationDiagnostic::new(
+                        DiagnosticCode::DroppedThinkingOpaque,
+                        1,
+                    )],
+                );
+            };
+            if opaque.source().matches_source(target) {
+                (Some(thinking.clone()), Vec::new())
+            } else {
+                (
+                    Some(ThinkingContent::new(thinking.text())),
+                    vec![NormalizationDiagnostic::new(
+                        DiagnosticCode::DroppedThinkingOpaque,
+                        1,
+                    )],
+                )
+            }
+        }
+    }
 }
