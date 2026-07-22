@@ -7,7 +7,7 @@ The official OpenAI Chat Completions adapter implements the frozen phase-one tex
 Behavior contracts:
 
 - `philo/openai-chat-p1` version `1.0.0` for the text stream foundation
-- `philo/openai-chat-p2` version `1.0.0` for tools, multimodal, structured output, and related domain types
+- `philo/openai-chat-p2` version `1.1.0` for tools, multimodal, structured output, related domain types, and the call-planning contract
 
 Architecture and implementation planning are maintained alongside the SDK project; the crate remains independently buildable after clone.
 

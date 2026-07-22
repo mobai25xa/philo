@@ -1,0 +1,4 @@
+data: {"id":"repair-structured-invalid","model":"gpt-test","choices":[{"index":0,"delta":{"content":"not-json"},"finish_reason":"stop"}]}
+
+data: [DONE]
+

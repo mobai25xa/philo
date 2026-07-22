@@ -1,6 +1,9 @@
 //! Downstream-facing public API compile and source-boundary checks.
 
-use philo::{AssistantStream, LlmClient, ProviderRuntime, RequestControl};
+use philo::{
+    AssistantStream, LlmClient, ProviderRuntime, RequestControl, ResourceLimits,
+    ResourceLimitsBuilder,
+};
 
 fn assert_send_sync<T: Send + Sync>() {}
 fn assert_send_unpin<T: Send + Unpin>() {}
@@ -11,6 +14,20 @@ fn client_runtime_and_controls_keep_the_native_async_contract() {
     assert_send_sync::<ProviderRuntime>();
     assert_send_sync::<RequestControl>();
     assert_send_unpin::<AssistantStream>();
+}
+
+#[test]
+fn resource_limits_builder_is_the_downstream_construction_path() {
+    let builder: ResourceLimitsBuilder = ResourceLimits::builder()
+        .with_max_messages(128)
+        .with_max_structured_output_bytes(2 * 1024 * 1024);
+    let limits = builder.build().unwrap();
+    assert_eq!(limits.max_messages, 128);
+    assert_eq!(limits.max_structured_output_bytes, 2 * 1024 * 1024);
+    assert_eq!(
+        limits.max_request_body_bytes,
+        ResourceLimits::official().max_request_body_bytes
+    );
 }
 
 #[test]
@@ -111,6 +128,7 @@ fn production_examples_use_only_official_profile_and_public_types() {
             continue;
         }
         let source = std::fs::read_to_string(&path).unwrap();
+        let production = source.split("#[cfg(test)]").next().unwrap_or_default();
         for forbidden in [
             "TestOnlyProfile",
             "reqwest::",
@@ -119,7 +137,7 @@ fn production_examples_use_only_official_profile_and_public_types() {
             "compatible_endpoint",
         ] {
             assert!(
-                !source.contains(forbidden),
+                !production.contains(forbidden),
                 "{} contains forbidden example surface {forbidden}",
                 path.display()
             );

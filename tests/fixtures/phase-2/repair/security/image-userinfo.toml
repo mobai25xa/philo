@@ -1,0 +1,3 @@
+url = "https://repair-user:repair-password@example.com/image.png"
+expected_error = "invalid_identifier"
+source = "synthetic"

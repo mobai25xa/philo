@@ -1,0 +1,2 @@
+data: {"id":"repair-structured-limit","model":"gpt-test","choices":[{"index":0,"delta":{"content":"{\"payload\":\"0123456789\"}"},"finish_reason":null}]}
+

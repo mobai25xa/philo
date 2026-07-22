@@ -10,6 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  PHILO_GATE_SUBJECT: ${{ github.event.pull_request.head.sha || github.sha }}
   PROPTEST_CASES: "256"
   RUST_BACKTRACE: "1"
 
@@ -19,6 +20,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
+      - name: Verify and record the gate subject
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$PHILO_GATE_SUBJECT"
+          {
+            echo "## Phase 2 hosted CI"
+            echo ""
+            echo "- Subject commit: \`$actual\`"
+            echo "- Contract: \`philo/openai-chat-p2 1.1.0\`"
+            echo "- Event: \`$GITHUB_EVENT_NAME\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -41,6 +57,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -55,6 +73,8 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.97.1
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.97.1
@@ -70,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -83,7 +105,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           manifest-path: Cargo.toml
           command: check
+
+  phase-2-gate:
+    name: Phase 2 hosted CI gate
+    if: always()
+    needs: [quality, platforms, msrv, features, dependencies]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every hosted check to pass
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          PLATFORMS: ${{ needs.platforms.result }}
+          MSRV: ${{ needs.msrv.result }}
+          FEATURES: ${{ needs.features.result }}
+          DEPENDENCIES: ${{ needs.dependencies.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result in "$QUALITY" "$PLATFORMS" "$MSRV" "$FEATURES" "$DEPENDENCIES"; do
+            test "$result" = "success"
+          done
+          {
+            echo "## Hosted CI gate passed"
+            echo ""
+            echo "- Subject commit: \`$PHILO_GATE_SUBJECT\`"
+            echo "- Contract: \`philo/openai-chat-p2 1.1.0\`"
+          } >> "$GITHUB_STEP_SUMMARY"

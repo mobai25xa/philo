@@ -36,11 +36,12 @@ pub const PHASE_ONE_CONTRACT_VERSION: &str = "1.0.0";
 pub const PHASE_TWO_CONTRACT_ID: &str = "philo/openai-chat-p2";
 
 /// The version of the frozen phase-two behavior contract.
-pub const PHASE_TWO_CONTRACT_VERSION: &str = "1.0.0";
+pub const PHASE_TWO_CONTRACT_VERSION: &str = "1.1.0";
 
 pub mod client;
 pub mod domain;
 pub mod error;
+mod execution;
 pub mod observability;
 mod protocol;
 pub mod provider;
@@ -55,12 +56,12 @@ pub use domain::{
     MessageRole, MissingToolResultPolicy, ModelId, ModelRef, MoneyAmount, NormalizationDiagnostic,
     NormalizedContext, OpaqueReasoning, ParallelToolCalls, PolicySource, PriceProfile, ProtocolId,
     ProviderId, ProviderRequestId, ReasoningEffort, ReasoningEffortSupport, RefusalContent,
-    RequestMetadata, RequestTimeout, ResourceLimits, ResponseFormat, SchemaLimits, SourceIdentity,
-    StreamUsagePolicy, StructuredOutputWireFormat, StructuredSchema, ThinkingContent,
-    ThinkingReplayPolicy, ThinkingRequest, ThinkingWireFormat, TokenCount, ToolArguments, ToolCall,
-    ToolCallId, ToolCallIdPolicy, ToolChoice, ToolChoiceWireFormat, ToolDefinition, ToolLimits,
-    ToolName, ToolResultMessage, ToolResultNamePolicy, ToolSchema, TraceId,
-    UnsupportedContentPolicy, Usage, UsageDetails, UsageMergeOutcome, ValidatedToolCall,
+    RequestMetadata, RequestTimeout, ResourceLimits, ResourceLimitsBuilder, ResponseFormat,
+    SchemaLimits, SourceIdentity, StreamUsagePolicy, StructuredOutputWireFormat, StructuredSchema,
+    ThinkingContent, ThinkingReplayPolicy, ThinkingRequest, ThinkingWireFormat, TokenCount,
+    ToolArguments, ToolCall, ToolCallId, ToolCallIdPolicy, ToolChoice, ToolChoiceWireFormat,
+    ToolDefinition, ToolLimits, ToolName, ToolResultMessage, ToolResultNamePolicy, ToolSchema,
+    TraceId, UnsupportedContentPolicy, Usage, UsageDetails, UsageMergeOutcome, ValidatedToolCall,
     WireToolIndex, apply_thinking_replay_policy, collect_assistant_message,
     collect_assistant_message_for_format, drop_opaque_reasoning, estimate_cost,
     merge_usage_details, normalize_history, validate_tool_call, validate_tool_options,
@@ -124,7 +125,7 @@ mod tests {
         assert_eq!(PHASE_ONE_CONTRACT_ID, "philo/openai-chat-p1");
         assert_eq!(PHASE_ONE_CONTRACT_VERSION, "1.0.0");
         assert_eq!(PHASE_TWO_CONTRACT_ID, "philo/openai-chat-p2");
-        assert_eq!(PHASE_TWO_CONTRACT_VERSION, "1.0.0");
+        assert_eq!(PHASE_TWO_CONTRACT_VERSION, "1.1.0");
     }
 
     #[test]

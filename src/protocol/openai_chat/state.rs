@@ -8,14 +8,16 @@ use futures_core::Stream;
 use super::wire::{ChatCompletionChunkWire, ChoiceWire, DeltaWire, ToolCallDeltaWire, UsageWire};
 use crate::domain::{
     AssistantEvent, ContentIndex, FinishReason, GenerationId, LocalRequestId, ModelRef,
-    ProviderRequestId, ResourceLimits, TokenCount, ToolArguments, ToolCall, ToolCallId, ToolName,
-    Usage, UsageDetails, UsageMergeOutcome, WireToolIndex, merge_usage_details,
+    ProviderRequestId, ResponseFormat, SchemaLimits, TokenCount, ToolArguments, ToolCall,
+    ToolCallId, ToolName, Usage, UsageDetails, UsageMergeOutcome, WireToolIndex,
+    merge_usage_details,
 };
 use crate::error::{
-    ErrorStage, LlmError, ProtocolError, TruncatedStreamError, UnknownFinishReason,
-    UnsupportedResponseSemantics,
+    ErrorStage, LlmError, ProtocolError, StructuredOutputError, StructuredOutputFailure,
+    TruncatedStreamError, UnknownFinishReason, UnsupportedResponseSemantics,
 };
-use crate::transport::{ByteStream, SseDecoder, SseEvent};
+use crate::provider::call_policy::ResponseLimits;
+use crate::transport::{ByteStream, SseConfig, SseDecoder, SseEvent};
 
 /// Stable request context supplied by the future client orchestration layer.
 #[derive(Clone, Debug)]
@@ -39,23 +41,17 @@ impl OpenAiChatStreamContext {
     }
 }
 
-/// Converts an SDK byte stream into assistant events.
-pub(crate) fn decode_openai_chat_stream(
+/// Converts a byte stream using only the response policy captured by planning.
+pub(crate) fn decode_openai_chat_stream_with_plan(
     body: ByteStream,
     context: OpenAiChatStreamContext,
-) -> OpenAiChatEventStream {
-    decode_openai_chat_stream_with_limits(body, context, ResourceLimits::official())
-}
-
-/// Converts an SDK byte stream into assistant events using explicit resource limits.
-pub(crate) fn decode_openai_chat_stream_with_limits(
-    body: ByteStream,
-    context: OpenAiChatStreamContext,
-    limits: ResourceLimits,
+    response_format: ResponseFormat,
+    sse: SseConfig,
+    limits: ResponseLimits,
 ) -> OpenAiChatEventStream {
     OpenAiChatEventStream {
-        source: SseDecoder::new(body),
-        machine: ChatStateMachine::new(context, limits),
+        source: SseDecoder::with_config(body, sse),
+        machine: ChatStateMachine::new_with_format(context, response_format, limits),
         pending: VecDeque::new(),
         terminal: false,
     }
@@ -128,16 +124,20 @@ impl Stream for OpenAiChatEventStream {
 
 struct ChatStateMachine {
     context: OpenAiChatStreamContext,
-    limits: ResourceLimits,
+    limits: ResponseLimits,
     started: bool,
     text: ContentBlockState,
     refusal: ContentBlockState,
     tools: BTreeMap<WireToolIndex, PendingToolCall>,
+    seen_provider_call_ids: BTreeMap<ToolCallId, WireToolIndex>,
     tool_order: Vec<WireToolIndex>,
     next_content_index: u32,
     total_tool_argument_bytes: usize,
     finish_reason: Option<FinishReason>,
     seen_done: bool,
+    response_format: ResponseFormat,
+    structured_text_buffer: Option<String>,
+    structured_validated: bool,
     usage_details: Option<UsageDetails>,
     generation_id: Option<GenerationId>,
     response_model: Option<String>,
@@ -195,7 +195,16 @@ impl fmt::Debug for PendingToolCall {
 }
 
 impl ChatStateMachine {
-    fn new(context: OpenAiChatStreamContext, limits: ResourceLimits) -> Self {
+    fn new_with_format(
+        context: OpenAiChatStreamContext,
+        response_format: ResponseFormat,
+        limits: ResponseLimits,
+    ) -> Self {
+        let structured_text_buffer = if matches!(response_format, ResponseFormat::Text) {
+            None
+        } else {
+            Some(String::new())
+        };
         Self {
             context,
             limits,
@@ -203,11 +212,15 @@ impl ChatStateMachine {
             text: ContentBlockState::NotStarted,
             refusal: ContentBlockState::NotStarted,
             tools: BTreeMap::new(),
+            seen_provider_call_ids: BTreeMap::new(),
             tool_order: Vec::new(),
             next_content_index: 0,
             total_tool_argument_bytes: 0,
             finish_reason: None,
             seen_done: false,
+            response_format,
+            structured_text_buffer,
+            structured_validated: false,
             usage_details: None,
             generation_id: None,
             response_model: None,
@@ -237,6 +250,7 @@ impl ChatStateMachine {
                     "[DONE] received before all content blocks ended",
                 ));
             }
+            self.validate_structured_completion()?;
             self.seen_done = true;
             return Ok(Vec::new());
         }
@@ -324,6 +338,20 @@ impl ChatStateMachine {
         }
         if let Some(usage) = &chunk.usage {
             record_field_names(&mut self.unknown_fields, "usage", usage.extra.keys());
+            if let Some(details) = &usage.prompt_tokens_details {
+                record_field_names(
+                    &mut self.unknown_fields,
+                    "usage.prompt_tokens_details",
+                    details.extra.keys(),
+                );
+            }
+            if let Some(details) = &usage.completion_tokens_details {
+                record_field_names(
+                    &mut self.unknown_fields,
+                    "usage.completion_tokens_details",
+                    details.extra.keys(),
+                );
+            }
         }
     }
 
@@ -431,6 +459,26 @@ impl ChatStateMachine {
         let ContentBlockState::Open { index } = self.text else {
             return Err(Self::protocol("text block is not open"));
         };
+        if let Some(buffer) = &mut self.structured_text_buffer {
+            let next = buffer.len().checked_add(content.len()).ok_or_else(|| {
+                StructuredOutputError::new(
+                    "structured_output",
+                    StructuredOutputFailure::TooLarge,
+                    None,
+                    "structured output byte count overflowed",
+                )
+            })?;
+            if next > self.limits.max_structured_output_bytes {
+                return Err(StructuredOutputError::new(
+                    "structured_output",
+                    StructuredOutputFailure::TooLarge,
+                    None,
+                    "structured output exceeds the configured byte limit",
+                )
+                .into());
+            }
+            buffer.push_str(content);
+        }
         events.push(AssistantEvent::TextDelta {
             index,
             delta: content.to_owned(),
@@ -497,20 +545,29 @@ impl ChatStateMachine {
         raw_id: Option<&str>,
         events: &mut Vec<AssistantEvent>,
     ) -> Result<(), LlmError> {
-        if let Some(pending) = self.tools.get_mut(&wire_index) {
+        let parsed_id = raw_id.map(parse_tool_call_id).transpose()?;
+        if let Some(pending) = self.tools.get(&wire_index) {
             if pending.ended {
                 return Err(Self::protocol(
                     "tool call delta received after tool call end",
                 ));
             }
-            if let Some(raw_id) = raw_id {
-                let parsed = parse_tool_call_id(raw_id)?;
-                match &pending.provider_call_id {
-                    Some(existing) if existing != &parsed => {
-                        return Err(Self::protocol("conflicting tool call id for wire index"));
-                    }
-                    Some(_) => {}
-                    None => pending.provider_call_id = Some(parsed),
+            if let (Some(existing), Some(parsed)) = (&pending.provider_call_id, &parsed_id)
+                && existing != parsed
+            {
+                return Err(Self::protocol("conflicting tool call id for wire index"));
+            }
+            if let Some(id) = &parsed_id {
+                self.register_tool_call_id(wire_index, id)?;
+                if self
+                    .tools
+                    .get(&wire_index)
+                    .is_some_and(|pending| pending.provider_call_id.is_none())
+                {
+                    self.tools
+                        .get_mut(&wire_index)
+                        .expect("tool accumulator checked above")
+                        .provider_call_id = Some(id.clone());
                 }
             }
             return Ok(());
@@ -520,7 +577,10 @@ impl ChatStateMachine {
             return Err(Self::protocol("tool call count exceeds resource limit"));
         }
         let domain_content_index = self.allocate_content_index()?;
-        let provider_call_id = raw_id.map(parse_tool_call_id).transpose()?;
+        if let Some(id) = &parsed_id {
+            self.register_tool_call_id(wire_index, id)?;
+        }
+        let provider_call_id = parsed_id;
         self.tool_order.push(wire_index);
         self.tools.insert(
             wire_index,
@@ -540,6 +600,23 @@ impl ChatStateMachine {
             id: provider_call_id,
         });
         Ok(())
+    }
+
+    fn register_tool_call_id(
+        &mut self,
+        wire_index: WireToolIndex,
+        id: &ToolCallId,
+    ) -> Result<(), LlmError> {
+        match self.seen_provider_call_ids.get(id) {
+            Some(existing) if *existing != wire_index => {
+                Err(Self::protocol("duplicate tool call id across wire indexes"))
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.seen_provider_call_ids.insert(id.clone(), wire_index);
+                Ok(())
+            }
+        }
     }
 
     fn append_tool_fragments(
@@ -736,9 +813,36 @@ impl ChatStateMachine {
             || self.tools.values().any(|tool| !tool.ended)
     }
 
+    fn validate_structured_completion(&mut self) -> Result<(), LlmError> {
+        let finish_reason = self
+            .finish_reason
+            .as_ref()
+            .ok_or_else(|| Self::protocol("structured validation requires a finish reason"))?;
+        let text = self.structured_text_buffer.as_deref().unwrap_or_default();
+        crate::domain::structured::validate_structured_response(
+            &self.response_format,
+            finish_reason,
+            text,
+            !self.tools.is_empty(),
+            !matches!(self.refusal, ContentBlockState::NotStarted),
+            SchemaLimits {
+                max_schema_bytes: usize::MAX,
+                max_schema_depth: self.limits.max_schema_depth,
+                max_json_array_items: self.limits.max_json_array_items,
+            },
+        )?;
+        self.structured_validated = true;
+        Ok(())
+    }
+
     fn finish(&mut self) -> Result<Vec<AssistantEvent>, LlmError> {
         if !self.seen_done {
             return Err(TruncatedStreamError.into());
+        }
+        if !self.structured_validated {
+            return Err(Self::protocol(
+                "stream ended before structured output validation",
+            ));
         }
         if self.has_open_blocks() {
             return Err(Self::protocol(
@@ -778,7 +882,12 @@ impl PreparedChunk {
         } else {
             None
         };
-        let usage = chunk.usage.as_ref().map(parse_usage_details).transpose()?;
+        let usage = chunk
+            .usage
+            .as_ref()
+            .map(parse_usage_details)
+            .transpose()?
+            .flatten();
         Ok(Self {
             finish_reason,
             usage,
@@ -820,7 +929,7 @@ impl PreparedChunk {
     }
 }
 
-fn parse_usage_details(wire: &UsageWire) -> Result<UsageDetails, LlmError> {
+fn parse_usage_details(wire: &UsageWire) -> Result<Option<UsageDetails>, LlmError> {
     let input = optional_token_count(wire.prompt_tokens, "usage.prompt_tokens")?;
     let output = optional_token_count(wire.completion_tokens, "usage.completion_tokens")?;
     let total = optional_token_count(wire.total_tokens, "usage.total_tokens")?;
@@ -848,11 +957,9 @@ fn parse_usage_details(wire: &UsageWire) -> Result<UsageDetails, LlmError> {
         .validate_relationships()
         .map_err(|error| ChatStateMachine::protocol(error.message()))?;
     if !details.has_any_known() {
-        return Err(ChatStateMachine::protocol(
-            "usage object did not report any token counts",
-        ));
+        return Ok(None);
     }
-    Ok(details)
+    Ok(Some(details))
 }
 
 fn optional_token_count(value: Option<i64>, field: &str) -> Result<TokenCount, LlmError> {
@@ -949,6 +1056,9 @@ mod tests {
     use bytes::Bytes;
     use futures_util::{StreamExt as _, stream};
     use proptest::prelude::*;
+    use serde_json::json;
+
+    use crate::domain::{ResourceLimits, StructuredSchema, ToolSchema};
 
     use super::*;
 
@@ -962,14 +1072,47 @@ mod tests {
 
     async fn decode(input: &'static [u8]) -> Vec<Result<AssistantEvent, LlmError>> {
         let body: ByteStream = Box::pin(stream::iter([Ok(Bytes::from_static(input))]));
-        decode_openai_chat_stream(body, context()).collect().await
+        decode_openai_chat_stream_with_plan(
+            body,
+            context(),
+            ResponseFormat::Text,
+            SseConfig::default(),
+            ResourceLimits::official().into(),
+        )
+        .collect()
+        .await
     }
 
     async fn decode_owned(
         chunks: Vec<Result<Bytes, LlmError>>,
     ) -> Vec<Result<AssistantEvent, LlmError>> {
         let body: ByteStream = Box::pin(stream::iter(chunks));
-        decode_openai_chat_stream(body, context()).collect().await
+        decode_openai_chat_stream_with_plan(
+            body,
+            context(),
+            ResponseFormat::Text,
+            SseConfig::default(),
+            ResourceLimits::official().into(),
+        )
+        .collect()
+        .await
+    }
+
+    async fn decode_with_format(
+        input: &'static [u8],
+        response_format: ResponseFormat,
+        limits: ResponseLimits,
+    ) -> Vec<Result<AssistantEvent, LlmError>> {
+        let body: ByteStream = Box::pin(stream::iter([Ok(Bytes::from_static(input))]));
+        decode_openai_chat_stream_with_plan(
+            body,
+            context(),
+            response_format,
+            SseConfig::default(),
+            limits,
+        )
+        .collect()
+        .await
     }
 
     fn sse_chunks(lines: &[&str]) -> Vec<u8> {
@@ -1274,12 +1417,20 @@ mod tests {
         let fixture = include_bytes!(
             "../../../tests/fixtures/phase-2/streams/tool-calls/oversized-arguments.sse"
         );
-        let mut limits = ResourceLimits::official();
-        limits.max_tool_arguments_bytes = 16;
+        let limits = ResourceLimits::builder()
+            .with_max_tool_arguments_bytes(16)
+            .build()
+            .unwrap();
         let body: ByteStream = Box::pin(stream::iter([Ok(Bytes::from_static(fixture))]));
-        let results: Vec<_> = decode_openai_chat_stream_with_limits(body, context(), limits)
-            .collect()
-            .await;
+        let results: Vec<_> = decode_openai_chat_stream_with_plan(
+            body,
+            context(),
+            ResponseFormat::Text,
+            SseConfig::default(),
+            limits.into(),
+        )
+        .collect()
+        .await;
         let errors: Vec<_> = results
             .iter()
             .filter_map(|result| result.as_ref().err())
@@ -1710,6 +1861,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn structured_output_is_validated_before_done_is_emitted() {
+        let invalid = include_bytes!(
+            "../../../tests/fixtures/phase-2/repair/response/structured-invalid-json.sse"
+        );
+        let results = decode_with_format(
+            invalid,
+            ResponseFormat::JsonObject,
+            ResourceLimits::official().into(),
+        )
+        .await;
+        assert!(matches!(
+            results.last(),
+            Some(Err(LlmError::StructuredOutput(error)))
+                if error.reason() == StructuredOutputFailure::InvalidJson
+        ));
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::Done { .. })))
+        );
+
+        let valid =
+            include_bytes!("../../../tests/fixtures/phase-2/repair/response/structured-valid.sse");
+        let events = decode_with_format(
+            valid,
+            ResponseFormat::JsonObject,
+            ResourceLimits::official().into(),
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+        assert!(matches!(events.last(), Some(AssistantEvent::Done { .. })));
+    }
+
+    #[tokio::test]
+    async fn structured_schema_violation_fails_at_done_boundary() {
+        let schema = ToolSchema::new(json!({
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": false
+        }))
+        .unwrap();
+        let format = ResponseFormat::JsonSchema(
+            StructuredSchema::new("result", None, schema, true).unwrap(),
+        );
+        let results = decode_with_format(
+            include_bytes!(
+                "../../../tests/fixtures/phase-2/repair/response/structured-schema-violation.sse"
+            ),
+            format,
+            ResourceLimits::official().into(),
+        )
+        .await;
+        assert!(matches!(
+            results.last(),
+            Some(Err(LlmError::StructuredOutput(error)))
+                if error.reason() == StructuredOutputFailure::SchemaViolation
+        ));
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::Done { .. })))
+        );
+    }
+
+    #[tokio::test]
+    async fn structured_output_limit_fails_during_text_accumulation() {
+        let mut limits: ResponseLimits = ResourceLimits::official().into();
+        limits.max_structured_output_bytes = 4;
+        let results = decode_with_format(
+            b"data: {\"id\":\"structured\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"{\\\"ok\\\":true}\"},\"finish_reason\":null}]}\n\n",
+            ResponseFormat::JsonObject,
+            limits,
+        )
+        .await;
+        assert!(matches!(
+            results.last(),
+            Some(Err(LlmError::StructuredOutput(error)))
+                if error.reason() == StructuredOutputFailure::TooLarge
+        ));
+    }
+
+    #[tokio::test]
+    async fn duplicate_tool_call_ids_fail_in_raw_state_before_any_end() {
+        let results = decode_owned(vec![Ok(Bytes::from_static(
+            b"data: {\"id\":\"tools\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"dup\",\"type\":\"function\",\"function\":{\"name\":\"one\",\"arguments\":\"{}\"}},{\"index\":1,\"id\":\"dup\",\"type\":\"function\",\"function\":{\"name\":\"two\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+        ))])
+        .await;
+        assert!(matches!(results.last(), Some(Err(LlmError::Protocol(_)))));
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::ToolCallEnd { .. })))
+        );
+    }
+
+    #[tokio::test]
+    async fn late_duplicate_tool_call_id_fails_before_mutating_second_call() {
+        let results = decode_owned(vec![
+            Ok(Bytes::from_static(
+                b"data: {\"id\":\"tools\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"dup\",\"type\":\"function\",\"function\":{\"name\":\"one\",\"arguments\":\"{}\"}},{\"index\":1,\"type\":\"function\",\"function\":{\"name\":\"two\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+            )),
+            Ok(Bytes::from_static(
+                b"data: {\"id\":\"tools\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"dup\"}]},\"finish_reason\":null}]}\n\n",
+            )),
+        ])
+        .await;
+        assert!(matches!(results.last(), Some(Err(LlmError::Protocol(_)))));
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::ToolCallEnd { .. })))
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_usage_is_ignored_without_creating_content() {
+        let input = b"data: {\"id\":\"usage\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"usage\",\"model\":\"gpt-test\",\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n";
+        let events = decode(input)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AssistantEvent::Usage(_) | AssistantEvent::DetailedUsage(_)
+        )));
+        assert!(matches!(events.last(), Some(AssistantEvent::Done { .. })));
+    }
+
+    #[tokio::test]
     async fn tool_arguments_and_accumulator_debug_do_not_expose_raw_payloads() {
         let arguments =
             ToolArguments::from_raw_json(r#"{"city":"Paris","secret":"argument-canary"}"#).unwrap();
@@ -1737,16 +2021,20 @@ mod tests {
             "{:?}",
             ChatStateMachine {
                 context: context(),
-                limits: ResourceLimits::official(),
+                limits: ResourceLimits::official().into(),
                 started: true,
                 text: ContentBlockState::NotStarted,
                 refusal: ContentBlockState::NotStarted,
                 tools: BTreeMap::from([(WireToolIndex::new(0), pending)]),
+                seen_provider_call_ids: BTreeMap::new(),
                 tool_order: vec![WireToolIndex::new(0)],
                 next_content_index: 1,
                 total_tool_argument_bytes: 32,
                 finish_reason: Some(FinishReason::ToolCalls),
                 seen_done: true,
+                response_format: ResponseFormat::Text,
+                structured_text_buffer: None,
+                structured_validated: true,
                 usage_details: None,
                 generation_id: None,
                 response_model: None,
@@ -1763,7 +2051,11 @@ mod tests {
             r#"{"id":"audit","model":"gpt","top_future":"canary-value","choices":[{"index":0,"choice_future":1,"delta":{"delta_future":true},"finish_reason":null}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"usage_future":"private"}}"#,
         )
         .unwrap();
-        let mut machine = ChatStateMachine::new(context(), ResourceLimits::official());
+        let mut machine = ChatStateMachine::new_with_format(
+            context(),
+            ResponseFormat::Text,
+            ResourceLimits::official().into(),
+        );
         machine.record_unknown_fields(&chunk);
         assert_eq!(
             machine.unknown_fields,

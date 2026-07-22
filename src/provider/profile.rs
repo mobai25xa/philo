@@ -4,8 +4,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::domain::{ModelId, ProtocolId, ProviderId};
+use crate::domain::{ModelId, ProtocolId, ProviderId, ResourceLimits};
 use crate::error::LlmError;
+use crate::transport::SseConfig;
 
 use super::auth::{ApiKey, BearerCredential, ClientIdentity};
 use super::capability::{
@@ -30,6 +31,9 @@ pub struct ProviderProfile {
     pub(super) model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     pub(super) dialect: ProtocolDialect,
     pub(super) transport: ProviderTransportOptions,
+    pub(super) resource_limits: ResourceLimits,
+    pub(super) sse: SseConfig,
+    pub(super) max_http_error_body_bytes: usize,
     pub(super) test_only: bool,
 }
 
@@ -83,6 +87,9 @@ pub struct OfficialOpenAiProfile {
     key: ApiKey,
     client_identity: ClientIdentity,
     model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
+    resource_limits: ResourceLimits,
+    sse: SseConfig,
+    max_http_error_body_bytes: usize,
 }
 
 impl OfficialOpenAiProfile {
@@ -92,6 +99,9 @@ impl OfficialOpenAiProfile {
             key,
             client_identity: ClientIdentity::default(),
             model_capabilities: BTreeMap::new(),
+            resource_limits: ResourceLimits::official(),
+            sse: SseConfig::default(),
+            max_http_error_body_bytes: 16 * 1024,
         }
     }
 
@@ -115,6 +125,31 @@ impl OfficialOpenAiProfile {
         self
     }
 
+    /// Replaces SDK-local request and response safety ceilings.
+    #[must_use]
+    pub fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
+        self.resource_limits = limits;
+        self
+    }
+
+    /// Replaces Server-Sent Events framing ceilings.
+    #[must_use]
+    pub fn with_sse_config(mut self, config: SseConfig) -> Self {
+        self.sse = config;
+        self
+    }
+
+    /// Replaces the bounded HTTP error-body prefix size.
+    pub fn with_max_http_error_body_bytes(mut self, limit: usize) -> Result<Self, LlmError> {
+        if limit == 0 {
+            return Err(LlmError::Configuration(
+                "HTTP error body limit must be positive".to_owned(),
+            ));
+        }
+        self.max_http_error_body_bytes = limit;
+        Ok(self)
+    }
+
     /// Produces the declarative profile.
     pub fn profile(self) -> Result<ProviderProfile, LlmError> {
         let provider_id = ProviderId::new("official-openai")?;
@@ -136,6 +171,9 @@ impl OfficialOpenAiProfile {
             model_capabilities: self.model_capabilities,
             dialect: ProtocolDialect::OpenAiChatCompletions,
             transport: ProviderTransportOptions::secure_defaults(),
+            resource_limits: self.resource_limits,
+            sse: self.sse,
+            max_http_error_body_bytes: self.max_http_error_body_bytes,
             test_only: false,
         })
     }
@@ -174,6 +212,9 @@ impl TestOnlyProfile {
                 model_capabilities: BTreeMap::new(),
                 dialect: ProtocolDialect::OpenAiChatCompletions,
                 transport: ProviderTransportOptions::secure_defaults(),
+                resource_limits: ResourceLimits::official(),
+                sse: SseConfig::default(),
+                max_http_error_body_bytes: 16 * 1024,
                 test_only: true,
             },
         })
@@ -186,6 +227,31 @@ impl TestOnlyProfile {
             .model_capabilities
             .insert(profile.model().clone(), profile);
         self
+    }
+
+    /// Replaces SDK-local request and response safety ceilings for an offline test runtime.
+    #[must_use]
+    pub fn with_resource_limits(mut self, limits: ResourceLimits) -> Self {
+        self.profile.resource_limits = limits;
+        self
+    }
+
+    /// Replaces SSE framing ceilings for an offline test runtime.
+    #[must_use]
+    pub fn with_sse_config(mut self, config: SseConfig) -> Self {
+        self.profile.sse = config;
+        self
+    }
+
+    /// Replaces the bounded HTTP error-body prefix size for an offline test runtime.
+    pub fn with_max_http_error_body_bytes(mut self, limit: usize) -> Result<Self, LlmError> {
+        if limit == 0 {
+            return Err(LlmError::Configuration(
+                "HTTP error body limit must be positive".to_owned(),
+            ));
+        }
+        self.profile.max_http_error_body_bytes = limit;
+        Ok(self)
     }
 
     /// Builds the test runtime.

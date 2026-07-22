@@ -5,7 +5,7 @@
     clippy::too_many_lines
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -106,6 +106,7 @@ impl ToolSchema {
 
         let defs = collect_defs(&value)?;
         validate_schema_node(&value, "#", &defs, limits)?;
+        validate_local_reference_graph(&value, &defs, limits)?;
         let strict_compatible = is_strict_compatible_root(&value);
         Ok(Self {
             value,
@@ -134,7 +135,8 @@ impl ToolSchema {
     ) -> Result<(), ToolValidationError> {
         preflight_instance(instance, limits)?;
         let root = &self.value;
-        validate_value(root, instance, "#", root, limits)
+        let mut guard = ReferenceGuard::new(limits);
+        validate_value(root, instance, "#", root, limits, &mut guard)
     }
 }
 
@@ -190,7 +192,7 @@ fn collect_defs_at(
             )
         })?;
         for (name, definition) in map {
-            let key = format!("#/$defs/{name}");
+            let key = format!("{path}/$defs/{}", encode_pointer_segment(name));
             if !defs.insert(key.clone()) {
                 return Err(SchemaError::new(
                     "schema.$defs",
@@ -199,7 +201,7 @@ fn collect_defs_at(
                     "duplicate local definition name",
                 ));
             }
-            collect_defs_at(definition, &format!("{path}/$defs/{name}"), defs)?;
+            collect_defs_at(definition, &key, defs)?;
         }
     }
     for (key, child) in object {
@@ -208,6 +210,144 @@ fn collect_defs_at(
         }
     }
     Ok(())
+}
+
+fn validate_local_reference_graph(
+    root: &Value,
+    defs: &BTreeSet<String>,
+    limits: SchemaLimits,
+) -> Result<(), SchemaError> {
+    let mut graph = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut nodes = Vec::with_capacity(defs.len() + 1);
+    nodes.push("#".to_owned());
+    nodes.extend(defs.iter().cloned());
+    for node in &nodes {
+        let schema = if node == "#" {
+            root
+        } else {
+            resolve_local_ref(root, node).ok_or_else(|| {
+                SchemaError::new(
+                    "schema.$ref",
+                    SchemaFailure::UnresolvedLocalReference,
+                    None,
+                    "local schema definition could not be resolved",
+                )
+            })?
+        };
+        let mut references = BTreeSet::new();
+        collect_semantic_references(schema, &mut references)?;
+        graph.insert(node.clone(), references);
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut expansion_count = 0usize;
+    let max_expansions = limits
+        .max_schema_depth
+        .max(1)
+        .saturating_mul(nodes.len().max(1));
+    for node in nodes {
+        visit_reference_node(
+            &node,
+            &graph,
+            &mut visiting,
+            &mut visited,
+            0,
+            limits.max_schema_depth,
+            &mut expansion_count,
+            max_expansions,
+        )?;
+    }
+    Ok(())
+}
+
+fn collect_semantic_references(
+    value: &Value,
+    references: &mut BTreeSet<String>,
+) -> Result<(), SchemaError> {
+    match value {
+        Value::Object(object) => {
+            if let Some(reference) = object.get("$ref") {
+                let reference = reference.as_str().ok_or_else(|| {
+                    SchemaError::new(
+                        "schema.$ref",
+                        SchemaFailure::InvalidKeywordType,
+                        None,
+                        "$ref must be a string",
+                    )
+                })?;
+                references.insert(canonicalize_local_ref(reference).map_err(|()| {
+                    SchemaError::new(
+                        "schema.$ref",
+                        SchemaFailure::InvalidKeywordType,
+                        None,
+                        "local schema reference contains an invalid JSON Pointer escape",
+                    )
+                })?);
+            }
+            for (key, child) in object {
+                if key != "$defs" {
+                    collect_semantic_references(child, references)?;
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_semantic_references(item, references)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit_reference_node(
+    node: &str,
+    graph: &BTreeMap<String, BTreeSet<String>>,
+    visiting: &mut BTreeSet<String>,
+    visited: &mut BTreeSet<String>,
+    depth: usize,
+    max_depth: usize,
+    expansion_count: &mut usize,
+    max_expansions: usize,
+) -> Result<(), SchemaError> {
+    if visited.contains(node) {
+        return Ok(());
+    }
+    if depth > max_depth || !visiting.insert(node.to_owned()) {
+        return Err(reference_too_deep());
+    }
+    *expansion_count = expansion_count.saturating_add(1);
+    if *expansion_count > max_expansions {
+        return Err(reference_too_deep());
+    }
+    if let Some(edges) = graph.get(node) {
+        for edge in edges {
+            visit_reference_node(
+                edge,
+                graph,
+                visiting,
+                visited,
+                depth.saturating_add(1),
+                max_depth,
+                expansion_count,
+                max_expansions,
+            )?;
+        }
+    }
+    visiting.remove(node);
+    visited.insert(node.to_owned());
+    Ok(())
+}
+
+fn reference_too_deep() -> SchemaError {
+    SchemaError::new(
+        "schema.$ref",
+        SchemaFailure::TooDeep,
+        None,
+        "local schema references are cyclic or exceed the expansion budget",
+    )
 }
 
 fn validate_schema_node(
@@ -253,7 +393,15 @@ fn validate_schema_node(
                 "remote schema references are not allowed",
             ));
         }
-        if !defs.contains(reference) {
+        let canonical = canonicalize_local_ref(reference).map_err(|()| {
+            SchemaError::new(
+                "schema.$ref",
+                SchemaFailure::InvalidKeywordType,
+                Some(format!("{path}/$ref")),
+                "local schema reference contains an invalid JSON Pointer escape",
+            )
+        })?;
+        if !defs.contains(&canonical) {
             return Err(SchemaError::new(
                 "schema.$ref",
                 SchemaFailure::UnresolvedLocalReference,
@@ -444,39 +592,97 @@ fn validate_boundary_keywords(
     path: &str,
     limits: SchemaLimits,
 ) -> Result<(), SchemaError> {
-    for key in [
-        "minLength",
-        "maxLength",
-        "minimum",
-        "maximum",
-        "minItems",
-        "maxItems",
-    ] {
-        if let Some(value) = object.get(key)
-            && !value.is_number()
-        {
-            return Err(SchemaError::new(
-                format!("schema.{key}"),
-                SchemaFailure::InvalidKeywordType,
-                Some(format!("{path}/{key}")),
-                "numeric boundary keywords must be numbers",
-            ));
-        }
+    let min_length = optional_usize_keyword(object, "minLength", path)?;
+    let max_length = optional_usize_keyword(object, "maxLength", path)?;
+    let min_items = optional_usize_keyword(object, "minItems", path)?;
+    let max_items = optional_usize_keyword(object, "maxItems", path)?;
+    validate_ordered_usize_pair(min_length, max_length, "minLength", "maxLength", path)?;
+    validate_ordered_usize_pair(min_items, max_items, "minItems", "maxItems", path)?;
+
+    if max_items.is_some_and(|value| value > limits.max_json_array_items) {
+        return Err(SchemaError::new(
+            "schema.maxItems",
+            SchemaFailure::TooLarge,
+            Some(format!("{path}/maxItems")),
+            "maxItems exceeds the allowed array length",
+        ));
     }
-    if let Some(Value::Number(max_items)) = object.get("maxItems")
-        && let Some(max_items) = max_items.as_u64()
-    {
-        let max_items = usize::try_from(max_items).unwrap_or(usize::MAX);
-        if max_items > limits.max_json_array_items {
-            return Err(SchemaError::new(
-                "schema.maxItems",
-                SchemaFailure::TooLarge,
-                Some(format!("{path}/maxItems")),
-                "maxItems exceeds the allowed array length",
-            ));
-        }
+
+    let minimum = optional_json_number(object, "minimum", path)?;
+    let maximum = optional_json_number(object, "maximum", path)?;
+    if matches!((minimum, maximum), (Some(min), Some(max)) if min > max) {
+        return Err(SchemaError::new(
+            "schema.minimum",
+            SchemaFailure::InvalidKeywordType,
+            Some(format!("{path}/minimum")),
+            "minimum must not exceed maximum",
+        ));
     }
     Ok(())
+}
+
+fn optional_usize_keyword(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<Option<usize>, SchemaError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    let Some(raw) = value.as_u64() else {
+        return Err(SchemaError::new(
+            format!("schema.{key}"),
+            SchemaFailure::InvalidKeywordType,
+            Some(format!("{path}/{key}")),
+            "length and item boundaries must be non-negative integers",
+        ));
+    };
+    let converted = usize::try_from(raw).map_err(|_| {
+        SchemaError::new(
+            format!("schema.{key}"),
+            SchemaFailure::InvalidKeywordType,
+            Some(format!("{path}/{key}")),
+            "length or item boundary cannot be represented by this SDK",
+        )
+    })?;
+    Ok(Some(converted))
+}
+
+fn validate_ordered_usize_pair(
+    minimum: Option<usize>,
+    maximum: Option<usize>,
+    minimum_key: &str,
+    _maximum_key: &str,
+    path: &str,
+) -> Result<(), SchemaError> {
+    if matches!((minimum, maximum), (Some(min), Some(max)) if min > max) {
+        return Err(SchemaError::new(
+            format!("schema.{minimum_key}"),
+            SchemaFailure::InvalidKeywordType,
+            Some(format!("{path}/{minimum_key}")),
+            "minimum boundary must not exceed maximum boundary",
+        ));
+    }
+    Ok(())
+}
+
+fn optional_json_number(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<Option<f64>, SchemaError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    let Some(number) = value.as_f64().filter(|number| number.is_finite()) else {
+        return Err(SchemaError::new(
+            format!("schema.{key}"),
+            SchemaFailure::InvalidKeywordType,
+            Some(format!("{path}/{key}")),
+            "numeric boundaries must be finite JSON numbers",
+        ));
+    };
+    Ok(Some(number))
 }
 
 fn is_strict_compatible_root(value: &Value) -> bool {
@@ -589,12 +795,51 @@ fn check_array_lengths(
     Ok(())
 }
 
+struct ReferenceGuard {
+    active_refs: BTreeSet<String>,
+    expansion_count: usize,
+    max_expansions: usize,
+}
+
+impl ReferenceGuard {
+    fn new(limits: SchemaLimits) -> Self {
+        Self {
+            active_refs: BTreeSet::new(),
+            expansion_count: 0,
+            max_expansions: limits
+                .max_schema_depth
+                .max(1)
+                .saturating_mul(limits.max_schema_depth.max(1)),
+        }
+    }
+
+    fn enter(&mut self, reference: &str, path: &str) -> Result<(), ToolValidationError> {
+        self.expansion_count = self.expansion_count.saturating_add(1);
+        if self.expansion_count > self.max_expansions
+            || !self.active_refs.insert(reference.to_owned())
+        {
+            return Err(ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::ArgumentsTooDeep,
+                Some(path.to_owned()),
+                "local schema reference expansion exceeded the safety budget",
+            ));
+        }
+        Ok(())
+    }
+
+    fn leave(&mut self, reference: &str) {
+        self.active_refs.remove(reference);
+    }
+}
+
 fn validate_value(
     schema: &Value,
     instance: &Value,
     path: &str,
     root: &Value,
     limits: SchemaLimits,
+    guard: &mut ReferenceGuard,
 ) -> Result<(), ToolValidationError> {
     let Some(object) = schema.as_object() else {
         return Err(ToolValidationError::new(
@@ -606,7 +851,15 @@ fn validate_value(
     };
 
     if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-        let resolved = resolve_local_ref(root, reference).ok_or_else(|| {
+        let canonical = canonicalize_local_ref(reference).map_err(|()| {
+            ToolValidationError::new(
+                "arguments",
+                ToolValidationFailure::SchemaViolation,
+                Some(path.to_owned()),
+                "local schema reference contains an invalid JSON Pointer escape",
+            )
+        })?;
+        let resolved = resolve_local_ref(root, &canonical).ok_or_else(|| {
             ToolValidationError::new(
                 "arguments",
                 ToolValidationFailure::SchemaViolation,
@@ -614,15 +867,24 @@ fn validate_value(
                 "local schema reference could not be resolved",
             )
         })?;
-        return validate_value(resolved, instance, path, root, limits);
+        guard.enter(&canonical, path)?;
+        let result = validate_value(resolved, instance, path, root, limits, guard);
+        guard.leave(&canonical);
+        return result;
     }
 
     if let Some(any_of) = object.get("anyOf").and_then(Value::as_array) {
         let mut matched = false;
         for branch in any_of {
-            if validate_value(branch, instance, path, root, limits).is_ok() {
-                matched = true;
-                break;
+            match validate_value(branch, instance, path, root, limits, guard) {
+                Ok(()) => {
+                    matched = true;
+                    break;
+                }
+                Err(error) if error.reason() == ToolValidationFailure::ArgumentsTooDeep => {
+                    return Err(error);
+                }
+                Err(_) => {}
             }
         }
         if !matched {
@@ -745,7 +1007,14 @@ fn validate_value(
         }
         if let Some(item_schema) = object.get("items") {
             for (index, item) in items.iter().enumerate() {
-                validate_value(item_schema, item, &format!("{path}/{index}"), root, limits)?;
+                validate_value(
+                    item_schema,
+                    item,
+                    &format!("{path}/{index}"),
+                    root,
+                    limits,
+                    guard,
+                )?;
             }
         }
     }
@@ -783,6 +1052,7 @@ fn validate_value(
                     &format!("{path}/{key}"),
                     root,
                     limits,
+                    guard,
                 )?;
             } else if !additional {
                 return Err(ToolValidationError::new(
@@ -835,9 +1105,42 @@ fn resolve_local_ref<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> 
         return None;
     }
     let mut current = root;
-    for segment in reference.trim_start_matches("#/").split('/') {
+    for segment in reference.strip_prefix("#/")?.split('/') {
+        let segment = decode_pointer_segment(segment).ok()?;
         let object = current.as_object()?;
-        current = object.get(segment)?;
+        current = object.get(segment.as_str())?;
     }
     Some(current)
+}
+
+fn canonicalize_local_ref(reference: &str) -> Result<String, ()> {
+    let pointer = reference.strip_prefix("#/").ok_or(())?;
+    let mut canonical = String::from("#");
+    for raw in pointer.split('/') {
+        let decoded = decode_pointer_segment(raw)?;
+        canonical.push('/');
+        canonical.push_str(&encode_pointer_segment(&decoded));
+    }
+    Ok(canonical)
+}
+
+fn decode_pointer_segment(segment: &str) -> Result<String, ()> {
+    let mut decoded = String::with_capacity(segment.len());
+    let mut chars = segment.chars();
+    while let Some(character) = chars.next() {
+        if character != '~' {
+            decoded.push(character);
+            continue;
+        }
+        match chars.next() {
+            Some('0') => decoded.push('~'),
+            Some('1') => decoded.push('/'),
+            _ => return Err(()),
+        }
+    }
+    Ok(decoded)
+}
+
+fn encode_pointer_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
 }

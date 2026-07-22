@@ -12,8 +12,12 @@ use std::time::Duration;
 use http::{HeaderMap, HeaderName};
 use tokio::time::Instant;
 
+use super::schema::{SchemaLimits, ToolSchema};
 use super::structured::ResponseFormat;
-use super::tools::{ParallelToolCalls, ToolChoice, ToolDefinition, validate_tool_options};
+use super::tools::{
+    ParallelToolCalls, ToolChoice, ToolDefinition, ToolLimits, validate_tool_options,
+    validate_tool_options_with_limits,
+};
 use super::{
     ContentPart, ImageDetail, ImageSource, Message, MessageRole, ModelRef, ResourceLimits,
 };
@@ -319,6 +323,23 @@ pub struct GenerateRequest {
 /// Alias used by higher-level client APIs.
 pub type LlmRequest = GenerateRequest;
 
+/// Provider-independent request ceilings compiled before target-aware validation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(clippy::struct_field_names)]
+pub(crate) struct RequestValidationLimits {
+    pub(crate) max_body_bytes: usize,
+    pub(crate) max_messages: usize,
+    pub(crate) max_text_bytes: usize,
+    pub(crate) max_tools: usize,
+    pub(crate) max_tool_description_bytes: usize,
+    pub(crate) max_schema_bytes: usize,
+    pub(crate) max_schema_depth: usize,
+    pub(crate) max_json_array_items: usize,
+    pub(crate) max_images: usize,
+    pub(crate) max_inline_image_bytes: usize,
+    pub(crate) max_image_url_bytes: usize,
+}
+
 impl GenerateRequest {
     /// Creates a request. Detailed validation is performed by [`Self::validate`].
     pub fn new(model: ModelRef, messages: Vec<Message>) -> Self {
@@ -345,7 +366,12 @@ impl GenerateRequest {
     pub fn options(&self) -> &GenerationOptions {
         &self.options
     }
-    /// Validates phase-two request rules before a transport can be called.
+    /// Performs provider-neutral, no-I/O conservative validation.
+    ///
+    /// This public convenience check cannot replace target-aware planning by
+    /// `LlmClient`: exact model capabilities, compatibility policy, history
+    /// normalization, and profile-specific resource limits are resolved only
+    /// by the crate-private call planner.
     pub fn validate(&self, capabilities: &CapabilitySet) -> Result<(), LlmError> {
         if self.model.provider().as_str().is_empty() {
             return Err(ValidationError::new(
@@ -494,78 +520,214 @@ impl GenerateRequest {
         if needs_original_detail {
             check_capability("image.detail", capabilities.image_detail_original)?;
         }
-        if let Some(value) = self.options.temperature {
-            if !value.is_finite() {
-                return Err(ValidationError::new(
-                    "temperature",
-                    ValidationReason::NonFinite,
-                    "temperature must be finite",
-                )
-                .into());
-            }
-            if !(0.0..=2.0).contains(&value) {
-                return Err(ValidationError::new(
-                    "temperature",
-                    ValidationReason::OutOfRange,
-                    "temperature must be in 0..=2",
-                )
-                .into());
-            }
-            check_capability("temperature", capabilities.temperature)?;
-        }
-        if let Some(value) = self.options.max_output_tokens {
-            if value == 0 {
-                return Err(ValidationError::new(
-                    "max_output_tokens",
-                    ValidationReason::Zero,
-                    "max_output_tokens must be positive",
-                )
-                .into());
-            }
-            check_capability("max_output_tokens", capabilities.max_output_tokens)?;
-        }
-        validate_reasoning_request(self.options.reasoning(), &capabilities.reasoning_efforts)?;
-        validate_response_format(self.options.response_format(), capabilities)?;
-        validate_tool_options(
-            self.options.tools(),
-            self.options.tool_choice(),
-            self.options.parallel_tool_calls(),
-            capabilities,
-        )?;
-        if let Some(RequestTimeout::At(deadline)) = self.options.timeout
-            && deadline <= Instant::now()
-        {
+        validate_generation_options(&self.options, capabilities)
+    }
+}
+
+fn validate_generation_options(
+    options: &GenerationOptions,
+    capabilities: &CapabilitySet,
+) -> Result<(), LlmError> {
+    if let Some(value) = options.temperature {
+        if !value.is_finite() {
             return Err(ValidationError::new(
-                "deadline",
-                ValidationReason::Expired,
-                "deadline has elapsed",
+                "temperature",
+                ValidationReason::NonFinite,
+                "temperature must be finite",
             )
             .into());
         }
-        for name in self.options.headers.keys() {
-            if name
-                .as_str()
-                .bytes()
-                .any(|byte| byte == b'\r' || byte == b'\n')
-            {
-                return Err(ValidationError::new(
-                    format!("request_headers.{name}"),
-                    ValidationReason::InvalidHeader,
-                    "header name contains line break",
-                )
-                .into());
-            }
-            if is_protected(name) {
-                return Err(ValidationError::new(
-                    format!("request_headers.{name}"),
-                    ValidationReason::ProtectedHeader,
-                    "protected headers are adapter-owned",
-                )
-                .into());
+        if !(0.0..=2.0).contains(&value) {
+            return Err(ValidationError::new(
+                "temperature",
+                ValidationReason::OutOfRange,
+                "temperature must be in 0..=2",
+            )
+            .into());
+        }
+        check_capability("temperature", capabilities.temperature)?;
+    }
+    if let Some(value) = options.max_output_tokens {
+        if value == 0 {
+            return Err(ValidationError::new(
+                "max_output_tokens",
+                ValidationReason::Zero,
+                "max_output_tokens must be positive",
+            )
+            .into());
+        }
+        check_capability("max_output_tokens", capabilities.max_output_tokens)?;
+    }
+    validate_reasoning_request(options.reasoning(), &capabilities.reasoning_efforts)?;
+    validate_response_format(options.response_format(), capabilities)?;
+    validate_tool_options(
+        options.tools(),
+        options.tool_choice(),
+        options.parallel_tool_calls(),
+        capabilities,
+    )?;
+    if let Some(RequestTimeout::At(deadline)) = options.timeout
+        && deadline <= Instant::now()
+    {
+        return Err(ValidationError::new(
+            "deadline",
+            ValidationReason::Expired,
+            "deadline has elapsed",
+        )
+        .into());
+    }
+    for name in options.headers.keys() {
+        if name
+            .as_str()
+            .bytes()
+            .any(|byte| byte == b'\r' || byte == b'\n')
+        {
+            return Err(ValidationError::new(
+                format!("request_headers.{name}"),
+                ValidationReason::InvalidHeader,
+                "header name contains line break",
+            )
+            .into());
+        }
+        if is_protected(name) {
+            return Err(ValidationError::new(
+                format!("request_headers.{name}"),
+                ValidationReason::ProtectedHeader,
+                "protected headers are adapter-owned",
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Validates raw request shape and target-dependent options before history normalization.
+pub(crate) fn validate_request_shape(
+    request: &GenerateRequest,
+    capabilities: &CapabilitySet,
+    limits: &RequestValidationLimits,
+) -> Result<(), LlmError> {
+    if request.model().provider().as_str().is_empty() {
+        return Err(ValidationError::new(
+            "model.provider",
+            ValidationReason::MissingProvider,
+            "provider is required",
+        )
+        .into());
+    }
+    validate_target_options(request, capabilities)?;
+    validate_request_resources(request.messages(), request.options(), limits)
+}
+
+/// Validates normalized request content under the fully compiled target policy.
+pub(crate) fn validate_planned_request(
+    model: &ModelRef,
+    messages: &[Message],
+    options: &GenerationOptions,
+    capabilities: &CapabilitySet,
+    limits: &RequestValidationLimits,
+) -> Result<(), LlmError> {
+    let normalized =
+        GenerateRequest::new(model.clone(), messages.to_vec()).with_options(options.clone());
+    normalized.validate(capabilities)?;
+    validate_request_resources(messages, options, limits)
+}
+
+fn validate_target_options(
+    request: &GenerateRequest,
+    capabilities: &CapabilitySet,
+) -> Result<(), LlmError> {
+    validate_generation_options(request.options(), capabilities)
+}
+
+fn validate_request_resources(
+    messages: &[Message],
+    options: &GenerationOptions,
+    limits: &RequestValidationLimits,
+) -> Result<(), LlmError> {
+    if messages.len() > limits.max_messages {
+        return Err(ValidationError::new(
+            "messages",
+            ValidationReason::OutOfRange,
+            "message count exceeds the resolved request limit",
+        )
+        .into());
+    }
+
+    let mut image_count = 0usize;
+    for (message_index, message) in messages.iter().enumerate() {
+        for (part_index, part) in message.content().iter().enumerate() {
+            if let ContentPart::Image(image) = part {
+                image_count = image_count.saturating_add(1);
+                match image.source() {
+                    ImageSource::Url(url) if url.as_str().len() > limits.max_image_url_bytes => {
+                        return Err(ValidationError::new(
+                            format!("messages[{message_index}].content[{part_index}]"),
+                            ValidationReason::OutOfRange,
+                            "image URL exceeds the resolved request limit",
+                        )
+                        .into());
+                    }
+                    ImageSource::Inline { bytes, .. }
+                        if bytes.len() > limits.max_inline_image_bytes =>
+                    {
+                        return Err(ValidationError::new(
+                            format!("messages[{message_index}].content[{part_index}]"),
+                            ValidationReason::OutOfRange,
+                            "inline image exceeds the resolved request limit",
+                        )
+                        .into());
+                    }
+                    _ => {}
+                }
             }
         }
-        Ok(())
     }
+    if image_count > limits.max_images {
+        return Err(ValidationError::new(
+            "messages.image",
+            ValidationReason::OutOfRange,
+            "image count exceeds the resolved request limit",
+        )
+        .into());
+    }
+
+    validate_tool_options_with_limits(
+        options.tools(),
+        options.tool_choice(),
+        options.parallel_tool_calls(),
+        &CapabilitySet {
+            temperature: CapabilityStatus::Supported,
+            max_output_tokens: CapabilityStatus::Supported,
+            function_tools: CapabilityStatus::Supported,
+            tool_choice_required: CapabilityStatus::Supported,
+            tool_choice_specific: CapabilityStatus::Supported,
+            parallel_tool_calls: CapabilityStatus::Supported,
+            strict_tools: CapabilityStatus::Supported,
+            vision_input: CapabilityStatus::Supported,
+            image_detail_original: CapabilityStatus::Supported,
+            response_format_json_object: CapabilityStatus::Supported,
+            response_format_json_schema: CapabilityStatus::Supported,
+            reasoning_efforts: ReasoningEffortSupport::Unknown,
+        },
+        ToolLimits {
+            max_tools: limits.max_tools,
+            max_tool_description_bytes: limits.max_tool_description_bytes,
+        },
+    )?;
+
+    let schema_limits = SchemaLimits {
+        max_schema_bytes: limits.max_schema_bytes,
+        max_schema_depth: limits.max_schema_depth,
+        max_json_array_items: limits.max_json_array_items,
+    };
+    for tool in options.tools() {
+        ToolSchema::with_limits(tool.parameters().value().clone(), schema_limits)?;
+    }
+    if let ResponseFormat::JsonSchema(structured) = options.response_format() {
+        ToolSchema::with_limits(structured.schema().value().clone(), schema_limits)?;
+    }
+    Ok(())
 }
 
 fn validate_single_text_message(message: &Message, index: usize) -> Result<(), LlmError> {

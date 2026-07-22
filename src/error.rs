@@ -657,6 +657,8 @@ impl HistoryError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum StructuredOutputFailure {
+    /// Structured text exceeded the configured response byte ceiling.
+    TooLarge,
     /// Final assistant text is not valid JSON.
     InvalidJson,
     /// Final assistant text fails the requested schema or object shape.

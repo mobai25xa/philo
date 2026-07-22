@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 contract_id = "philo/openai-chat-p1"
 contract_version = "1.0.0"
 
@@ -757,3 +757,217 @@ expected = "error"
 expected_error = "remote_reference"
 contract_version = "1.0.0"
 notes = "No network access during schema compile"
+
+[[fixture]]
+id = "p2-repair-response-structured-valid"
+path = "phase-2/repair/response/structured-valid.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Validate structured output before Done"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A05 ResponseSession fixture"
+
+[[fixture]]
+id = "p2-repair-response-structured-invalid-json"
+path = "phase-2/repair/response/structured-invalid-json.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject invalid structured JSON before Done"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_json"
+contract_version = "1.1.0"
+notes = "R2-A05 ResponseSession fixture"
+
+[[fixture]]
+id = "p2-repair-response-structured-schema-violation"
+path = "phase-2/repair/response/structured-schema-violation.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject structured schema violations before Done"
+source = "synthetic"
+expected = "error"
+expected_error = "schema_violation"
+contract_version = "1.1.0"
+notes = "R2-A05 ResponseSession fixture"
+
+[[fixture]]
+id = "p2-repair-response-structured-over-limit"
+path = "phase-2/repair/response/structured-over-limit.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject structured response byte overflow"
+source = "synthetic"
+expected = "error"
+expected_error = "structured_too_large"
+contract_version = "1.1.0"
+notes = "R2-A05 ResponseSession fixture"
+
+[[fixture]]
+id = "p2-repair-response-duplicate-tool-id"
+path = "phase-2/repair/response/duplicate-tool-id.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject duplicate provider tool call IDs"
+source = "synthetic"
+expected = "error"
+expected_error = "duplicate_tool_call_id"
+contract_version = "1.1.0"
+notes = "R2-A05 raw state fixture"
+
+[[fixture]]
+id = "p2-repair-response-late-duplicate-tool-id"
+path = "phase-2/repair/response/late-duplicate-tool-id.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject late duplicate provider tool call IDs"
+source = "synthetic"
+expected = "error"
+expected_error = "duplicate_tool_call_id"
+contract_version = "1.1.0"
+notes = "R2-A05 raw state fixture"
+
+[[fixture]]
+id = "p2-repair-response-empty-usage"
+path = "phase-2/repair/response/empty-usage.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Ignore empty usage without creating content"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A05 usage fixture"
+
+[[fixture]]
+id = "p2-repair-response-data-after-done"
+path = "phase-2/repair/response/data-after-done.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject data after the Done marker"
+source = "synthetic"
+expected = "error"
+expected_error = "data_after_done"
+contract_version = "1.1.0"
+notes = "R2-A05 terminal fixture"
+
+[[fixture]]
+id = "p2-repair-response-truncated-before-done"
+path = "phase-2/repair/response/truncated-before-done.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject EOF before the Done marker"
+source = "synthetic"
+expected = "error"
+expected_error = "truncated_stream"
+contract_version = "1.1.0"
+notes = "R2-A05 terminal fixture"
+
+[[fixture]]
+id = "p2-repair-planner-missing-tool-result"
+path = "phase-2/repair/planner/missing-tool-result.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a planned assistant tool-call turn without its result"
+source = "synthetic"
+expected = "error"
+expected_error = "missing_tool_result"
+contract_version = "1.1.0"
+notes = "R2-A07 planner boundary; not an Official conformance capture"
+
+[[fixture]]
+id = "p2-repair-planner-repeated-id-across-turns"
+path = "phase-2/repair/planner/repeated-id-across-turns.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Allow a completed later assistant turn to reuse a provider tool call id"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A07 assistant-turn identity scope"
+
+[[fixture]]
+id = "p2-repair-planner-normalized-tool-id"
+path = "phase-2/repair/planner/normalized-tool-id.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Normalize an overlong provider tool call id deterministically"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A07 planner normalization fixture"
+
+[[fixture]]
+id = "p2-repair-schema-self-ref"
+path = "phase-2/repair/schema/self-ref.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a self-referential local schema graph without recursion"
+source = "synthetic"
+expected = "error"
+expected_error = "too_deep"
+contract_version = "1.1.0"
+notes = "R2-A07 local reference graph fixture"
+
+[[fixture]]
+id = "p2-repair-schema-mutual-ref"
+path = "phase-2/repair/schema/mutual-ref.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a mutually recursive local schema graph"
+source = "synthetic"
+expected = "error"
+expected_error = "too_deep"
+contract_version = "1.1.0"
+notes = "R2-A07 local reference graph fixture"
+
+[[fixture]]
+id = "p2-repair-schema-reference-depth-overflow"
+path = "phase-2/repair/schema/reference-depth-overflow.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a local reference chain beyond the configured expansion depth"
+source = "synthetic"
+expected = "error"
+expected_error = "too_deep"
+contract_version = "1.1.0"
+notes = "R2-A07 reference budget fixture"
+
+[[fixture]]
+id = "p2-repair-schema-escaped-pointer"
+path = "phase-2/repair/schema/escaped-pointer.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Resolve RFC 6901 escaped slash and tilde definition names"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A07 JSON Pointer fixture"
+
+[[fixture]]
+id = "p2-repair-schema-fractional-max-items"
+path = "phase-2/repair/schema/fractional-max-items.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a fractional array-size keyword"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_keyword_type"
+contract_version = "1.1.0"
+notes = "R2-A07 numeric keyword fixture"
+
+[[fixture]]
+id = "p2-repair-schema-negative-min-length"
+path = "phase-2/repair/schema/negative-min-length.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a negative string-length keyword"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_keyword_type"
+contract_version = "1.1.0"
+notes = "R2-A07 numeric keyword fixture"
+
+[[fixture]]
+id = "p2-repair-security-image-userinfo"
+path = "phase-2/repair/security/image-userinfo.toml"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject embedded image URL username and password information"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_identifier"
+contract_version = "1.1.0"
+notes = "R2-A07 URL userinfo fixture"
+
+[[fixture]]
+id = "p2-repair-security-redaction-canary"
+path = "phase-2/repair/security/redaction-canary.toml"
+contract_id = "philo/openai-chat-p2"
+purpose = "Prove rejected image URL values and query canaries are not retained"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "The success condition is value absence from error and Debug output"

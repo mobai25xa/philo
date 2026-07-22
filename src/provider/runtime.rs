@@ -7,10 +7,17 @@ use std::sync::Arc;
 
 use http::{HeaderMap, HeaderValue, Method, header};
 
-use crate::domain::{ModelId, ProtocolId, ProviderId};
+use crate::domain::{
+    DialectPolicy, GenerateRequest, HistoryPolicy, ModelId, PolicySource, ProtocolId, ProviderId,
+};
 use crate::error::LlmError;
+use crate::protocol::RequestFacts;
+use crate::transport::SseConfig;
 
 use super::auth::{AuthContext, AuthProvider, BearerAuth, ClientIdentity};
+use super::call_policy::{
+    CallPolicySnapshot, ProtocolKind, ResolvedCompat, ResolvedLimits, ResolvedTarget,
+};
 use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
@@ -23,6 +30,7 @@ use super::profile::ProviderProfile;
 pub struct ProviderRuntime {
     provider_id: ProviderId,
     protocol_id: ProtocolId,
+    protocol_kind: ProtocolKind,
     endpoint: ResolvedEndpoint,
     auth: Arc<dyn AuthProvider>,
     client_identity: ClientIdentity,
@@ -32,6 +40,9 @@ pub struct ProviderRuntime {
     model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     dialect: ProtocolDialect,
     transport: ProviderTransportOptions,
+    resource_limits: crate::domain::ResourceLimits,
+    sse: SseConfig,
+    max_http_error_body_bytes: usize,
     pipeline: HeaderPipeline,
 }
 
@@ -46,6 +57,19 @@ impl ProviderRuntime {
                 ));
             }
         }
+        let protocol_kind = match profile.dialect {
+            ProtocolDialect::OpenAiChatCompletions
+                if profile.protocol_id.as_str() == "openai-chat-completions" =>
+            {
+                ProtocolKind::OpenAiChatCompletions
+            }
+            ProtocolDialect::OpenAiChatCompletions => {
+                return Err(LlmError::Configuration(
+                    "OpenAI Chat dialect requires the openai-chat-completions protocol id"
+                        .to_owned(),
+                ));
+            }
+        };
         let endpoint = if profile.test_only {
             resolve_test_only(&profile.endpoint)?
         } else {
@@ -56,6 +80,7 @@ impl ProviderRuntime {
         Ok(Self {
             provider_id: profile.provider_id,
             protocol_id: profile.protocol_id,
+            protocol_kind,
             endpoint,
             auth,
             client_identity: profile.client_identity,
@@ -65,6 +90,9 @@ impl ProviderRuntime {
             model_capabilities: profile.model_capabilities,
             dialect: profile.dialect,
             transport: profile.transport,
+            resource_limits: profile.resource_limits,
+            sse: profile.sse,
+            max_http_error_body_bytes: profile.max_http_error_body_bytes,
             pipeline: HeaderPipeline::new(),
         })
     }
@@ -113,6 +141,60 @@ impl ProviderRuntime {
         self.transport
     }
 
+    /// Compiles the immutable, target-aware policy used for one logical call.
+    pub(crate) fn plan_policy_for(
+        &self,
+        request: &GenerateRequest,
+    ) -> Result<CallPolicySnapshot, LlmError> {
+        if request.model().provider() != &self.provider_id {
+            return Err(crate::error::ValidationError::new(
+                "model.provider",
+                crate::error::ValidationReason::ProviderMismatch,
+                "request provider does not match configured client runtime",
+            )
+            .into());
+        }
+
+        let capabilities = self.capabilities_for(request.model().model());
+        capabilities.validate()?;
+        let dialect = match self.dialect {
+            ProtocolDialect::OpenAiChatCompletions => DialectPolicy::official_openai(),
+        };
+        let limits = ResolvedLimits::compile(
+            self.resource_limits,
+            self.sse,
+            self.max_http_error_body_bytes,
+        )?;
+        let mut history = HistoryPolicy::official_openai();
+        history.max_messages = limits.request.max_messages;
+        history.max_total_text_bytes = limits.request.max_text_bytes;
+
+        Ok(CallPolicySnapshot {
+            target: ResolvedTarget {
+                provider_id: self.provider_id.clone(),
+                protocol_id: self.protocol_id.clone(),
+                protocol_kind: self.protocol_kind,
+                domain_model: request.model().model().clone(),
+                wire_model: request.model().model().clone(),
+            },
+            capabilities,
+            compat: ResolvedCompat { dialect },
+            history,
+            limits,
+            response_format: request.options().response_format().clone(),
+        })
+    }
+
+    pub(crate) fn policy_provenance_for(&self, model: &ModelId) -> (PolicySource, bool) {
+        let model_override_applied = self.model_capabilities.contains_key(model);
+        let source = if model_override_applied {
+            PolicySource::ModelProfile
+        } else {
+            PolicySource::ProviderProfile
+        };
+        (source, model_override_applied)
+    }
+
     /// Resolves a fresh header map and trace for one request.
     pub fn resolve_headers(
         &self,
@@ -142,6 +224,17 @@ impl ProviderRuntime {
             .iter()
             .map(|(name, value)| HeaderOperation::set(name.clone(), value.clone()))
             .collect();
+        self.resolve_headers_with_protocol_operations(protocol, model, request, None)
+    }
+
+    /// Resolves headers from typed protocol operations produced by a driver.
+    pub(crate) fn resolve_headers_with_protocol_operations(
+        &self,
+        protocol: Vec<HeaderOperation>,
+        model: Vec<HeaderOperation>,
+        request: &HeaderMap,
+        facts: Option<&RequestFacts>,
+    ) -> Result<ResolvedHeaders, LlmError> {
         let mut model_operations = self.model_headers.to_vec();
         model_operations.extend(model);
         let request_operations = request
@@ -149,7 +242,9 @@ impl ProviderRuntime {
             .map(|(name, value)| HeaderOperation::set(name.clone(), value.clone()))
             .collect();
         let auth = self.auth.operation(AuthContext::new(&self.endpoint))?;
-        self.pipeline.resolve(vec![
+        let _ = facts;
+        let resolved = self.pipeline.resolve_without_auth_assumption(vec![
+            HeaderLayer::new(HeaderSource::Transport, Vec::new()),
             HeaderLayer::new(HeaderSource::Protocol, protocol),
             HeaderLayer::new(HeaderSource::Provider, self.provider_headers.to_vec()),
             HeaderLayer::new(
@@ -157,9 +252,34 @@ impl ProviderRuntime {
                 vec![self.client_identity.operation()?],
             ),
             HeaderLayer::new(HeaderSource::Model, model_operations),
+            HeaderLayer::new(HeaderSource::DynamicPolicy, Vec::new()),
             HeaderLayer::new(HeaderSource::Request, request_operations),
             HeaderLayer::new(HeaderSource::Auth, vec![auth]),
-        ])
+        ])?;
+        if resolved.headers().get(header::CONTENT_TYPE)
+            != Some(&HeaderValue::from_static("application/json"))
+        {
+            return Err(crate::error::ValidationError::new(
+                "request_headers.content-type",
+                crate::error::ValidationReason::ProtectedHeader,
+                "OpenAI Chat protocol must set application/json",
+            )
+            .into());
+        }
+        self.auth.validate_final(resolved.headers())?;
+        Ok(resolved)
+    }
+
+    pub(crate) fn resolve_target_endpoint(
+        &self,
+        target: &ResolvedTarget,
+    ) -> Result<ResolvedEndpoint, LlmError> {
+        if target.provider_id != self.provider_id || target.protocol_id != self.protocol_id {
+            return Err(LlmError::Configuration(
+                "prepared call target does not match provider runtime".to_owned(),
+            ));
+        }
+        Ok(self.endpoint.clone())
     }
 }
 
@@ -175,6 +295,9 @@ impl fmt::Debug for ProviderRuntime {
             .field("model_capability_count", &self.model_capabilities.len())
             .field("dialect", &self.dialect)
             .field("transport", &self.transport)
+            .field("resource_limits", &self.resource_limits)
+            .field("sse", &self.sse)
+            .field("max_http_error_body_bytes", &self.max_http_error_body_bytes)
             .finish_non_exhaustive()
     }
 }

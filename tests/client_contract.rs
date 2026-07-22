@@ -10,9 +10,12 @@ use http::{HeaderMap, HeaderValue, StatusCode, header};
 use philo::provider::TestOnlyProfile;
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    AssistantEvent, FinishReason, GenerateRequest, GenerationOptions, LifecycleErrorCategory,
-    LifecycleEvent, LifecycleEventKind, LifecycleObserver, LlmClient, LlmError, Message, ModelRef,
-    ProviderRequestId, RequestControl, TraceId, Usage,
+    AssistantEvent, CapabilityStatus, ContentPart, FinishReason, GenerateRequest,
+    GenerationOptions, HistoryFailure, LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind,
+    LifecycleObserver, LlmClient, LlmError, Message, MessageRole, ModelCapabilityProfile, ModelId,
+    ModelRef, ProviderRequestId, RequestControl, ResponseFormat, SchemaFailure,
+    StructuredOutputFailure, StructuredSchema, ToolArguments, ToolCall, ToolCallId, ToolName,
+    ToolSchema, TraceId, Usage,
 };
 use serde_json::Value;
 use tokio::time::sleep;
@@ -147,6 +150,84 @@ async fn stream_and_complete_form_one_vertical_pipeline() {
         assert_eq!(body["messages"][0]["content"], PROMPT_CANARY);
         assert_eq!(body["stream"], true);
     }
+}
+
+#[tokio::test]
+async fn client_body_uses_planner_normalized_history() {
+    let mock =
+        MockTransport::scripted([success_exchange("req-normalized", "gen-normalized", "ok")]);
+    let client = LlmClient::new(runtime(), mock.clone());
+    let request = GenerateRequest::new(
+        ModelRef::new("test-only", "gpt-test").unwrap(),
+        vec![
+            Message::new(MessageRole::Assistant, Vec::new()),
+            Message::user("kept-user-message"),
+        ],
+    );
+
+    client.complete(request).await.unwrap();
+    let captured = mock.captured_requests();
+    assert_eq!(captured.len(), 1);
+    let body: Value = serde_json::from_slice(captured[0].body()).unwrap();
+    assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert_eq!(body["messages"][0]["content"], "kept-user-message");
+}
+
+#[tokio::test]
+async fn stream_and_complete_share_response_session_structured_failure() {
+    let runtime = TestOnlyProfile::localhost(ENDPOINT, API_KEY)
+        .unwrap()
+        .with_model_capabilities(
+            ModelCapabilityProfile::new(ModelId::new("gpt-test").unwrap())
+                .with_response_format_json_object(CapabilityStatus::Supported),
+        )
+        .build()
+        .unwrap();
+    let invalid = Bytes::from_static(
+        b"data: {\"id\":\"structured\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"not-json\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+    );
+    let mock = MockTransport::scripted([
+        MockExchange::response(MockResponse::new(
+            StatusCode::OK,
+            response_headers("req-structured-stream"),
+            vec![MockBodyItem::chunk(invalid.clone())],
+        )),
+        MockExchange::response(MockResponse::new(
+            StatusCode::OK,
+            response_headers("req-structured-complete"),
+            vec![MockBodyItem::chunk(invalid)],
+        )),
+    ]);
+    let client = LlmClient::new(runtime, mock);
+    let structured_request = || {
+        request()
+            .with_options(GenerationOptions::new().with_response_format(ResponseFormat::JsonObject))
+    };
+
+    let stream_results = client
+        .stream(structured_request())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(matches!(
+        stream_results.last(),
+        Some(Err(LlmError::StructuredOutput(error)))
+            if error.reason() == StructuredOutputFailure::InvalidJson
+    ));
+    assert!(
+        !stream_results
+            .iter()
+            .any(|event| matches!(event, Ok(AssistantEvent::Done { .. })))
+    );
+
+    let complete_error = client.complete(structured_request()).await.unwrap_err();
+    assert!(matches!(
+        complete_error,
+        LlmError::StructuredOutput(error)
+            if error.reason() == StructuredOutputFailure::InvalidJson
+    ));
 }
 
 #[tokio::test]
@@ -330,7 +411,7 @@ async fn overall_deadline_and_drop_reach_the_transport_body() {
     let client = LlmClient::new(runtime(), mock.clone());
     let timed = request().with_options(
         GenerationOptions::new()
-            .with_timeout(Duration::from_millis(20))
+            .with_timeout(Duration::from_millis(100))
             .unwrap(),
     );
     assert!(matches!(
@@ -570,4 +651,173 @@ async fn concurrent_calls_have_distinct_local_ids() {
         .collect();
     assert_eq!(ids.len(), COUNT);
     mock.assert_consumed();
+}
+
+fn runtime_with_model_capabilities(profile: ModelCapabilityProfile) -> philo::ProviderRuntime {
+    TestOnlyProfile::localhost(ENDPOINT, API_KEY)
+        .unwrap()
+        .with_model_capabilities(profile)
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn missing_tool_result_fails_in_planner_before_transport() {
+    let mock = MockTransport::scripted([success_exchange("unused", "unused", "unused")]);
+    let runtime = runtime_with_model_capabilities(
+        ModelCapabilityProfile::new(ModelId::new("gpt-test").unwrap())
+            .with_function_tools(CapabilityStatus::Supported),
+    );
+    let client = LlmClient::new(runtime, mock.clone());
+    let call = ToolCall::new(
+        ToolCallId::new("call_missing_result").unwrap(),
+        ToolName::new("lookup").unwrap(),
+        ToolArguments::from_raw_json("{}").unwrap(),
+    );
+    let request = GenerateRequest::new(
+        ModelRef::new("test-only", "gpt-test").unwrap(),
+        vec![
+            Message::user("lookup"),
+            Message::new(MessageRole::Assistant, vec![ContentPart::ToolCall(call)]),
+        ],
+    );
+    let error = client.stream(request).await.unwrap_err();
+    assert!(matches!(
+        error,
+        LlmError::History(ref error) if error.reason() == HistoryFailure::MissingToolResult
+    ));
+    assert!(mock.captured_requests().is_empty());
+    assert_eq!(mock.remaining_expectations(), 1);
+}
+
+#[test]
+fn cyclic_schema_is_unrepresentable_at_the_client_boundary() {
+    let mock = MockTransport::scripted([success_exchange("unused", "unused", "unused")]);
+    let _client = LlmClient::new(runtime(), mock.clone());
+    let fixture: Value = serde_json::from_slice(include_bytes!(
+        "fixtures/phase-2/repair/schema/self-ref.json"
+    ))
+    .unwrap();
+    let error = ToolSchema::new(fixture).unwrap_err();
+    assert_eq!(error.reason(), SchemaFailure::TooDeep);
+    assert!(mock.captured_requests().is_empty());
+    assert_eq!(mock.remaining_expectations(), 1);
+}
+
+#[tokio::test]
+async fn schema_violation_is_identical_for_stream_and_complete_and_never_emits_done() {
+    let fixture = Bytes::from_static(include_bytes!(
+        "fixtures/phase-2/repair/response/structured-schema-violation.sse"
+    ));
+    let mock = MockTransport::scripted([
+        MockExchange::response(MockResponse::new(
+            StatusCode::OK,
+            response_headers("req-schema-stream"),
+            vec![MockBodyItem::chunk(fixture.clone())],
+        )),
+        MockExchange::response(MockResponse::new(
+            StatusCode::OK,
+            response_headers("req-schema-complete"),
+            vec![MockBodyItem::chunk(fixture)],
+        )),
+    ]);
+    let runtime = runtime_with_model_capabilities(
+        ModelCapabilityProfile::new(ModelId::new("gpt-test").unwrap())
+            .with_response_format_json_schema(CapabilityStatus::Supported),
+    );
+    let client = LlmClient::new(runtime, mock);
+    let request = || {
+        let schema = ToolSchema::new(serde_json::json!({
+            "type": "object",
+            "properties": { "ok": { "type": "boolean" } },
+            "required": ["ok"],
+            "additionalProperties": false
+        }))
+        .unwrap();
+        let structured = StructuredSchema::new("answer", None, schema, true).unwrap();
+        GenerateRequest::new(
+            ModelRef::new("test-only", "gpt-test").unwrap(),
+            vec![Message::user("answer")],
+        )
+        .with_options(
+            GenerationOptions::new().with_response_format(ResponseFormat::JsonSchema(structured)),
+        )
+    };
+
+    let events = client
+        .stream(request())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(matches!(
+        events.last(),
+        Some(Err(LlmError::StructuredOutput(error)))
+            if error.reason() == StructuredOutputFailure::SchemaViolation
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Ok(AssistantEvent::Done { .. })))
+    );
+    let complete = client.complete(request()).await.unwrap_err();
+    assert!(matches!(
+        complete,
+        LlmError::StructuredOutput(error)
+            if error.reason() == StructuredOutputFailure::SchemaViolation
+    ));
+}
+
+#[tokio::test]
+async fn duplicate_tool_id_fails_in_response_session_for_stream_and_complete() {
+    let fixture = Bytes::from_static(include_bytes!(
+        "fixtures/phase-2/repair/response/duplicate-tool-id.sse"
+    ));
+    let mock = MockTransport::scripted([
+        MockExchange::response(MockResponse::new(
+            StatusCode::OK,
+            response_headers("req-duplicate-stream"),
+            vec![MockBodyItem::chunk(fixture.clone())],
+        )),
+        MockExchange::response(MockResponse::new(
+            StatusCode::OK,
+            response_headers("req-duplicate-complete"),
+            vec![MockBodyItem::chunk(fixture)],
+        )),
+    ]);
+    let client = LlmClient::new(runtime(), mock);
+
+    let events = client
+        .stream(request())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(matches!(events.last(), Some(Err(LlmError::Protocol(_)))));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        Ok(AssistantEvent::ToolCallEnd { .. } | AssistantEvent::Done { .. })
+    )));
+    assert!(matches!(
+        client.complete(request()).await,
+        Err(LlmError::Protocol(_))
+    ));
+}
+
+#[tokio::test]
+async fn empty_usage_is_ignored_through_complete() {
+    let fixture = Bytes::from_static(include_bytes!(
+        "fixtures/phase-2/repair/response/empty-usage.sse"
+    ));
+    let mock = MockTransport::scripted([MockExchange::response(MockResponse::new(
+        StatusCode::OK,
+        response_headers("req-empty-usage"),
+        vec![MockBodyItem::chunk(fixture)],
+    ))]);
+    let message = LlmClient::new(runtime(), mock)
+        .complete(request())
+        .await
+        .unwrap();
+    assert!(message.usage().is_none());
+    assert!(message.usage_details().is_none());
 }

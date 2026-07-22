@@ -7,7 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use bytes::Bytes;
 use futures_util::{StreamExt as _, stream};
 use philo::{
-    BodySummary, ByteStream, PHASE_ONE_CONTRACT_ID, PHASE_ONE_CONTRACT_VERSION, SseDecoder,
+    BodySummary, ByteStream, PHASE_ONE_CONTRACT_ID, PHASE_ONE_CONTRACT_VERSION,
+    PHASE_TWO_CONTRACT_ID, PHASE_TWO_CONTRACT_VERSION, SseDecoder,
 };
 use serde::Deserialize;
 
@@ -25,6 +26,7 @@ struct FixtureEntry {
     path: String,
     purpose: String,
     source: String,
+    contract_id: Option<String>,
     source_url: Option<String>,
     captured_at: Option<String>,
     sanitized_at: Option<String>,
@@ -66,7 +68,7 @@ fn collect_files(root: &Path, directory: &Path, output: &mut BTreeSet<String>) {
 fn every_fixture_is_uniquely_described_and_present() {
     let root = fixture_root();
     let manifest = read_manifest();
-    assert_eq!(manifest.schema_version, 1);
+    assert_eq!(manifest.schema_version, 2);
     assert_eq!(manifest.contract_id, PHASE_ONE_CONTRACT_ID);
     assert_eq!(manifest.contract_version, PHASE_ONE_CONTRACT_VERSION);
 
@@ -85,7 +87,13 @@ fn every_fixture_is_uniquely_described_and_present() {
         );
         assert!(!fixture.purpose.trim().is_empty());
         assert!(!fixture.notes.trim().is_empty());
-        assert_eq!(fixture.contract_version, PHASE_ONE_CONTRACT_VERSION);
+        if fixture.path.starts_with("phase-2/repair/") {
+            assert_eq!(fixture.contract_id.as_deref(), Some(PHASE_TWO_CONTRACT_ID));
+            assert_eq!(fixture.contract_version, PHASE_TWO_CONTRACT_VERSION);
+        } else {
+            assert!(fixture.contract_id.is_none());
+            assert_eq!(fixture.contract_version, PHASE_ONE_CONTRACT_VERSION);
+        }
         assert!(matches!(
             fixture.source.as_str(),
             "synthetic" | "official-doc-example" | "sanitized-observation"

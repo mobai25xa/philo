@@ -19,9 +19,7 @@ use super::{
     ContentIndex, ContentPart, ModelRef, RefusalContent, ThinkingContent, ToolCall, ToolCallId,
     WireToolIndex,
 };
-use crate::error::{
-    LlmError, ProtocolError, StructuredOutputError, StructuredOutputFailure, TruncatedStreamError,
-};
+use crate::error::{LlmError, ProtocolError, TruncatedStreamError};
 
 /// Token accounting supplied by a provider.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,89 +297,20 @@ fn validate_structured_output(
     message: &AssistantMessage,
     response_format: &ResponseFormat,
 ) -> Result<Option<serde_json::Value>, LlmError> {
-    match response_format {
-        ResponseFormat::Text => Ok(None),
-        ResponseFormat::JsonObject | ResponseFormat::JsonSchema(_) => {
-            let has_tool_call = message
-                .content
-                .iter()
-                .any(|part| matches!(part, ContentPart::ToolCall(_)));
-            let has_refusal = message
-                .content
-                .iter()
-                .any(|part| matches!(part, ContentPart::Refusal(_)));
-            if matches!(message.finish_reason, FinishReason::ToolCalls) || has_tool_call {
-                return Ok(None);
-            }
-            if has_refusal {
-                return Ok(None);
-            }
-            if matches!(message.finish_reason, FinishReason::Length) {
-                return Err(StructuredOutputError::new(
-                    "structured_output",
-                    StructuredOutputFailure::Truncated,
-                    None,
-                    "structured output was truncated before completion",
-                )
-                .into());
-            }
-            if matches!(
-                message.finish_reason,
-                FinishReason::ContentFilter | FinishReason::Unknown(_)
-            ) {
-                return Err(ProtocolError::new(
-                    "structured output is unavailable for a non-success finish reason",
-                )
-                .into());
-            }
-            if !matches!(message.finish_reason, FinishReason::Stop) {
-                return Err(ProtocolError::new(
-                    "structured output requires a successful text finish",
-                )
-                .into());
-            }
-
-            let parsed =
-                serde_json::from_str::<serde_json::Value>(message.text()).map_err(|_| {
-                    StructuredOutputError::new(
-                        "structured_output",
-                        StructuredOutputFailure::InvalidJson,
-                        None,
-                        "assistant text is not valid JSON",
-                    )
-                })?;
-
-            match response_format {
-                ResponseFormat::JsonObject => {
-                    if !parsed.is_object() {
-                        return Err(StructuredOutputError::new(
-                            "structured_output",
-                            StructuredOutputFailure::SchemaViolation,
-                            Some("#".to_owned()),
-                            "json_object response must be a JSON object",
-                        )
-                        .into());
-                    }
-                    Ok(Some(parsed))
-                }
-                ResponseFormat::JsonSchema(schema) => {
-                    schema
-                        .schema()
-                        .validate_instance(&parsed, SchemaLimits::official())
-                        .map_err(|error| {
-                            StructuredOutputError::new(
-                                "structured_output",
-                                StructuredOutputFailure::SchemaViolation,
-                                error.path().map(str::to_owned),
-                                "assistant text failed the requested response schema",
-                            )
-                        })?;
-                    Ok(Some(parsed))
-                }
-                ResponseFormat::Text => Ok(None),
-            }
-        }
-    }
+    super::structured::validate_structured_response(
+        response_format,
+        &message.finish_reason,
+        message.text(),
+        message
+            .content
+            .iter()
+            .any(|part| matches!(part, ContentPart::ToolCall(_))),
+        message
+            .content
+            .iter()
+            .any(|part| matches!(part, ContentPart::Refusal(_))),
+        SchemaLimits::official(),
+    )
 }
 
 enum OpenBlock {

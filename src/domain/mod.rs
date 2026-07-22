@@ -32,11 +32,14 @@ pub use ids::{
     ContentIndex, GenerationId, LocalRequestId, ModelId, ModelRef, ProtocolId, ProviderId,
     ProviderRequestId, ToolCallId, ToolName, TraceId, WireToolIndex,
 };
-pub use limits::ResourceLimits;
+pub use limits::{ResourceLimits, ResourceLimitsBuilder};
 pub use message::{Message, MessageRole, ToolResultMessage};
 pub use request::{
     CapabilitySet, CapabilityStatus, GenerateRequest, GenerationOptions, LlmRequest,
     ReasoningEffort, ReasoningEffortSupport, RequestMetadata, RequestTimeout, ThinkingRequest,
+};
+pub(crate) use request::{
+    RequestValidationLimits, validate_planned_request, validate_request_shape,
 };
 pub use schema::{SchemaLimits, ToolSchema};
 pub use structured::{ResponseFormat, StructuredSchema};

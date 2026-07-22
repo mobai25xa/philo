@@ -1,0 +1,6 @@
+{
+  "original_id": "call/with spaces/and/a/provider/id/that/is/longer/than/forty/bytes",
+  "tool_name": "lookup",
+  "expected_max_bytes": 40,
+  "expected_charset": "[A-Za-z0-9_-]"
+}

@@ -1,0 +1,11 @@
+{
+  "$ref": "#/$defs/node",
+  "$defs": {
+    "node": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/node" }
+      ]
+    }
+  }
+}

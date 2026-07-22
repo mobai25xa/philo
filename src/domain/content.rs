@@ -395,6 +395,13 @@ fn validate_https_image_url(url: &Url) -> Result<(), ValidationError> {
             "image URL must use the https scheme",
         ));
     }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(ValidationError::new(
+            "image.url",
+            ValidationReason::InvalidIdentifier,
+            "image URL must not contain embedded user information",
+        ));
+    }
     let encoded = url.as_str();
     if encoded.len() > ResourceLimits::official().max_image_url_bytes {
         return Err(ValidationError::new(

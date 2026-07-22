@@ -1,0 +1,2 @@
+data: {"id":"repair-tool-duplicate","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"duplicate","type":"function","function":{"name":"one","arguments":"{}"}},{"index":1,"id":"duplicate","type":"function","function":{"name":"two","arguments":"{}"}}]},"finish_reason":null}]}
+

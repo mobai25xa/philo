@@ -37,9 +37,12 @@ fn execute_weather(call: &ToolCall) -> ExampleResult<String> {
         .and_then(|value| value.as_str())
         .ok_or("validated call missing city")?;
     // Application policy belongs here: permission checks, allow-lists, redaction.
-    Ok(format!(
-        r#"{{"city":"{city}","temp_c":20,"source":"synthetic"}}"#
-    ))
+    Ok(json!({
+        "city": city,
+        "temp_c": 20,
+        "source": "synthetic",
+    })
+    .to_string())
 }
 
 fn offline_demo(tool: ToolDefinition) -> ExampleResult {
@@ -128,4 +131,21 @@ async fn main() -> ExampleResult {
     let final_message = client.complete(follow_up).await?;
     println!("{}", final_message.text());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weather_result_escapes_model_controlled_city_text() {
+        let call = ToolCall::new(
+            ToolCallId::new("call_escape").unwrap(),
+            ToolName::new("get_weather").unwrap(),
+            ToolArguments::from_raw_json(r#"{"city":"quote\" slash\\ newline\n"}"#).unwrap(),
+        );
+        let payload = execute_weather(&call).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed["city"], "quote\" slash\\ newline\n");
+    }
 }

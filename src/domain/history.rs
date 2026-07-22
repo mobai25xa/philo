@@ -326,7 +326,6 @@ pub fn normalize_history(
     let mut output = Vec::with_capacity(messages.len());
     let mut diagnostics = DiagnosticCounter::default();
     let mut id_mappings = Vec::new();
-    let mut occupied_ids = BTreeSet::new();
     let mut total_text_bytes = 0usize;
     let mut index = 0usize;
 
@@ -396,7 +395,7 @@ pub fn normalize_history(
                     policy,
                     capabilities,
                     &mut diagnostics,
-                    &mut occupied_ids,
+                    &mut BTreeSet::new(),
                     &mut total_text_bytes,
                     policy.max_total_text_bytes,
                 )?;

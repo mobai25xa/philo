@@ -33,7 +33,9 @@ error bodies are read to a fixed limit and converted to a redacted summary.
 ## Smoke Policy
 
 Official smoke execution is opt-in through `.github/workflows/openai-smoke.yml`.
-It performs one bounded text request only when `OPENAI_SMOKE_ENABLED=true`,
-`OPENAI_SMOKE_MODEL` is explicit, and `OPENAI_API_KEY` is supplied by the environment
-or CI secret store. Smoke records must never include prompt/output text, the API key,
-or ProviderRequestId/GenerationId values.
+It runs the sequential phase-two capability suite only when the exact commit, model,
+and reviewed capability set are explicit and `OPENAI_API_KEY` is supplied by the
+environment or protected CI secret store. The hosted workflow must use the
+`official-openai-smoke` protected environment and must never run secret-bearing code
+from an unreviewed commit. Smoke records must never include prompt/output text, the
+API key, image URLs, or ProviderRequestId/GenerationId values.

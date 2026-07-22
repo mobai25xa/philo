@@ -1,6 +1,7 @@
 //! Provider profiles, endpoint policy, header resolution, authentication, and runtime.
 
 pub mod auth;
+pub(crate) mod call_policy;
 pub mod capability;
 pub mod endpoint;
 pub mod headers;
