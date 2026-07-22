@@ -1,0 +1,13 @@
+{
+  "fixture_id": "schema-unsupported-one-of",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "unsupported_keyword",
+  "schema": {
+    "type": "object",
+    "oneOf": []
+  },
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "oneOf is outside the frozen P2 keyword subset"
+}

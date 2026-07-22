@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 contract_id = "philo/openai-chat-p1"
 contract_version = "1.0.0"
 
@@ -94,14 +94,24 @@ contract_version = "1.0.0"
 notes = "Returns bounded UnknownFinishReason"
 
 [[fixture]]
-id = "response-tool-finish"
-path = "responses/openai_chat/tool-finish.sse"
-purpose = "Reject phase-one tool response semantics"
+id = "response-content-filter"
+path = "responses/openai_chat/content-filter.sse"
+purpose = "Fail closed on content_filter finish reason without success Done"
 source = "synthetic"
 expected = "error"
-expected_error = "unsupported_response_semantics"
+expected_error = "protocol"
 contract_version = "1.0.0"
-notes = "Returns UnsupportedResponseSemantics"
+notes = "Official OpenAI profile maps content_filter to a typed protocol error"
+
+[[fixture]]
+id = "response-tool-finish"
+path = "responses/openai_chat/tool-finish.sse"
+purpose = "Reject incomplete tool-call finish without name or arguments"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "P2 parses tool_calls deltas but still fail-closes incomplete ToolCallEnd"
 
 [[fixture]]
 id = "response-nonzero-choice"
@@ -258,3 +268,706 @@ source = "synthetic"
 expected = "success"
 contract_version = "1.0.0"
 notes = "Not a supported production compatible-endpoint profile"
+
+[[fixture]]
+id = "p2-request-tool-minimal-auto"
+path = "phase-2/requests/tools/tool-minimal-auto.json"
+purpose = "Encode one function tool with default auto choice omitted"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Phase-two tool request golden; auto is omitted"
+
+[[fixture]]
+id = "p2-request-tool-none"
+path = "phase-2/requests/tools/tool-none.json"
+purpose = "Encode tool_choice none with a declared tool"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Phase-two tool request golden"
+
+[[fixture]]
+id = "p2-request-tool-required"
+path = "phase-2/requests/tools/tool-required.json"
+purpose = "Encode tool_choice required"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Phase-two tool request golden"
+
+[[fixture]]
+id = "p2-request-tool-specific"
+path = "phase-2/requests/tools/tool-specific.json"
+purpose = "Encode nested function-specific tool_choice"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Phase-two tool request golden"
+
+[[fixture]]
+id = "p2-request-tool-strict"
+path = "phase-2/requests/tools/tool-strict.json"
+purpose = "Encode strict function tools with description"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "strict is nested under function"
+
+[[fixture]]
+id = "p2-request-parallel-tools-enabled"
+path = "phase-2/requests/tools/parallel-tools-enabled.json"
+purpose = "Encode parallel_tool_calls true for multiple tools"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Phase-two tool request golden"
+
+[[fixture]]
+id = "p2-request-tool-description-omitted"
+path = "phase-2/requests/tools/tool-description-omitted.json"
+purpose = "Omit function.description when the domain value is None"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Phase-two tool request golden"
+
+[[fixture]]
+id = "p2-request-tool-schema-nested"
+path = "phase-2/requests/tools/tool-schema-nested.json"
+purpose = "Preserve nested object schema structure without rewriting"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Phase-two tool request golden"
+
+[[fixture]]
+id = "p2-request-text-one-url-image"
+path = "phase-2/requests/multimodal/text-one-url-image.json"
+purpose = "Encode one text part and one HTTPS image URL"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "detail Auto is omitted on the wire"
+
+[[fixture]]
+id = "p2-request-text-inline-image"
+path = "phase-2/requests/multimodal/text-inline-image.json"
+purpose = "Encode inline PNG bytes as a data URL with low detail"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Base64 encoding happens only at the wire boundary"
+
+[[fixture]]
+id = "p2-request-text-image-interleaved"
+path = "phase-2/requests/multimodal/text-image-interleaved.json"
+purpose = "Preserve interleaved text and image content order"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Adapter must not reorder content parts"
+
+[[fixture]]
+id = "p2-request-reasoning-effort-high"
+path = "phase-2/requests/thinking/reasoning-effort-high.json"
+purpose = "Encode explicit high reasoning effort when supported"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "ProviderDefault remains omitted; Disabled maps to none"
+
+[[fixture]]
+id = "p2-failure-duplicate-tool-name"
+path = "phase-2/requests/tools/failures/duplicate-tool-name.json"
+purpose = "Reject duplicate tool names before request encode"
+source = "synthetic"
+expected = "error"
+expected_error = "duplicate_tool_name"
+contract_version = "1.0.0"
+notes = "Covered by validate_tool_options and request.validate"
+
+[[fixture]]
+id = "p2-failure-specific-tool-missing"
+path = "phase-2/requests/tools/failures/specific-tool-missing.json"
+purpose = "Reject specific tool choice for an undeclared tool"
+source = "synthetic"
+expected = "error"
+expected_error = "specific_tool_missing"
+contract_version = "1.0.0"
+notes = "Covered by validate_tool_options"
+
+[[fixture]]
+id = "p2-failure-strict-capability-unknown"
+path = "phase-2/requests/tools/failures/strict-capability-unknown.json"
+purpose = "Fail closed when strict tools capability is unknown"
+source = "synthetic"
+expected = "error"
+expected_error = "strict_capability_unknown"
+contract_version = "1.0.0"
+notes = "Unknown is treated like Unsupported for send-time checks"
+
+[[fixture]]
+id = "p2-failure-parallel-unsupported"
+path = "phase-2/requests/tools/failures/parallel-unsupported.json"
+purpose = "Fail closed when parallel tool calls are unsupported"
+source = "synthetic"
+expected = "error"
+expected_error = "parallel_unsupported"
+contract_version = "1.0.0"
+notes = "Covered by validate_tool_options capability gate"
+
+[[fixture]]
+id = "p2-failure-invalid-schema"
+path = "phase-2/requests/tools/failures/invalid-schema.json"
+purpose = "Reject non-object schema documents"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_schema"
+contract_version = "1.0.0"
+notes = "ToolSchema constructor fails before ToolDefinition construction"
+
+[[fixture]]
+id = "p2-failure-empty-tool-list-required"
+path = "phase-2/requests/tools/failures/empty-tool-list-required.json"
+purpose = "Reject required tool choice with empty tools list"
+source = "synthetic"
+expected = "error"
+expected_error = "empty_tool_list_required"
+contract_version = "1.0.0"
+notes = "Covered by validate_tool_options EmptyToolList"
+
+[[fixture]]
+id = "p2-schema-valid-object-required"
+path = "phase-2/schemas/valid/object-required.json"
+purpose = "Compile a minimal strict-compatible object schema"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Used by schema field-table tests"
+
+[[fixture]]
+id = "p2-schema-invalid-not-an-object"
+path = "phase-2/schemas/invalid/not-an-object.json"
+purpose = "Reject boolean schema roots"
+source = "synthetic"
+expected = "error"
+expected_error = "not_an_object"
+contract_version = "1.0.0"
+notes = "SchemaFailure::NotAnObject"
+
+[[fixture]]
+id = "p2-schema-unsupported-one-of"
+path = "phase-2/schemas/unsupported-keywords/one-of.json"
+purpose = "Reject oneOf as an unsupported frozen-keyword subset item"
+source = "synthetic"
+expected = "error"
+expected_error = "unsupported_keyword"
+contract_version = "1.0.0"
+notes = "SchemaFailure::UnsupportedKeyword"
+
+[[fixture]]
+id = "p2-stream-tool-single-call"
+path = "phase-2/streams/tool-calls/single-call.sse"
+purpose = "Decode a complete single function tool call stream"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Emits ToolCallStart/Delta/End and FinishReason::ToolCalls"
+
+[[fixture]]
+id = "p2-stream-tool-name-split"
+path = "phase-2/streams/tool-calls/name-split.sse"
+purpose = "Reassemble a tool name split across deltas"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Name fragments concatenate in order"
+
+[[fixture]]
+id = "p2-stream-tool-arguments-char-split"
+path = "phase-2/streams/tool-calls/arguments-char-split.sse"
+purpose = "Reassemble JSON arguments split across character deltas"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Arguments are string-appended, not JSON-merged"
+
+[[fixture]]
+id = "p2-stream-tool-parallel-interleaved"
+path = "phase-2/streams/tool-calls/parallel-interleaved.sse"
+purpose = "Preserve first-seen domain order for parallel tool calls"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Wire index 0 then 1 becomes ContentIndex 0 then 1"
+
+[[fixture]]
+id = "p2-stream-tool-id-first-chunk-only"
+path = "phase-2/streams/tool-calls/id-first-chunk-only.sse"
+purpose = "Retain a tool call ID supplied only on the first chunk"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Later deltas omit id without conflict"
+
+[[fixture]]
+id = "p2-stream-tool-usage-after-tool"
+path = "phase-2/streams/tool-calls/usage-after-tool.sse"
+purpose = "Merge usage-only chunk after tool_calls finish"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Usage arrives between finish and DONE"
+
+[[fixture]]
+id = "p2-stream-tool-incomplete-arguments"
+path = "phase-2/streams/tool-calls/incomplete-arguments.sse"
+purpose = "Reject incomplete JSON arguments at tool_calls finish"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "No ToolCallEnd is emitted"
+
+[[fixture]]
+id = "p2-stream-tool-conflicting-id"
+path = "phase-2/streams/tool-calls/conflicting-id.sse"
+purpose = "Reject conflicting IDs for one wire tool index"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "Identity conflict is typed fail-closed"
+
+[[fixture]]
+id = "p2-stream-tool-duplicate-finish"
+path = "phase-2/streams/tool-calls/duplicate-finish.sse"
+purpose = "Reject duplicate finish reasons on a tool stream"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "Duplicate finish remains protocol state error"
+
+[[fixture]]
+id = "p2-stream-tool-done-before-call-end"
+path = "phase-2/streams/tool-calls/done-before-call-end.sse"
+purpose = "Reject DONE while tool call accumulators remain open"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "DONE before ToolCallEnd cannot succeed"
+
+[[fixture]]
+id = "p2-stream-tool-oversized-arguments"
+path = "phase-2/streams/tool-calls/oversized-arguments.sse"
+purpose = "Reject tool arguments that exceed stream resource limits"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "Covered with reduced ResourceLimits in unit tests"
+
+[[fixture]]
+id = "p2-request-json-object"
+path = "phase-2/requests/structured-output/json-object.json"
+purpose = "Encode JSON object response_format"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "response_format.type is json_object"
+
+[[fixture]]
+id = "p2-request-json-schema-strict"
+path = "phase-2/requests/structured-output/json-schema-strict.json"
+purpose = "Encode strict JSON Schema response_format"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "json_schema.strict is true under response_format"
+
+[[fixture]]
+id = "p2-stream-usage-only-after-stop"
+path = "phase-2/streams/usage/usage-only-after-stop.sse"
+purpose = "Merge usage-only chunk after stop finish"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Usage-only choices empty chunk after finish"
+
+[[fixture]]
+id = "p2-stream-unknown-finish-fail-closed"
+path = "phase-2/streams/finish/unknown-finish-fail-closed.sse"
+purpose = "Fail closed on unknown finish reason"
+source = "synthetic"
+expected = "error"
+expected_error = "unknown_finish_reason"
+contract_version = "1.0.0"
+notes = "Unknown finish never emits successful Done"
+
+[[fixture]]
+id = "p2-stream-tool-arguments-invalid-json"
+path = "phase-2/streams/malformed/tool-arguments-invalid-json.sse"
+purpose = "Reject invalid JSON tool arguments at finish"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "No ToolCallEnd when arguments are not complete JSON"
+
+[[fixture]]
+id = "p2-stream-official-reasoning-content-ignored"
+path = "phase-2/streams/thinking/official-reasoning-content-ignored.sse"
+purpose = "Ignore reasoning_content wire field for Official Chat"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Official Chat maps reasoning_tokens in usage only; no Thinking events"
+
+[[fixture]]
+id = "p2-history-tool-pairing-success"
+path = "phase-2/history/tool-pairing/success-call-result.json"
+purpose = "Document successful tool call and result pairing"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Consumed by phase2 history contract tests"
+
+[[fixture]]
+id = "p2-history-tool-pairing-missing-result"
+path = "phase-2/history/tool-pairing/missing-result.json"
+purpose = "Document missing tool result rejection"
+source = "synthetic"
+expected = "error"
+expected_error = "missing_tool_result"
+contract_version = "1.0.0"
+notes = "Official MissingToolResultPolicy is Reject"
+
+[[fixture]]
+id = "p2-history-tool-pairing-duplicate-result"
+path = "phase-2/history/tool-pairing/duplicate-result.json"
+purpose = "Document duplicate tool result rejection"
+source = "synthetic"
+expected = "error"
+expected_error = "duplicate_tool_result"
+contract_version = "1.0.0"
+notes = "Each call id accepts one result"
+
+[[fixture]]
+id = "p2-history-replay-same-source-opaque"
+path = "phase-2/history/replay/same-source-opaque.json"
+purpose = "Synthetic P3 boundary for same-source opaque retention"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "protocol synthetic-p3-boundary; not Official OpenAI conformance"
+
+[[fixture]]
+id = "p2-history-replay-cross-model-opaque-drop"
+path = "phase-2/history/replay/cross-model-opaque-drop.json"
+purpose = "Synthetic P3 boundary for cross-model opaque drop"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "protocol synthetic-p3-boundary; not Official OpenAI conformance"
+
+[[fixture]]
+id = "p2-history-empty-assistant-removed"
+path = "phase-2/history/role-normalization/empty-assistant-removed.json"
+purpose = "Document empty assistant removal diagnostic"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "RemovedEmptyAssistant diagnostic code"
+
+[[fixture]]
+id = "p2-history-tool-result-image-rejected"
+path = "phase-2/history/multimodal/tool-result-image-rejected.json"
+purpose = "Document tool result image reject policy"
+source = "synthetic"
+expected = "error"
+expected_error = "unsupported_content"
+contract_version = "1.0.0"
+notes = "Official OpenAI P2 rejects tool result images"
+
+[[fixture]]
+id = "p2-security-argument-canary"
+path = "phase-2/security/sensitive-arguments/argument-canary.json"
+purpose = "Prove sensitive tool argument canaries never leak"
+source = "synthetic"
+expected = "error"
+expected_error = "schema_violation"
+contract_version = "1.0.0"
+notes = "Canary text is synthetic test input only"
+
+[[fixture]]
+id = "p2-security-image-url-query-canary"
+path = "phase-2/security/image-metadata/url-query-canary.json"
+purpose = "Prove image URL query secrets never enter Debug"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Canary is synthetic"
+
+[[fixture]]
+id = "p2-security-opaque-thinking-canary"
+path = "phase-2/security/opaque-thinking/opaque-canary.json"
+purpose = "Prove thinking visible and opaque canaries stay redacted"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "protocol synthetic-p3-boundary"
+
+[[fixture]]
+id = "p2-schema-valid-nullable-anyof"
+path = "phase-2/schemas/valid/nullable-anyof.json"
+purpose = "Compile nullable anyOf branches"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Nullable unions use anyOf with type null"
+
+[[fixture]]
+id = "p2-schema-valid-array-enum"
+path = "phase-2/schemas/valid/array-enum.json"
+purpose = "Compile array items with enum"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Array and enum keywords are supported"
+
+[[fixture]]
+id = "p2-schema-invalid-missing-required"
+path = "phase-2/schemas/invalid/missing-required-type.json"
+purpose = "Argument validation fails for missing required fields"
+source = "synthetic"
+expected = "error"
+expected_error = "schema_violation"
+contract_version = "1.0.0"
+notes = "Used by validation path tests"
+
+[[fixture]]
+id = "p2-schema-unsupported-remote-ref"
+path = "phase-2/schemas/unsupported-keywords/remote-ref.json"
+purpose = "Reject remote schema references"
+source = "synthetic"
+expected = "error"
+expected_error = "remote_reference"
+contract_version = "1.0.0"
+notes = "No network access during schema compile"
+
+[[fixture]]
+id = "p2-repair-response-structured-valid"
+path = "phase-2/repair/response/structured-valid.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Validate structured output before Done"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A05 ResponseSession fixture"
+
+[[fixture]]
+id = "p2-repair-response-structured-invalid-json"
+path = "phase-2/repair/response/structured-invalid-json.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject invalid structured JSON before Done"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_json"
+contract_version = "1.1.0"
+notes = "R2-A05 ResponseSession fixture"
+
+[[fixture]]
+id = "p2-repair-response-structured-schema-violation"
+path = "phase-2/repair/response/structured-schema-violation.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject structured schema violations before Done"
+source = "synthetic"
+expected = "error"
+expected_error = "schema_violation"
+contract_version = "1.1.0"
+notes = "R2-A05 ResponseSession fixture"
+
+[[fixture]]
+id = "p2-repair-response-structured-over-limit"
+path = "phase-2/repair/response/structured-over-limit.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject structured response byte overflow"
+source = "synthetic"
+expected = "error"
+expected_error = "structured_too_large"
+contract_version = "1.1.0"
+notes = "R2-A05 ResponseSession fixture"
+
+[[fixture]]
+id = "p2-repair-response-duplicate-tool-id"
+path = "phase-2/repair/response/duplicate-tool-id.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject duplicate provider tool call IDs"
+source = "synthetic"
+expected = "error"
+expected_error = "duplicate_tool_call_id"
+contract_version = "1.1.0"
+notes = "R2-A05 raw state fixture"
+
+[[fixture]]
+id = "p2-repair-response-late-duplicate-tool-id"
+path = "phase-2/repair/response/late-duplicate-tool-id.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject late duplicate provider tool call IDs"
+source = "synthetic"
+expected = "error"
+expected_error = "duplicate_tool_call_id"
+contract_version = "1.1.0"
+notes = "R2-A05 raw state fixture"
+
+[[fixture]]
+id = "p2-repair-response-empty-usage"
+path = "phase-2/repair/response/empty-usage.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Ignore empty usage without creating content"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A05 usage fixture"
+
+[[fixture]]
+id = "p2-repair-response-data-after-done"
+path = "phase-2/repair/response/data-after-done.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject data after the Done marker"
+source = "synthetic"
+expected = "error"
+expected_error = "data_after_done"
+contract_version = "1.1.0"
+notes = "R2-A05 terminal fixture"
+
+[[fixture]]
+id = "p2-repair-response-truncated-before-done"
+path = "phase-2/repair/response/truncated-before-done.sse"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject EOF before the Done marker"
+source = "synthetic"
+expected = "error"
+expected_error = "truncated_stream"
+contract_version = "1.1.0"
+notes = "R2-A05 terminal fixture"
+
+[[fixture]]
+id = "p2-repair-planner-missing-tool-result"
+path = "phase-2/repair/planner/missing-tool-result.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a planned assistant tool-call turn without its result"
+source = "synthetic"
+expected = "error"
+expected_error = "missing_tool_result"
+contract_version = "1.1.0"
+notes = "R2-A07 planner boundary; not an Official conformance capture"
+
+[[fixture]]
+id = "p2-repair-planner-repeated-id-across-turns"
+path = "phase-2/repair/planner/repeated-id-across-turns.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Allow a completed later assistant turn to reuse a provider tool call id"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A07 assistant-turn identity scope"
+
+[[fixture]]
+id = "p2-repair-planner-normalized-tool-id"
+path = "phase-2/repair/planner/normalized-tool-id.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Normalize an overlong provider tool call id deterministically"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A07 planner normalization fixture"
+
+[[fixture]]
+id = "p2-repair-schema-self-ref"
+path = "phase-2/repair/schema/self-ref.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a self-referential local schema graph without recursion"
+source = "synthetic"
+expected = "error"
+expected_error = "too_deep"
+contract_version = "1.1.0"
+notes = "R2-A07 local reference graph fixture"
+
+[[fixture]]
+id = "p2-repair-schema-mutual-ref"
+path = "phase-2/repair/schema/mutual-ref.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a mutually recursive local schema graph"
+source = "synthetic"
+expected = "error"
+expected_error = "too_deep"
+contract_version = "1.1.0"
+notes = "R2-A07 local reference graph fixture"
+
+[[fixture]]
+id = "p2-repair-schema-reference-depth-overflow"
+path = "phase-2/repair/schema/reference-depth-overflow.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a local reference chain beyond the configured expansion depth"
+source = "synthetic"
+expected = "error"
+expected_error = "too_deep"
+contract_version = "1.1.0"
+notes = "R2-A07 reference budget fixture"
+
+[[fixture]]
+id = "p2-repair-schema-escaped-pointer"
+path = "phase-2/repair/schema/escaped-pointer.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Resolve RFC 6901 escaped slash and tilde definition names"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "R2-A07 JSON Pointer fixture"
+
+[[fixture]]
+id = "p2-repair-schema-fractional-max-items"
+path = "phase-2/repair/schema/fractional-max-items.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a fractional array-size keyword"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_keyword_type"
+contract_version = "1.1.0"
+notes = "R2-A07 numeric keyword fixture"
+
+[[fixture]]
+id = "p2-repair-schema-negative-min-length"
+path = "phase-2/repair/schema/negative-min-length.json"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject a negative string-length keyword"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_keyword_type"
+contract_version = "1.1.0"
+notes = "R2-A07 numeric keyword fixture"
+
+[[fixture]]
+id = "p2-repair-security-image-userinfo"
+path = "phase-2/repair/security/image-userinfo.toml"
+contract_id = "philo/openai-chat-p2"
+purpose = "Reject embedded image URL username and password information"
+source = "synthetic"
+expected = "error"
+expected_error = "invalid_identifier"
+contract_version = "1.1.0"
+notes = "R2-A07 URL userinfo fixture"
+
+[[fixture]]
+id = "p2-repair-security-redaction-canary"
+path = "phase-2/repair/security/redaction-canary.toml"
+contract_id = "philo/openai-chat-p2"
+purpose = "Prove rejected image URL values and query canaries are not retained"
+source = "synthetic"
+expected = "success"
+contract_version = "1.1.0"
+notes = "The success condition is value absence from error and Debug output"

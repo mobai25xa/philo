@@ -1,0 +1,4 @@
+url = "https://repair-user:repair-password@example.com/image.png?token=repair-redaction-canary"
+canary = "repair-redaction-canary"
+expected = "absent_from_error_and_debug"
+source = "synthetic"

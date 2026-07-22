@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-ignore-thinking","model":"gpt-test","choices":[{"index":0,"delta":{"content":"final","reasoning_content":"should-not-become-thinking"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-ignore-thinking","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-ignore-thinking","model":"gpt-test","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3,"completion_tokens_details":{"reasoning_tokens":1}}}
+
+data: [DONE]
+

@@ -1,0 +1,9 @@
+{
+  "fixture_id": "duplicate-tool-name",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "duplicate_tool_name",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Two tools share the same name within one request"
+}

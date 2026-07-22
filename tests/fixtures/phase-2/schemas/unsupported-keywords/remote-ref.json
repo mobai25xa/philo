@@ -1,0 +1,13 @@
+{
+  "fixture_id": "schema-remote-ref",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "remote_reference",
+  "schema": {
+    "type": "object",
+    "$ref": "https://example.com/schema.json"
+  },
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Remote $ref never triggers network access"
+}

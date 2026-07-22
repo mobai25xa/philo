@@ -1,0 +1,7 @@
+{
+  "$ref": "#/$defs/left",
+  "$defs": {
+    "left": { "$ref": "#/$defs/right" },
+    "right": { "$ref": "#/$defs/left" }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "fixture_id": "history-tool-result-image-rejected",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "unsupported_content",
+  "scenario": "tool-result-image",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Official OpenAI P2 rejects image content inside tool results"
+}

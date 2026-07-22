@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use http::{HeaderValue, header};
+use http::{HeaderMap, HeaderValue, header};
 use secrecy::{ExposeSecret, SecretString};
 
 use super::endpoint::{CredentialAudience, ResolvedEndpoint};
@@ -105,6 +105,11 @@ impl<'a> AuthContext<'a> {
 pub trait AuthProvider: fmt::Debug + Send + Sync {
     /// Produces the authentication header after validating credential audience.
     fn operation(&self, context: AuthContext<'_>) -> Result<HeaderOperation, LlmError>;
+
+    /// Validates the final authentication fields for this concrete scheme.
+    fn validate_final(&self, _headers: &HeaderMap) -> Result<(), LlmError> {
+        Ok(())
+    }
 }
 
 /// Phase-one Bearer authentication provider.
@@ -144,6 +149,22 @@ impl AuthProvider for BearerAuth {
                 )
             })?;
         Ok(HeaderOperation::set_sensitive(header::AUTHORIZATION, value))
+    }
+
+    fn validate_final(&self, headers: &HeaderMap) -> Result<(), LlmError> {
+        let valid = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("Bearer ") && value.len() > 7);
+        if valid {
+            Ok(())
+        } else {
+            Err(validation(
+                "request_headers.authorization",
+                ValidationReason::ProtectedHeader,
+                "Bearer auth provider must set authorization",
+            ))
+        }
     }
 }
 

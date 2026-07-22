@@ -1,0 +1,17 @@
+{
+  "fixture_id": "schema-object-required",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "success",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "city": { "type": "string" }
+    },
+    "required": ["city"],
+    "additionalProperties": false
+  },
+  "strict_compatible": true,
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Minimal strict-compatible object schema"
+}

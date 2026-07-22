@@ -1,0 +1,6 @@
+{
+  "tool_call_id": "call_reused",
+  "tool_name": "lookup",
+  "turns": 2,
+  "expected": "success"
+}

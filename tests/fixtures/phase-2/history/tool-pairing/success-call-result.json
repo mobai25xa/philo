@@ -1,0 +1,9 @@
+{
+  "fixture_id": "history-tool-pairing-success",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "success",
+  "scenario": "user-toolcall-result-assistant",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Official history pairs one tool call with one tool result"
+}

@@ -4,32 +4,25 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use http::{HeaderMap, StatusCode, header};
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::domain::{
-    AssistantEvent, AssistantMessage, GenerateRequest, LocalRequestId, ProviderRequestId,
-    RequestTimeout, TraceId, collect_assistant_message,
+    AssistantEvent, AssistantMessage, GenerateRequest, LocalRequestId, RequestTimeout, TraceId,
+    collect_assistant_message_for_format,
 };
 use crate::error::{
-    ErrorStage, HttpStatusError, LlmError, ProtocolError, RetriableHint, TimeoutError,
-    TruncatedStreamError, ValidationError, ValidationReason,
+    ErrorStage, LlmError, TimeoutError, TruncatedStreamError, ValidationError, ValidationReason,
 };
+use crate::execution::executor::{AttemptContext, AttemptExecutor, AttemptObservation};
+use crate::execution::planner::CallPlanner;
 use crate::observability::{
     LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind, LifecycleIdentity,
     LifecycleObserver,
 };
-use crate::protocol::openai_chat::{
-    OpenAiChatRequestAdapter, OpenAiChatStreamContext, decode_openai_chat_stream,
-};
+use crate::protocol::{ProtocolDispatch, ResponseSession};
 use crate::provider::ProviderRuntime;
-use crate::transport::{
-    CancellationToken, HttpRequest, RequestLifecycle, ReqwestTransport, Transport,
-    TransportContext, read_body_limited,
-};
-
-const HTTP_ERROR_BODY_LIMIT: usize = 16 * 1024;
+use crate::transport::{CancellationToken, RequestLifecycle, ReqwestTransport, Transport};
 
 type EventStream = Pin<Box<dyn Stream<Item = Result<AssistantEvent, LlmError>> + Send + 'static>>;
 
@@ -189,7 +182,9 @@ impl Stream for AssistantStream {
                     AssistantEvent::TextDelta { delta, .. } if !delta.is_empty() => {
                         stream.completion_state.partial_output = true;
                     }
-                    AssistantEvent::Usage(_) => stream.completion_state.usage_known = true,
+                    AssistantEvent::Usage(_) | AssistantEvent::DetailedUsage(_) => {
+                        stream.completion_state.usage_known = true;
+                    }
                     AssistantEvent::Done { finish_reason } => {
                         emit(
                             stream.observation.as_ref(),
@@ -358,8 +353,13 @@ impl LlmClient {
     /// Returns the first error from request startup or streamed response processing.
     pub async fn complete(&self, request: GenerateRequest) -> Result<AssistantMessage, LlmError> {
         let model = request.model().clone();
+        let response_format = request.options().response_format().clone();
         let stream = self.stream(request).await?;
-        Ok(collect_assistant_message(stream).await?.with_model(model))
+        Ok(
+            collect_assistant_message_for_format(stream, &response_format)
+                .await?
+                .with_model(model),
+        )
     }
 
     /// Completes one request using caller-retained cancellation and telemetry controls.
@@ -373,8 +373,13 @@ impl LlmClient {
         control: RequestControl,
     ) -> Result<AssistantMessage, LlmError> {
         let model = request.model().clone();
+        let response_format = request.options().response_format().clone();
         let stream = self.stream_with_control(request, control).await?;
-        Ok(collect_assistant_message(stream).await?.with_model(model))
+        Ok(
+            collect_assistant_message_for_format(stream, &response_format)
+                .await?
+                .with_model(model),
+        )
     }
 
     async fn start_stream(
@@ -387,85 +392,25 @@ impl LlmClient {
         let lifecycle = request_lifecycle(request, control.cancellation.clone())?;
         lifecycle_preflight(&lifecycle)?;
 
-        if request.model().provider() != self.runtime.provider_id() {
-            return Err(ValidationError::new(
-                "model.provider",
-                ValidationReason::ProviderMismatch,
-                "request provider does not match configured client runtime",
-            )
-            .into());
-        }
-        request.validate(&self.runtime.capabilities().generation_options())?;
+        let plan = CallPlanner::plan(&self.runtime, request)?;
         emit(observation, LifecycleEventKind::ValidationCompleted);
 
-        let encoded = OpenAiChatRequestAdapter::encode(request, self.runtime.capabilities())?;
-        if !self
-            .runtime
-            .endpoint()
-            .url()
-            .path()
-            .ends_with(encoded.relative_path)
-        {
-            return Err(LlmError::Configuration(
-                "provider endpoint does not match protocol request intent".to_owned(),
-            ));
-        }
-        emit(observation, LifecycleEventKind::EndpointResolved);
-
-        let resolved = self.runtime.resolve_headers_with_protocol(
-            &encoded.protocol_headers,
-            Vec::new(),
-            request.options().headers(),
-        )?;
-        let (headers, header_trace) = resolved.into_parts();
-        if observation.is_some() {
-            emit(
-                observation,
-                LifecycleEventKind::HeadersResolved {
-                    trace: header_trace.into(),
+        let driver = ProtocolDispatch::for_kind(plan.policy.target.protocol_kind);
+        let prepared = driver.prepare(&plan)?;
+        let executor = AttemptExecutor::new(self.transport.clone());
+        let response = executor
+            .execute(
+                &self.runtime,
+                prepared,
+                AttemptContext {
+                    local_request_id,
+                    attempt_number: 1,
+                    lifecycle,
+                    observation: observation.map(Observation::attempt_observation),
                 },
-            );
-        }
-
-        let transport_request = HttpRequest::new(
-            encoded.method,
-            self.runtime.endpoint().clone(),
-            headers,
-            encoded.body,
-            TransportContext::new(local_request_id.clone()),
-        )
-        .with_lifecycle(lifecycle)
-        .with_redirect_policy(self.runtime.transport_options().redirect_policy());
-        emit(observation, LifecycleEventKind::TransportStarted);
-        let response = self.transport.execute(transport_request).await?;
-        let (status, response_headers, body) = response.into_parts();
-        let provider_request_id = provider_request_id(&response_headers);
-        emit(
-            observation,
-            LifecycleEventKind::StatusReceived {
-                status: status.as_u16(),
-                provider_request_id: provider_request_id.clone(),
-            },
-        );
-
-        if !status.is_success() {
-            let limited = read_body_limited(body, HTTP_ERROR_BODY_LIMIT).await?;
-            return Err(HttpStatusError::new(
-                status.as_u16(),
-                limited.summary(),
-                provider_request_id,
-                status_retriable(status),
             )
-            .into());
-        }
-        validate_event_stream_content_type(&response_headers)?;
-
-        let context = OpenAiChatStreamContext::new(
-            local_request_id,
-            provider_request_id,
-            request.model().clone(),
-        );
-        Ok(Box::pin(decode_openai_chat_stream(body, context)))
+            .await?;
+        ResponseSession::open(response)
     }
 
     fn observation(
@@ -504,6 +449,12 @@ struct Observation {
     observer: Arc<dyn LifecycleObserver>,
     identity: Arc<LifecycleIdentity>,
     started: Instant,
+}
+
+impl Observation {
+    fn attempt_observation(&self) -> AttemptObservation {
+        AttemptObservation::new(self.observer.clone(), self.identity.clone(), self.started)
+    }
 }
 
 fn emit(observation: Option<&Observation>, kind: LifecycleEventKind) {
@@ -563,35 +514,4 @@ fn lifecycle_preflight(lifecycle: &RequestLifecycle) -> Result<(), LlmError> {
         return Err(TimeoutError::new(ErrorStage::Timeout).into());
     }
     Ok(())
-}
-
-fn provider_request_id(headers: &HeaderMap) -> Option<ProviderRequestId> {
-    headers
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| ProviderRequestId::new(value).ok())
-}
-
-fn validate_event_stream_content_type(headers: &HeaderMap) -> Result<(), LlmError> {
-    let valid = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"));
-    if valid {
-        Ok(())
-    } else {
-        Err(ProtocolError::new("successful response is not text/event-stream").into())
-    }
-}
-
-fn status_retriable(status: StatusCode) -> RetriableHint {
-    if status == StatusCode::REQUEST_TIMEOUT
-        || status == StatusCode::TOO_MANY_REQUESTS
-        || status.is_server_error()
-    {
-        RetriableHint::Maybe
-    } else {
-        RetriableHint::No
-    }
 }

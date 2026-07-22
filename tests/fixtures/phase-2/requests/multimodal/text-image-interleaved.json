@@ -1,0 +1,22 @@
+{
+  "model": "gpt-test",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "compare" },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "https://example.com/a.png",
+            "detail": "high"
+          }
+        },
+        { "type": "text", "text": "with this" }
+      ]
+    }
+  ],
+  "stream": true,
+  "stream_options": { "include_usage": true },
+  "n": 1
+}

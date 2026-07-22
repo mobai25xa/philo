@@ -1,0 +1,5 @@
+data: {"id":"chatcmpl-filter","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"blocked"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-filter","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}
+
+data: [DONE]

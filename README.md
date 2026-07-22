@@ -2,15 +2,29 @@
 
 `philo` is an experimental, streaming-first Rust SDK for LLM applications.
 
-Phase one is intentionally narrow: native Rust with Tokio, the official OpenAI Chat Completions endpoint, Bearer authentication, text messages, and SSE streaming. Tools, reasoning, images, third-party Provider profiles, automatic retry, and arbitrary request-body extensions are not yet supported.
+The official OpenAI Chat Completions adapter implements the frozen phase-one text path and the phase-two official semantics for function tools, tool streams/results, history normalization, image inputs, reasoning effort/usage, structured output, and local cost estimation. Third-party Provider profiles, automatic retry, and arbitrary request-body extensions remain out of scope.
 
-The behavior contract is `philo/openai-chat-p1` version `1.0.0`. Architecture and implementation planning are maintained alongside the SDK project; the crate remains independently buildable after clone.
+Behavior contracts:
+
+- `philo/openai-chat-p1` version `1.0.0` for the text stream foundation
+- `philo/openai-chat-p2` version `1.1.0` for tools, multimodal, structured output, related domain types, and the call-planning contract
+
+Architecture and implementation planning are maintained alongside the SDK project; the crate remains independently buildable after clone.
 
 ## Status
 
-The crate is `0.x` and its Rust API is experimental. The phase-one protocol behavior is frozen; API changes before 1.0 are documented in release notes.
+The crate is `0.x` and its Rust API is experimental. Phase-one and phase-two protocol behavior are frozen; API changes before 1.0 are documented in release notes.
 
-The current implementation includes provider-independent request/event types, the official OpenAI provider runtime, public `LlmClient::stream/complete` entry points, typed errors and identifiers, structured value-free lifecycle observations, a private Chat request/response protocol implementation, and a rustls-backed transport.
+The current implementation includes:
+
+- provider-independent multi-content parts, tools, history normalizer, usage/cost helpers;
+- ordered Domain v2 events and collectors, including tool-call and structured-output completion;
+- exact `ModelId` capability profiles and official OpenAI runtime;
+- public `LlmClient::stream/complete` entry points that still consume one stream only;
+- typed errors/identifiers and value-free lifecycle observations;
+- rustls-backed transport with fail-closed headers/auth/body limits.
+
+Capabilities that are `Unknown` for an exact model id fail closed. The SDK never executes tools; applications validate, authorize, and run them.
 
 ## Minimal Complete Call
 
@@ -34,8 +48,12 @@ println!("{}", message.text());
 # }
 ```
 
-See `examples/stream_text.rs`, `complete_text.rs`, `cancellation_timeout.rs`,
-`request_headers.rs`, and `typed_errors.rs` for complete public-API usage.
+Examples:
+
+- phase one: `stream_text.rs`, `complete_text.rs`, `cancellation_timeout.rs`, `request_headers.rs`, `typed_errors.rs`
+- phase two: `tool_single.rs`, `tool_parallel.rs`, `tool_reject.rs`, `image_url.rs`, `structured_json_schema.rs`
+
+User guides live under `docs/philo/guide/`.
 
 ## Build
 
@@ -57,10 +75,11 @@ The library never creates a Tokio runtime. Applications provide the runtime.
 ## Metadata Example
 
 ```rust
-use philo::{PHASE_ONE_CONTRACT_ID, SDK_NAME};
+use philo::{PHASE_ONE_CONTRACT_ID, PHASE_TWO_CONTRACT_ID, SDK_NAME};
 
 assert_eq!(SDK_NAME, "philo");
 assert_eq!(PHASE_ONE_CONTRACT_ID, "philo/openai-chat-p1");
+assert_eq!(PHASE_TWO_CONTRACT_ID, "philo/openai-chat-p2");
 ```
 
 ## Security Defaults
@@ -80,10 +99,12 @@ See [`SECURITY.md`](./SECURITY.md) for reporting and handling expectations.
 
 ## Limitations
 
-Phase one does not support tools/function calls, thinking/reasoning controls,
-images, audio, structured outputs, prompt-cache controls, third-party Provider
-profiles, the Responses API, automatic retry, arbitrary `extra_body`, or dangerous
-header overrides. Unsupported or unknown response semantics fail closed.
+The official adapter still does not support audio, prompt-cache controls,
+third-party Provider profiles, the Responses API, automatic retry, arbitrary
+`extra_body`, dangerous header overrides, or automatic tool execution. Visible
+thinking text and opaque reasoning signatures are not produced by Official Chat
+Completions in phase two; synthetic phase-three boundary fixtures only prove
+replay safety. Unsupported or unknown capabilities fail closed.
 
 ## License
 

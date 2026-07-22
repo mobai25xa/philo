@@ -20,6 +20,8 @@ pub enum HeaderSource {
     ClientIdentity,
     /// Model-specific override.
     Model,
+    /// Value-free request-fact policy generated for one attempt.
+    DynamicPolicy,
     /// Per-request non-sensitive override.
     Request,
     /// Authentication, applied last.
@@ -271,7 +273,20 @@ impl HeaderPipeline {
     }
 
     /// Resolves layers by source priority and validates the final protected headers.
-    pub fn resolve(&self, mut layers: Vec<HeaderLayer>) -> Result<ResolvedHeaders, LlmError> {
+    pub fn resolve(&self, layers: Vec<HeaderLayer>) -> Result<ResolvedHeaders, LlmError> {
+        let resolved = self.resolve_layers(layers)?;
+        Self::validate_bearer_compatibility(&resolved.headers)?;
+        Ok(resolved)
+    }
+
+    pub(crate) fn resolve_without_auth_assumption(
+        &self,
+        layers: Vec<HeaderLayer>,
+    ) -> Result<ResolvedHeaders, LlmError> {
+        self.resolve_layers(layers)
+    }
+
+    fn resolve_layers(&self, mut layers: Vec<HeaderLayer>) -> Result<ResolvedHeaders, LlmError> {
         layers.sort_by_key(HeaderLayer::source);
         let mut headers = HeaderMap::new();
         let mut trace = Vec::new();
@@ -305,7 +320,6 @@ impl HeaderPipeline {
                 }
             }
         }
-        Self::validate_final(&headers)?;
         Ok(ResolvedHeaders { headers, trace })
     }
 
@@ -321,7 +335,7 @@ impl HeaderPipeline {
         }
     }
 
-    fn validate_final(headers: &HeaderMap) -> Result<(), LlmError> {
+    fn validate_bearer_compatibility(headers: &HeaderMap) -> Result<(), LlmError> {
         if headers.get(http::header::CONTENT_TYPE)
             != Some(&HeaderValue::from_static("application/json"))
         {

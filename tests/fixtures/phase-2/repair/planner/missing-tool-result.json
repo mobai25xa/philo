@@ -1,0 +1,5 @@
+{
+  "tool_call_id": "call_missing_result",
+  "tool_name": "lookup",
+  "expected_error": "missing_tool_result"
+}

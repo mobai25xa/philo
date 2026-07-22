@@ -1,0 +1,4 @@
+data: {"id":"repair-structured-schema","model":"gpt-test","choices":[{"index":0,"delta":{"content":"{\"ok\":\"wrong-type\"}"},"finish_reason":"stop"}]}
+
+data: [DONE]
+

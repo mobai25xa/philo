@@ -1,0 +1,9 @@
+{
+  "fixture_id": "parallel-unsupported",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "parallel_unsupported",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "parallel_tool_calls fails closed when capability is Unsupported"
+}

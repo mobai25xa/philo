@@ -1,0 +1,9 @@
+{
+  "fixture_id": "strict-capability-unknown",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "strict_capability_unknown",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "strict:true fails closed when strict_tools capability is Unknown"
+}

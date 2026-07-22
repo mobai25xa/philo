@@ -1,0 +1,10 @@
+{
+  "fixture_id": "history-tool-pairing-duplicate-result",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "duplicate_tool_result",
+  "scenario": "two-results-same-call-id",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Each tool call id accepts exactly one result"
+}

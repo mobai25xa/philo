@@ -1,14 +1,16 @@
 //! `philo` is a secure, streaming-first Rust SDK for LLM applications.
 //!
-//! Phase one implements the frozen `philo/openai-chat-p1` contract. The crate
+//! The foundation implements the frozen `philo/openai-chat-p1` contract and the
+//! provider-independent domain follows `philo/openai-chat-p2`. The crate
 //! exposes provider-independent domain types, a validated official provider runtime,
 //! and [`LlmClient`] streaming/completion entry points. The request adapter and
 //! `OpenAI` Chat wire/state types remain private; callers do not need reqwest, JSON,
 //! or SSE implementation details.
 //!
-//! Phase one supports official `OpenAI` Chat Completions text streaming only. Tools,
-//! reasoning, images, audio, third-party profiles, automatic retry, arbitrary request
-//! body extensions, and dangerous header overrides are intentionally unsupported.
+//! The protocol adapter supports official `OpenAI` Chat Completions text, function
+//! tools, image inputs, structured output, usage/cost helpers, and reasoning-effort
+//! request options. Phase-two still does not execute tools and does not claim
+//! third-party thinking dialects.
 //!
 //! # Stability
 //!
@@ -30,9 +32,16 @@ pub const PHASE_ONE_CONTRACT_ID: &str = "philo/openai-chat-p1";
 /// The version of the frozen phase-one behavior contract.
 pub const PHASE_ONE_CONTRACT_VERSION: &str = "1.0.0";
 
+/// The identifier of the frozen phase-two behavior contract.
+pub const PHASE_TWO_CONTRACT_ID: &str = "philo/openai-chat-p2";
+
+/// The version of the frozen phase-two behavior contract.
+pub const PHASE_TWO_CONTRACT_VERSION: &str = "1.1.0";
+
 pub mod client;
 pub mod domain;
 pub mod error;
+mod execution;
 pub mod observability;
 mod protocol;
 pub mod provider;
@@ -40,15 +49,29 @@ pub mod transport;
 
 pub use client::{AssistantStream, LlmClient, RequestControl};
 pub use domain::{
-    AssistantEvent, AssistantMessage, CapabilitySet, CapabilityStatus, ContentPart, FinishReason,
-    GenerateRequest, GenerationId, GenerationOptions, LlmRequest, LocalRequestId, Message,
-    MessageRole, ModelId, ModelRef, ProtocolId, ProviderId, ProviderRequestId, RequestMetadata,
-    RequestTimeout, TraceId, Usage, collect_assistant_message,
+    AssistantEvent, AssistantMessage, CapabilitySet, CapabilityStatus, ContentIndex, ContentPart,
+    CostEstimate, CurrencyCode, DiagnosticCode, DialectPolicy, FinishReason, GenerateRequest,
+    GenerationId, GenerationOptions, HistoryCapabilities, HistoryPolicy, IdMapping, ImageContent,
+    ImageDetail, ImageMime, ImageSource, ImageWireFormat, LlmRequest, LocalRequestId, Message,
+    MessageRole, MissingToolResultPolicy, ModelId, ModelRef, MoneyAmount, NormalizationDiagnostic,
+    NormalizedContext, OpaqueReasoning, ParallelToolCalls, PolicySource, PriceProfile, ProtocolId,
+    ProviderId, ProviderRequestId, ReasoningEffort, ReasoningEffortSupport, RefusalContent,
+    RequestMetadata, RequestTimeout, ResourceLimits, ResourceLimitsBuilder, ResponseFormat,
+    SchemaLimits, SourceIdentity, StreamUsagePolicy, StructuredOutputWireFormat, StructuredSchema,
+    ThinkingContent, ThinkingReplayPolicy, ThinkingRequest, ThinkingWireFormat, TokenCount,
+    ToolArguments, ToolCall, ToolCallId, ToolCallIdPolicy, ToolChoice, ToolChoiceWireFormat,
+    ToolDefinition, ToolLimits, ToolName, ToolResultMessage, ToolResultNamePolicy, ToolSchema,
+    TraceId, UnsupportedContentPolicy, Usage, UsageDetails, UsageMergeOutcome, ValidatedToolCall,
+    WireToolIndex, apply_thinking_replay_policy, collect_assistant_message,
+    collect_assistant_message_for_format, drop_opaque_reasoning, estimate_cost,
+    merge_usage_details, normalize_history, validate_tool_call, validate_tool_options,
 };
 pub use error::{
-    AuthFailureKind, AuthenticationError, BodySummary, CapabilityError, ErrorStage,
-    HttpStatusError, LlmError, ProtocolError, RetriableHint, TimeoutError, TransportError,
-    TruncatedStreamError, UnknownFinishReason, ValidationError, ValidationReason,
+    AuthFailureKind, AuthenticationError, BodySummary, CapabilityError, CostError, CostFailure,
+    ErrorStage, HistoryError, HistoryFailure, HttpStatusError, LlmError, ProtocolError,
+    RetriableHint, SchemaError, SchemaFailure, StructuredOutputError, StructuredOutputFailure,
+    TimeoutError, ToolValidationError, ToolValidationFailure, TransportError, TruncatedStreamError,
+    UnknownFinishReason, ValidationError, ValidationReason,
 };
 pub use observability::{
     LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind, LifecycleIdentity,
@@ -57,9 +80,9 @@ pub use observability::{
 pub use provider::{
     ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, ClientIdentity,
     CredentialAudience, EndpointConfig, HeaderLayer, HeaderOperation, HeaderPipeline, HeaderPolicy,
-    HeaderSource, HeaderTraceEntry, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, OfficialOpenAiProfile,
-    Origin, ProtocolDialect, ProviderCapabilities, ProviderProfile, ProviderRuntime,
-    ProviderTransportOptions, RedirectPolicy, ResolvedEndpoint, ResolvedHeaders,
+    HeaderSource, HeaderTraceEntry, ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE,
+    OfficialOpenAiProfile, Origin, ProtocolDialect, ProviderCapabilities, ProviderProfile,
+    ProviderRuntime, ProviderTransportOptions, RedirectPolicy, ResolvedEndpoint, ResolvedHeaders,
     SensitiveHeaderValue, TraceDecision, TraceOperation,
 };
 pub use transport::{
@@ -83,14 +106,17 @@ mod tests {
         CapabilitySet, CapabilityStatus, GenerateRequest, GenerationOptions,
     };
     use crate::domain::{
-        ContentPart, Message, MessageRole, ModelId, ModelRef, ProtocolId, ProviderId,
+        ContentIndex, ContentPart, Message, MessageRole, ModelId, ModelRef, ProtocolId, ProviderId,
     };
     use crate::error::{
         AuthFailureKind, AuthenticationError, BodySummary, ErrorStage, HttpStatusError, LlmError,
         RetriableHint, TimeoutError, TransportError, ValidationReason,
     };
 
-    use super::{PHASE_ONE_CONTRACT_ID, PHASE_ONE_CONTRACT_VERSION, SDK_NAME, SDK_VERSION};
+    use super::{
+        PHASE_ONE_CONTRACT_ID, PHASE_ONE_CONTRACT_VERSION, PHASE_TWO_CONTRACT_ID,
+        PHASE_TWO_CONTRACT_VERSION, SDK_NAME, SDK_VERSION,
+    };
 
     #[test]
     fn published_metadata_matches_frozen_decisions() {
@@ -98,6 +124,8 @@ mod tests {
         assert_eq!(SDK_VERSION, env!("CARGO_PKG_VERSION"));
         assert_eq!(PHASE_ONE_CONTRACT_ID, "philo/openai-chat-p1");
         assert_eq!(PHASE_ONE_CONTRACT_VERSION, "1.0.0");
+        assert_eq!(PHASE_TWO_CONTRACT_ID, "philo/openai-chat-p2");
+        assert_eq!(PHASE_TWO_CONTRACT_VERSION, "1.1.0");
     }
 
     #[test]
@@ -196,13 +224,6 @@ mod tests {
             GenerateRequest::new(model(), vec![]),
             GenerateRequest::new(model(), vec![Message::assistant("answer only")]),
             GenerateRequest::new(model(), vec![Message::user(" \t\n")]),
-            GenerateRequest::new(
-                model(),
-                vec![Message::new(
-                    MessageRole::User,
-                    vec![ContentPart::text("a"), ContentPart::text("b")],
-                )],
-            ),
             valid_request().with_options(GenerationOptions::new().with_temperature(-0.1)),
             valid_request().with_options(GenerationOptions::new().with_temperature(2.1)),
             valid_request().with_options(GenerationOptions::new().with_max_output_tokens(0)),
@@ -211,6 +232,17 @@ mod tests {
             assert!(request.validate(&CapabilitySet::default()).is_err());
         }
         assert!(valid_request().validate(&CapabilitySet::default()).is_ok());
+        assert!(
+            GenerateRequest::new(
+                model(),
+                vec![Message::new(
+                    MessageRole::User,
+                    vec![ContentPart::text("a"), ContentPart::text("b")],
+                )],
+            )
+            .validate(&CapabilitySet::default())
+            .is_ok()
+        );
     }
 
     fn events() -> Vec<Result<AssistantEvent, LlmError>> {
@@ -218,16 +250,20 @@ mod tests {
             Ok(AssistantEvent::start(
                 LocalRequestId::new("local-1").unwrap(),
             )),
-            Ok(AssistantEvent::TextStart { index: 0 }),
+            Ok(AssistantEvent::TextStart {
+                index: ContentIndex::new(0),
+            }),
             Ok(AssistantEvent::TextDelta {
-                index: 0,
+                index: ContentIndex::new(0),
                 delta: "你".into(),
             }),
             Ok(AssistantEvent::TextDelta {
-                index: 0,
+                index: ContentIndex::new(0),
                 delta: "好".into(),
             }),
-            Ok(AssistantEvent::TextEnd { index: 0 }),
+            Ok(AssistantEvent::TextEnd {
+                index: ContentIndex::new(0),
+            }),
             Ok(AssistantEvent::Usage(Usage::new(1, 2, 3).unwrap())),
             Ok(AssistantEvent::Done {
                 finish_reason: FinishReason::Stop,
@@ -272,8 +308,12 @@ mod tests {
     #[tokio::test]
     async fn empty_text_completion_has_explicit_boundaries_and_unknown_usage() {
         let events = vec![
-            Ok(AssistantEvent::TextStart { index: 0 }),
-            Ok(AssistantEvent::TextEnd { index: 0 }),
+            Ok(AssistantEvent::TextStart {
+                index: ContentIndex::new(0),
+            }),
+            Ok(AssistantEvent::TextEnd {
+                index: ContentIndex::new(0),
+            }),
             Ok(AssistantEvent::Done {
                 finish_reason: FinishReason::Length,
             }),

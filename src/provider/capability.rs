@@ -1,15 +1,15 @@
 //! Provider capability, dialect, and transport safety declarations.
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
-use crate::domain::{CapabilitySet, CapabilityStatus};
+use crate::domain::{CapabilitySet, CapabilityStatus, ModelId, ReasoningEffortSupport};
 use crate::error::LlmError;
 use crate::provider::endpoint::RedirectPolicy;
 
-/// Date on which official phase-one capability declarations were last reviewed.
-pub const OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE: &str = "2026-07-18";
+/// Date on which official phase-two capability declarations were last reviewed.
+pub const OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE: &str = "2026-07-19";
 
-/// Provider/model capabilities needed during phase one.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Provider defaults before an exact model capability profile is applied.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderCapabilities {
     /// Developer-role message support.
     pub developer_role: CapabilityStatus,
@@ -21,14 +21,44 @@ pub struct ProviderCapabilities {
     pub streaming: CapabilityStatus,
     /// Streaming usage support.
     pub streaming_usage: CapabilityStatus,
+    /// Function tool support.
+    pub function_tools: CapabilityStatus,
+    /// Required tool-choice support.
+    pub tool_choice_required: CapabilityStatus,
+    /// Specific function tool-choice support.
+    pub tool_choice_specific: CapabilityStatus,
+    /// Parallel tool-call support.
+    pub parallel_tool_calls: CapabilityStatus,
+    /// Strict function-schema support.
+    pub strict_tools: CapabilityStatus,
+    /// Image input support.
+    pub vision_input: CapabilityStatus,
+    /// Original image-detail support.
+    pub image_detail_original: CapabilityStatus,
+    /// JSON object response-format support.
+    pub response_format_json_object: CapabilityStatus,
+    /// JSON schema response-format support.
+    pub response_format_json_schema: CapabilityStatus,
+    /// Exact reasoning efforts supported by an exact model profile.
+    pub reasoning_efforts: ReasoningEffortSupport,
 }
 
 impl ProviderCapabilities {
     /// Returns the subset used by domain request validation.
-    pub fn generation_options(self) -> CapabilitySet {
+    pub fn generation_options(&self) -> CapabilitySet {
         CapabilitySet {
             temperature: self.temperature,
             max_output_tokens: self.max_completion_tokens,
+            function_tools: self.function_tools,
+            tool_choice_required: self.tool_choice_required,
+            tool_choice_specific: self.tool_choice_specific,
+            parallel_tool_calls: self.parallel_tool_calls,
+            strict_tools: self.strict_tools,
+            vision_input: self.vision_input,
+            image_detail_original: self.image_detail_original,
+            response_format_json_object: self.response_format_json_object,
+            response_format_json_schema: self.response_format_json_schema,
+            reasoning_efforts: self.reasoning_efforts.clone(),
         }
     }
 
@@ -39,10 +69,20 @@ impl ProviderCapabilities {
             max_completion_tokens: CapabilityStatus::Supported,
             streaming: CapabilityStatus::Supported,
             streaming_usage: CapabilityStatus::Supported,
+            function_tools: CapabilityStatus::Unknown,
+            tool_choice_required: CapabilityStatus::Unknown,
+            tool_choice_specific: CapabilityStatus::Unknown,
+            parallel_tool_calls: CapabilityStatus::Unknown,
+            strict_tools: CapabilityStatus::Unknown,
+            vision_input: CapabilityStatus::Unknown,
+            image_detail_original: CapabilityStatus::Unknown,
+            response_format_json_object: CapabilityStatus::Unknown,
+            response_format_json_schema: CapabilityStatus::Unknown,
+            reasoning_efforts: ReasoningEffortSupport::Unknown,
         }
     }
 
-    pub(super) fn validate(self) -> Result<(), LlmError> {
+    pub(super) fn validate(&self) -> Result<(), LlmError> {
         if matches!(
             self.streaming,
             CapabilityStatus::Unsupported | CapabilityStatus::Unknown
@@ -58,6 +98,170 @@ impl ProviderCapabilities {
             ));
         }
         Ok(())
+    }
+
+    pub(super) fn apply_model(&mut self, profile: &ModelCapabilityProfile) {
+        self.function_tools = profile.function_tools;
+        self.tool_choice_required = profile.tool_choice_required;
+        self.tool_choice_specific = profile.tool_choice_specific;
+        self.parallel_tool_calls = profile.parallel_tool_calls;
+        self.strict_tools = profile.strict_tools;
+        self.vision_input = profile.vision_input;
+        self.image_detail_original = profile.image_detail_original;
+        self.response_format_json_object = profile.response_format_json_object;
+        self.response_format_json_schema = profile.response_format_json_schema;
+        self.reasoning_efforts = profile.reasoning_efforts.clone();
+    }
+}
+
+/// P2 capabilities declared for one exact [`ModelId`].
+#[must_use]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelCapabilityProfile {
+    model: ModelId,
+    function_tools: CapabilityStatus,
+    tool_choice_required: CapabilityStatus,
+    tool_choice_specific: CapabilityStatus,
+    parallel_tool_calls: CapabilityStatus,
+    strict_tools: CapabilityStatus,
+    vision_input: CapabilityStatus,
+    image_detail_original: CapabilityStatus,
+    response_format_json_object: CapabilityStatus,
+    response_format_json_schema: CapabilityStatus,
+    reasoning_efforts: ReasoningEffortSupport,
+}
+
+impl ModelCapabilityProfile {
+    /// Creates an exact model profile whose P2 capabilities are all unknown.
+    pub fn new(model: ModelId) -> Self {
+        Self {
+            model,
+            function_tools: CapabilityStatus::Unknown,
+            tool_choice_required: CapabilityStatus::Unknown,
+            tool_choice_specific: CapabilityStatus::Unknown,
+            parallel_tool_calls: CapabilityStatus::Unknown,
+            strict_tools: CapabilityStatus::Unknown,
+            vision_input: CapabilityStatus::Unknown,
+            image_detail_original: CapabilityStatus::Unknown,
+            response_format_json_object: CapabilityStatus::Unknown,
+            response_format_json_schema: CapabilityStatus::Unknown,
+            reasoning_efforts: ReasoningEffortSupport::Unknown,
+        }
+    }
+
+    /// Returns the exact model identifier.
+    pub fn model(&self) -> &ModelId {
+        &self.model
+    }
+
+    /// Sets function tool support.
+    pub fn with_function_tools(mut self, status: CapabilityStatus) -> Self {
+        self.function_tools = status;
+        self
+    }
+
+    /// Sets required tool-choice support.
+    pub fn with_tool_choice_required(mut self, status: CapabilityStatus) -> Self {
+        self.tool_choice_required = status;
+        self
+    }
+
+    /// Sets specific tool-choice support.
+    pub fn with_tool_choice_specific(mut self, status: CapabilityStatus) -> Self {
+        self.tool_choice_specific = status;
+        self
+    }
+
+    /// Sets parallel tool-call support.
+    pub fn with_parallel_tool_calls(mut self, status: CapabilityStatus) -> Self {
+        self.parallel_tool_calls = status;
+        self
+    }
+
+    /// Sets strict function-schema support.
+    pub fn with_strict_tools(mut self, status: CapabilityStatus) -> Self {
+        self.strict_tools = status;
+        self
+    }
+
+    /// Sets image input support.
+    pub fn with_vision_input(mut self, status: CapabilityStatus) -> Self {
+        self.vision_input = status;
+        self
+    }
+
+    /// Sets original image-detail support.
+    pub fn with_image_detail_original(mut self, status: CapabilityStatus) -> Self {
+        self.image_detail_original = status;
+        self
+    }
+
+    /// Sets JSON object response-format support.
+    pub fn with_response_format_json_object(mut self, status: CapabilityStatus) -> Self {
+        self.response_format_json_object = status;
+        self
+    }
+
+    /// Sets JSON schema response-format support.
+    pub fn with_response_format_json_schema(mut self, status: CapabilityStatus) -> Self {
+        self.response_format_json_schema = status;
+        self
+    }
+
+    /// Sets the exact reasoning effort declaration.
+    pub fn with_reasoning_efforts(mut self, support: ReasoningEffortSupport) -> Self {
+        self.reasoning_efforts = support;
+        self
+    }
+
+    /// Returns function tool support.
+    pub fn function_tools(&self) -> CapabilityStatus {
+        self.function_tools
+    }
+
+    /// Returns required tool-choice support.
+    pub fn tool_choice_required(&self) -> CapabilityStatus {
+        self.tool_choice_required
+    }
+
+    /// Returns specific tool-choice support.
+    pub fn tool_choice_specific(&self) -> CapabilityStatus {
+        self.tool_choice_specific
+    }
+
+    /// Returns parallel tool-call support.
+    pub fn parallel_tool_calls(&self) -> CapabilityStatus {
+        self.parallel_tool_calls
+    }
+
+    /// Returns strict function-schema support.
+    pub fn strict_tools(&self) -> CapabilityStatus {
+        self.strict_tools
+    }
+
+    /// Returns image input support.
+    pub fn vision_input(&self) -> CapabilityStatus {
+        self.vision_input
+    }
+
+    /// Returns original image-detail support.
+    pub fn image_detail_original(&self) -> CapabilityStatus {
+        self.image_detail_original
+    }
+
+    /// Returns JSON object response-format support.
+    pub fn response_format_json_object(&self) -> CapabilityStatus {
+        self.response_format_json_object
+    }
+
+    /// Returns JSON schema response-format support.
+    pub fn response_format_json_schema(&self) -> CapabilityStatus {
+        self.response_format_json_schema
+    }
+
+    /// Returns the reasoning effort declaration.
+    pub fn reasoning_efforts(&self) -> &ReasoningEffortSupport {
+        &self.reasoning_efforts
     }
 }
 

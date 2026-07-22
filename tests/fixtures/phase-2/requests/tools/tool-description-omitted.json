@@ -1,0 +1,24 @@
+{
+  "model": "gpt-test",
+  "messages": [
+    { "role": "user", "content": "Hello" }
+  ],
+  "stream": true,
+  "stream_options": { "include_usage": true },
+  "n": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "lookup",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        "strict": false
+      }
+    }
+  ]
+}

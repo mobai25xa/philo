@@ -1,0 +1,9 @@
+{
+  "fixture_id": "empty-tool-list-required",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "empty_tool_list_required",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "tool_choice=required with an empty tools list is rejected"
+}

@@ -1,0 +1,11 @@
+{
+  "fixture_id": "security-argument-canary",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "error",
+  "expected_error": "schema_violation",
+  "canary": "argument-canary-secret",
+  "scenario": "invalid-extra-field-must-not-leak-canary",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Validation/debug paths must never echo the canary argument"
+}

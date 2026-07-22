@@ -1,0 +1,15 @@
+{
+  "$ref": "#/$defs/d0",
+  "$defs": {
+    "d0": { "$ref": "#/$defs/d1" },
+    "d1": { "$ref": "#/$defs/d2" },
+    "d2": { "$ref": "#/$defs/d3" },
+    "d3": { "$ref": "#/$defs/d4" },
+    "d4": { "$ref": "#/$defs/d5" },
+    "d5": { "$ref": "#/$defs/d6" },
+    "d6": { "$ref": "#/$defs/d7" },
+    "d7": { "$ref": "#/$defs/d8" },
+    "d8": { "$ref": "#/$defs/d9" },
+    "d9": { "type": "string" }
+  }
+}

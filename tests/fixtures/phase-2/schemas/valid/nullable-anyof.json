@@ -1,0 +1,22 @@
+{
+  "fixture_id": "schema-nullable-anyof",
+  "protocol": "openai-chat-p2",
+  "source": "synthetic",
+  "expected": "success",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "nickname": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "null" }
+        ]
+      }
+    },
+    "required": ["nickname"],
+    "additionalProperties": false
+  },
+  "strict_compatible": false,
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Nullable unions use anyOf with a null branch"
+}

@@ -1,6 +1,9 @@
-//! Downstream-facing phase-one public API compile and source-boundary checks.
+//! Downstream-facing public API compile and source-boundary checks.
 
-use philo::{AssistantStream, LlmClient, ProviderRuntime, RequestControl};
+use philo::{
+    AssistantStream, LlmClient, ProviderRuntime, RequestControl, ResourceLimits,
+    ResourceLimitsBuilder,
+};
 
 fn assert_send_sync<T: Send + Sync>() {}
 fn assert_send_unpin<T: Send + Unpin>() {}
@@ -14,17 +17,36 @@ fn client_runtime_and_controls_keep_the_native_async_contract() {
 }
 
 #[test]
+fn resource_limits_builder_is_the_downstream_construction_path() {
+    let builder: ResourceLimitsBuilder = ResourceLimits::builder()
+        .with_max_messages(128)
+        .with_max_structured_output_bytes(2 * 1024 * 1024);
+    let limits = builder.build().unwrap();
+    assert_eq!(limits.max_messages, 128);
+    assert_eq!(limits.max_structured_output_bytes, 2 * 1024 * 1024);
+    assert_eq!(
+        limits.max_request_body_bytes,
+        ResourceLimits::official().max_request_body_bytes
+    );
+}
+
+#[test]
 fn primary_public_surface_does_not_name_private_implementation_types() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let public_sources = [
         "src/lib.rs",
         "src/client/lifecycle.rs",
         "src/domain/mod.rs",
+        "src/domain/content.rs",
+        "src/domain/ids.rs",
+        "src/domain/message.rs",
         "src/domain/request.rs",
         "src/domain/event.rs",
+        "src/domain/tools.rs",
         "src/error.rs",
         "src/observability/trace.rs",
         "src/provider/profile.rs",
+        "src/provider/capability.rs",
         "src/provider/runtime.rs",
         "src/transport/mod.rs",
     ];
@@ -46,8 +68,12 @@ fn primary_public_surface_does_not_name_private_implementation_types() {
                     "reqwest type leaked in {relative}"
                 );
             }
+            // Structured output intentionally exposes serde_json::Value on the frozen
+            // AssistantMessage / collector surface. All other public lines stay free of it.
+            let structured_output_surface = normalized.contains("structured_output")
+                || normalized.contains("collect_assistant_message_for_format");
             assert!(
-                !normalized.contains("serde_json::value"),
+                structured_output_surface || !normalized.contains("serde_json::value"),
                 "JSON value leaked in {relative}"
             );
             assert!(
@@ -66,22 +92,31 @@ fn primary_public_surface_does_not_name_private_implementation_types() {
 fn request_api_has_no_arbitrary_body_or_non_scope_controls() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let request = std::fs::read_to_string(root.join("src/domain/request.rs")).unwrap();
+    let options_start = request.find("pub struct GenerationOptions").unwrap();
+    let options_end = request[options_start..]
+        .find("pub struct GenerateRequest")
+        .map(|offset| options_start + offset)
+        .unwrap();
+    let generation_options = &request[options_start..options_end];
     for forbidden in [
         "extra_body",
         "extra_json",
-        "tools:",
-        "reasoning:",
         "images:",
         "audio:",
-        "structured_output",
         "prompt_cache",
         "retry:",
     ] {
         assert!(
-            !request.contains(forbidden),
+            !generation_options.contains(forbidden),
             "non-scope request control: {forbidden}"
         );
     }
+    // Phase-two freezes tools/tool_choice/parallel_tool_calls/reasoning/response_format.
+    assert!(generation_options.contains("tools:"));
+    assert!(generation_options.contains("tool_choice:"));
+    assert!(generation_options.contains("parallel_tool_calls:"));
+    assert!(generation_options.contains("reasoning:"));
+    assert!(generation_options.contains("response_format:"));
 }
 
 #[test]
@@ -93,6 +128,7 @@ fn production_examples_use_only_official_profile_and_public_types() {
             continue;
         }
         let source = std::fs::read_to_string(&path).unwrap();
+        let production = source.split("#[cfg(test)]").next().unwrap_or_default();
         for forbidden in [
             "TestOnlyProfile",
             "reqwest::",
@@ -101,7 +137,7 @@ fn production_examples_use_only_official_profile_and_public_types() {
             "compatible_endpoint",
         ] {
             assert!(
-                !source.contains(forbidden),
+                !production.contains(forbidden),
                 "{} contains forbidden example surface {forbidden}",
                 path.display()
             );

@@ -1,0 +1,5 @@
+{
+  "type": "array",
+  "maxItems": 1.5,
+  "items": { "type": "string" }
+}

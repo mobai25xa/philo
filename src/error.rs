@@ -96,6 +96,14 @@ pub enum ValidationReason {
     CapabilityUnknown,
     /// Local metadata key is invalid.
     InvalidMetadata,
+    /// Identifier does not match its frozen character set.
+    InvalidIdentifier,
+    /// A request declared the same tool name more than once.
+    DuplicateToolName,
+    /// Tool-choice or parallel options were set without tools.
+    EmptyToolList,
+    /// A specific tool choice referenced an undeclared tool.
+    UnknownTool,
 }
 impl fmt::Display for ValidationReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -436,6 +444,337 @@ impl TimeoutError {
     }
 }
 
+/// Local schema compilation or strictness failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SchemaFailure {
+    /// Schema root or node is not a JSON object.
+    NotAnObject,
+    /// A supported keyword has an invalid type or combination.
+    InvalidKeywordType,
+    /// A keyword is outside the frozen phase-two subset.
+    UnsupportedKeyword,
+    /// A remote `$ref` was present.
+    RemoteReference,
+    /// A local `$ref` could not be resolved.
+    UnresolvedLocalReference,
+    /// Schema size or maxItems exceeded limits.
+    TooLarge,
+    /// Schema nesting exceeded limits.
+    TooDeep,
+    /// Strict mode requires `additionalProperties: false`.
+    StrictObjectMissingAdditionalPropertiesFalse,
+    /// Strict mode requires every property to be listed in `required`.
+    StrictPropertyNotRequired,
+}
+
+/// A safe schema failure with a field path and non-sensitive summary.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct SchemaError {
+    field: String,
+    reason: SchemaFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl SchemaError {
+    /// Creates a schema error. The message must not contain schema values.
+    pub fn new(
+        field: impl Into<String>,
+        reason: SchemaFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> SchemaFailure {
+        self.reason
+    }
+
+    /// Returns the optional JSON Pointer path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
+/// Tool-call argument validation failure codes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ToolValidationFailure {
+    /// Arguments are not complete JSON.
+    InvalidJson,
+    /// Arguments do not satisfy the tool schema.
+    SchemaViolation,
+    /// No matching tool was declared.
+    UnknownTool,
+    /// Arguments exceeded the configured size limit.
+    ArgumentsTooLarge,
+    /// Arguments exceeded the configured nesting limit.
+    ArgumentsTooDeep,
+}
+
+/// A safe tool argument validation failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct ToolValidationError {
+    field: String,
+    reason: ToolValidationFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl ToolValidationError {
+    /// Creates a tool validation error without retaining argument values.
+    pub fn new(
+        field: impl Into<String>,
+        reason: ToolValidationFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> ToolValidationFailure {
+        self.reason
+    }
+
+    /// Returns the optional JSON Pointer path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
+/// History normalization failure codes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum HistoryFailure {
+    /// A tool result referenced an unknown tool call id.
+    UnknownToolCall,
+    /// The same tool call id appeared more than once in one assistant turn.
+    DuplicateToolCall,
+    /// The same tool result id appeared more than once.
+    DuplicateToolResult,
+    /// One or more tool results were missing before the next non-tool turn.
+    MissingToolResult,
+    /// A tool result appeared before its assistant tool-call turn.
+    ResultBeforeCall,
+    /// Message roles or content order violated the history contract.
+    InvalidMessageOrder,
+    /// A content part is unsupported by the selected policy or profile.
+    UnsupportedContent,
+    /// Two distinct tool-call ids normalized to the same wire id.
+    ToolCallIdCollision,
+    /// The history exceeded the allowed message count.
+    TooManyMessages,
+    /// Total text bytes exceeded the allowed limit.
+    TextTooLarge,
+    /// The selected history policy is not implemented for phase two.
+    UnsupportedPolicy,
+}
+
+/// A safe history normalization failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct HistoryError {
+    field: String,
+    reason: HistoryFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl HistoryError {
+    /// Creates a history error without retaining message or tool content.
+    pub fn new(
+        field: impl Into<String>,
+        reason: HistoryFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> HistoryFailure {
+        self.reason
+    }
+
+    /// Returns the optional location path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
+/// Structured-output validation failure codes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum StructuredOutputFailure {
+    /// Structured text exceeded the configured response byte ceiling.
+    TooLarge,
+    /// Final assistant text is not valid JSON.
+    InvalidJson,
+    /// Final assistant text fails the requested schema or object shape.
+    SchemaViolation,
+    /// Generation ended with a truncated output before complete structured text.
+    Truncated,
+}
+
+/// A safe structured-output validation failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct StructuredOutputError {
+    field: String,
+    reason: StructuredOutputFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl StructuredOutputError {
+    /// Creates a structured-output error without retaining model text.
+    pub fn new(
+        field: impl Into<String>,
+        reason: StructuredOutputFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> StructuredOutputFailure {
+        self.reason
+    }
+
+    /// Returns the optional JSON Pointer path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
+/// Cost estimation failure codes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CostFailure {
+    /// Token accounting relationships are inconsistent.
+    InconsistentUsage,
+    /// Checked monetary arithmetic overflowed.
+    Overflow,
+    /// Currency code is not a valid uppercase ISO-4217 value.
+    InvalidCurrency,
+    /// Price profile fields are invalid.
+    InvalidPriceProfile,
+}
+
+/// A safe local cost estimation failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason:?} ({message})")]
+pub struct CostError {
+    field: String,
+    reason: CostFailure,
+    path: Option<String>,
+    message: &'static str,
+}
+
+impl CostError {
+    /// Creates a cost error without retaining usage or price values.
+    pub fn new(
+        field: impl Into<String>,
+        reason: CostFailure,
+        path: Option<String>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            path,
+            message,
+        }
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> CostFailure {
+        self.reason
+    }
+
+    /// Returns the optional location path.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
 /// All public SDK failures.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -449,6 +788,21 @@ pub enum LlmError {
     /// Capability failure.
     #[error("capability: {0}")]
     Capability(#[from] CapabilityError),
+    /// Schema compilation failure.
+    #[error("schema: {0}")]
+    Schema(#[from] SchemaError),
+    /// Tool argument validation failure.
+    #[error("tool validation: {0}")]
+    ToolValidation(#[from] ToolValidationError),
+    /// History normalization failure.
+    #[error("history: {0}")]
+    History(#[from] HistoryError),
+    /// Structured-output validation failure.
+    #[error("structured output: {0}")]
+    StructuredOutput(#[from] StructuredOutputError),
+    /// Local cost estimation failure.
+    #[error("cost: {0}")]
+    Cost(#[from] CostError),
     /// Authentication, permission, quota, or rate-limit failure.
     #[error("{0}")]
     Authentication(#[from] AuthenticationError),
