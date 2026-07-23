@@ -42,10 +42,19 @@ fn primary_public_surface_does_not_name_private_implementation_types() {
         "src/domain/message.rs",
         "src/domain/request.rs",
         "src/domain/event.rs",
+        "src/domain/schema/mod.rs",
+        "src/domain/schema/budget.rs",
+        "src/domain/history/mod.rs",
+        "src/domain/history/diagnostics.rs",
+        "src/domain/history/normalize.rs",
+        "src/domain/history/policy.rs",
+        "src/domain/history/replay.rs",
         "src/domain/tools.rs",
         "src/error.rs",
         "src/observability/trace.rs",
         "src/provider/profile.rs",
+        "src/provider/profiles/official_openai.rs",
+        "src/provider/profiles/test_only.rs",
         "src/provider/capability.rs",
         "src/provider/runtime.rs",
         "src/transport/mod.rs",
@@ -140,6 +149,65 @@ fn production_examples_use_only_official_profile_and_public_types() {
                 !production.contains(forbidden),
                 "{} contains forbidden example surface {forbidden}",
                 path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn schema_history_and_provider_root_and_deep_paths_remain_compatible() {
+    use philo::domain::history::{
+        DialectPolicy as DeepDialectPolicy, HistoryCapabilities as DeepHistoryCapabilities,
+        HistoryPolicy as DeepHistoryPolicy, normalize_history as deep_normalize_history,
+    };
+    use philo::domain::schema::{SchemaLimits as DeepSchemaLimits, ToolSchema as DeepToolSchema};
+    use philo::provider::{
+        OfficialOpenAiProfile as DeepOfficialOpenAiProfile, ProviderProfile as DeepProviderProfile,
+        TestOnlyProfile,
+    };
+
+    let schema_value = serde_json::json!({"type": "string"});
+    let root_schema = philo::ToolSchema::new(schema_value.clone()).unwrap();
+    let deep_schema = DeepToolSchema::new(schema_value).unwrap();
+    let _: philo::SchemaLimits = DeepSchemaLimits::official();
+    assert_eq!(root_schema, deep_schema);
+
+    let capabilities = DeepHistoryCapabilities::official_openai_defaults();
+    let dialect = DeepDialectPolicy::official_openai();
+    let policy = DeepHistoryPolicy::official_openai();
+    let normalized = deep_normalize_history(&[], &capabilities, &dialect, &policy).unwrap();
+    assert!(normalized.messages().is_empty());
+
+    let root_official = philo::OfficialOpenAiProfile::from_api_key("root-path-key").unwrap();
+    let deep_official = DeepOfficialOpenAiProfile::from_api_key("deep-path-key").unwrap();
+    let _: philo::ProviderProfile = root_official.profile().unwrap();
+    let _: DeepProviderProfile = deep_official.profile().unwrap();
+    assert!(
+        TestOnlyProfile::localhost(
+            "http://127.0.0.1:8787/v1/chat/completions",
+            "test-only-path-key",
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn migration_helpers_remain_absent_from_public_facades() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in ["src/lib.rs", "src/domain/mod.rs", "src/provider/mod.rs"] {
+        let source = std::fs::read_to_string(root.join(relative)).unwrap();
+        let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+        for private_name in [
+            "ProviderProfileParts",
+            "ChatStateMachine",
+            "OpenAiChatStreamContext",
+            "ProtocolDispatch",
+            "PreparedCall",
+            "CompiledSchemaMetadata",
+        ] {
+            assert!(
+                !production.contains(private_name),
+                "private migration helper leaked through {relative}: {private_name}"
             );
         }
     }

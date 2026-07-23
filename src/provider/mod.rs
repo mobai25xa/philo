@@ -6,6 +6,7 @@ pub mod capability;
 pub mod endpoint;
 pub mod headers;
 pub mod profile;
+mod profiles;
 pub mod runtime;
 
 pub use auth::{ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
@@ -18,7 +19,8 @@ pub use headers::{
     HeaderLayer, HeaderOperation, HeaderPipeline, HeaderPolicy, HeaderSource, HeaderTraceEntry,
     ResolvedHeaders, SensitiveHeaderValue, TraceDecision, TraceOperation,
 };
+pub use profile::ProviderProfile;
+pub use profiles::OfficialOpenAiProfile;
 #[doc(hidden)]
-pub use profile::TestOnlyProfile;
-pub use profile::{OfficialOpenAiProfile, ProviderProfile};
+pub use profiles::TestOnlyProfile;
 pub use runtime::ProviderRuntime;
