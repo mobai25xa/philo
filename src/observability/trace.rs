@@ -41,7 +41,7 @@ pub enum LifecycleErrorCategory {
 impl LifecycleErrorCategory {
     pub(crate) fn from_error(error: &LlmError) -> Self {
         match error {
-            LlmError::Configuration(_) => Self::Configuration,
+            LlmError::Configuration(_) | LlmError::ProviderConfig(_) => Self::Configuration,
             LlmError::Validation(_)
             | LlmError::Schema(_)
             | LlmError::ToolValidation(_)

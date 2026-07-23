@@ -633,3 +633,51 @@ fn private_migration_types_are_not_reexported() {
         );
     }
 }
+
+#[test]
+fn provider_config_has_one_network_free_versioned_module_tree() {
+    for path in [
+        "src/provider/config/mod.rs",
+        "src/provider/config/schema.rs",
+        "src/provider/config/source.rs",
+        "src/provider/config/merge.rs",
+        "src/provider/config/secret_ref.rs",
+        "src/provider/config/validate.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    let module = production_source("src/provider/mod.rs");
+    assert!(module.contains("pub mod config;"));
+    let config = production_sources_under("src/provider/config");
+    for (file, text) in &config {
+        for forbidden in [
+            "crate::client",
+            "crate::execution",
+            "crate::protocol",
+            "crate::transport",
+            "reqwest",
+            "std::env::vars(",
+            "std::env::vars_os(",
+            "serde(flatten)",
+            "extra_body",
+            "extra_headers",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "provider config dependency or escape-hatch leak in {file}: {forbidden}"
+            );
+        }
+    }
+
+    let secret = production_source("src/provider/config/secret_ref.rs");
+    assert_eq!(secret.matches("std::env::var(").count(), 1);
+    assert!(!secret.contains("std::env::vars("));
+    assert!(!secret.contains("std::env::vars_os("));
+
+    let merge = production_source("src/provider/config/merge.rs");
+    assert!(merge.contains("pub struct ProviderConfigSnapshot"));
+    assert!(merge.contains("pub fn merge_layers"));
+    assert!(!merge.contains("ApiKey"));
+    assert!(!merge.contains("SecretString"));
+}

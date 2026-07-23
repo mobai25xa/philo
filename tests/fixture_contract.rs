@@ -8,7 +8,8 @@ use bytes::Bytes;
 use futures_util::{StreamExt as _, stream};
 use philo::{
     BodySummary, ByteStream, PHASE_ONE_CONTRACT_ID, PHASE_ONE_CONTRACT_VERSION,
-    PHASE_TWO_CONTRACT_ID, PHASE_TWO_CONTRACT_VERSION, SseDecoder,
+    PHASE_TWO_CONTRACT_ID, PHASE_TWO_CONTRACT_VERSION, PROVIDER_CONFIG_SCHEMA_ID,
+    PROVIDER_CONFIG_SCHEMA_VERSION, SseDecoder,
 };
 use serde::Deserialize;
 
@@ -90,6 +91,12 @@ fn every_fixture_is_uniquely_described_and_present() {
         if fixture.path.starts_with("phase-2/repair/") {
             assert_eq!(fixture.contract_id.as_deref(), Some(PHASE_TWO_CONTRACT_ID));
             assert_eq!(fixture.contract_version, PHASE_TWO_CONTRACT_VERSION);
+        } else if fixture.path.starts_with("provider-config/") {
+            assert_eq!(
+                fixture.contract_id.as_deref(),
+                Some(PROVIDER_CONFIG_SCHEMA_ID)
+            );
+            assert_eq!(fixture.contract_version, PROVIDER_CONFIG_SCHEMA_VERSION);
         } else {
             assert!(fixture.contract_id.is_none());
             assert_eq!(fixture.contract_version, PHASE_ONE_CONTRACT_VERSION);

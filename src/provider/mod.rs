@@ -3,6 +3,7 @@
 pub mod auth;
 pub(crate) mod call_policy;
 pub mod capability;
+pub mod config;
 pub mod endpoint;
 pub mod headers;
 pub mod profile;
@@ -13,6 +14,13 @@ pub use auth::{ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, 
 pub use capability::{
     ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, ProtocolDialect,
     ProviderCapabilities, ProviderTransportOptions,
+};
+pub use config::{
+    ClientIdentityConfig, ConfigSchemaVersion, ConfigSource, ConfigSourceId, ConfigSourceKind,
+    ConfigSourceLocation, ConfigValue, CredentialAudienceSpec, EndpointSpec,
+    EnvironmentSecretResolver, FieldProvenance, FieldState, ListMerge, MapMerge, NamedConfigValue,
+    NamedListMerge, ProviderConfigDocument, ProviderConfigField, ProviderConfigLayer,
+    ProviderConfigSnapshot, SecretReference, SecretResolver,
 };
 pub use endpoint::{CredentialAudience, EndpointConfig, Origin, RedirectPolicy, ResolvedEndpoint};
 pub use headers::{

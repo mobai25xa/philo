@@ -119,6 +119,85 @@ pub struct ValidationError {
     reason: ValidationReason,
     summary: String,
 }
+
+/// Failure codes for versioned provider configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProviderConfigFailure {
+    /// The document version cannot be compiled by this SDK.
+    InvalidVersion,
+    /// The document or layer shape is not valid.
+    InvalidDocument,
+    /// A required provider configuration field is absent.
+    MissingRequiredField,
+    /// A field value or cross-field relationship is invalid.
+    InvalidValue,
+    /// Two layers contain conflicting or duplicate entries.
+    MergeConflict,
+    /// A source attempted to modify a field outside its permission.
+    ForbiddenOverride,
+    /// A named secret could not be resolved.
+    SecretUnavailable,
+}
+
+impl fmt::Display for ProviderConfigFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+/// A safe, typed failure while parsing or compiling provider configuration.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason} ({message})")]
+pub struct ProviderConfigError {
+    field: String,
+    reason: ProviderConfigFailure,
+    message: &'static str,
+    source_id: Option<String>,
+}
+
+impl ProviderConfigError {
+    /// Creates a configuration error without retaining a field value or secret.
+    pub fn new(
+        field: impl Into<String>,
+        reason: ProviderConfigFailure,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            message,
+            source_id: None,
+        }
+    }
+
+    /// Attaches a non-sensitive source identifier to this error.
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source_id = Some(source.into());
+        self
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> ProviderConfigFailure {
+        self.reason
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+
+    /// Returns the non-sensitive source identifier, when known.
+    pub fn source(&self) -> Option<&str> {
+        self.source_id.as_deref()
+    }
+}
 impl ValidationError {
     /// Creates a validation error. The summary must not contain user or secret values.
     pub fn new(
@@ -782,6 +861,9 @@ pub enum LlmError {
     /// Configuration failure.
     #[error("configuration: {0}")]
     Configuration(String),
+    /// Versioned provider configuration failure.
+    #[error("provider configuration: {0}")]
+    ProviderConfig(#[from] ProviderConfigError),
     /// Request validation failure.
     #[error("validation: {0}")]
     Validation(#[from] ValidationError),

@@ -212,3 +212,30 @@ fn migration_helpers_remain_absent_from_public_facades() {
         }
     }
 }
+
+#[test]
+fn versioned_provider_config_has_root_and_deep_public_paths() {
+    use philo::provider::config::{
+        ConfigSchemaVersion as DeepVersion, ConfigSource as DeepSource, ConfigValue as DeepValue,
+        ProviderConfigLayer as DeepLayer, ProviderConfigSnapshot as DeepSnapshot,
+        SecretReference as DeepSecretReference,
+    };
+
+    let _: philo::ConfigSchemaVersion = DeepVersion::CURRENT;
+    let source: philo::ConfigSource = DeepSource::programmatic("public-api/config").unwrap();
+    let reference: philo::SecretReference =
+        DeepSecretReference::environment_variable("PHILO_PUBLIC_API_KEY").unwrap();
+    let layer: philo::ProviderConfigLayer =
+        DeepLayer::new(source).with_credential(DeepValue::set(reference));
+    let _: philo::ProviderConfigSnapshot = DeepSnapshot::official_openai()
+        .unwrap()
+        .merge_layers([layer])
+        .unwrap();
+
+    let error = philo::ProviderConfigError::new(
+        "field",
+        philo::ProviderConfigFailure::InvalidValue,
+        "safe public configuration error",
+    );
+    assert_eq!(error.field(), "field");
+}

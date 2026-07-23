@@ -38,6 +38,12 @@ pub const PHASE_TWO_CONTRACT_ID: &str = "philo/openai-chat-p2";
 /// The version of the frozen phase-two behavior contract.
 pub const PHASE_TWO_CONTRACT_VERSION: &str = "1.1.0";
 
+/// The identifier of the versioned provider configuration schema.
+pub const PROVIDER_CONFIG_SCHEMA_ID: &str = "philo/provider-config";
+
+/// The current version of the provider configuration schema.
+pub const PROVIDER_CONFIG_SCHEMA_VERSION: &str = "1.0";
+
 pub mod client;
 pub mod domain;
 pub mod error;
@@ -69,9 +75,10 @@ pub use domain::{
 pub use error::{
     AuthFailureKind, AuthenticationError, BodySummary, CapabilityError, CostError, CostFailure,
     ErrorStage, HistoryError, HistoryFailure, HttpStatusError, LlmError, ProtocolError,
-    RetriableHint, SchemaError, SchemaFailure, StructuredOutputError, StructuredOutputFailure,
-    TimeoutError, ToolValidationError, ToolValidationFailure, TransportError, TruncatedStreamError,
-    UnknownFinishReason, ValidationError, ValidationReason,
+    ProviderConfigError, ProviderConfigFailure, RetriableHint, SchemaError, SchemaFailure,
+    StructuredOutputError, StructuredOutputFailure, TimeoutError, ToolValidationError,
+    ToolValidationFailure, TransportError, TruncatedStreamError, UnknownFinishReason,
+    ValidationError, ValidationReason,
 };
 pub use observability::{
     LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind, LifecycleIdentity,
@@ -79,10 +86,15 @@ pub use observability::{
 };
 pub use provider::{
     ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, ClientIdentity,
-    CredentialAudience, EndpointConfig, HeaderLayer, HeaderOperation, HeaderPipeline, HeaderPolicy,
-    HeaderSource, HeaderTraceEntry, ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE,
-    OfficialOpenAiProfile, Origin, ProtocolDialect, ProviderCapabilities, ProviderProfile,
-    ProviderRuntime, ProviderTransportOptions, RedirectPolicy, ResolvedEndpoint, ResolvedHeaders,
+    ClientIdentityConfig, ConfigSchemaVersion, ConfigSource, ConfigSourceId, ConfigSourceKind,
+    ConfigSourceLocation, ConfigValue, CredentialAudience, CredentialAudienceSpec, EndpointConfig,
+    EndpointSpec, EnvironmentSecretResolver, FieldProvenance, FieldState, HeaderLayer,
+    HeaderOperation, HeaderPipeline, HeaderPolicy, HeaderSource, HeaderTraceEntry, ListMerge,
+    MapMerge, ModelCapabilityProfile, NamedConfigValue, NamedListMerge,
+    OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, OfficialOpenAiProfile, Origin, ProtocolDialect,
+    ProviderCapabilities, ProviderConfigDocument, ProviderConfigField, ProviderConfigLayer,
+    ProviderConfigSnapshot, ProviderProfile, ProviderRuntime, ProviderTransportOptions,
+    RedirectPolicy, ResolvedEndpoint, ResolvedHeaders, SecretReference, SecretResolver,
     SensitiveHeaderValue, TraceDecision, TraceOperation,
 };
 pub use transport::{
