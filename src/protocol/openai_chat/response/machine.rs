@@ -1,143 +1,32 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
-use futures_core::Stream;
-
-use super::wire::{ChatCompletionChunkWire, ChoiceWire, DeltaWire, ToolCallDeltaWire, UsageWire};
+use super::super::wire::{ChatCompletionChunkWire, ChoiceWire, DeltaWire, ToolCallDeltaWire};
+use super::stream::OpenAiChatStreamContext;
+use super::terminal::{PreparedChunk, StructuredTerminal, bounded_label, record_field_names};
+use super::tool_calls::ToolCallAccumulator;
 use crate::domain::{
-    AssistantEvent, ContentIndex, FinishReason, GenerationId, LocalRequestId, ModelRef,
-    ProviderRequestId, ResponseFormat, SchemaLimits, TokenCount, ToolArguments, ToolCall,
-    ToolCallId, ToolName, Usage, UsageDetails, UsageMergeOutcome, WireToolIndex,
-    merge_usage_details,
+    AssistantEvent, ContentIndex, FinishReason, GenerationId, ResponseFormat, UsageDetails,
+    UsageMergeOutcome, merge_usage_details,
 };
 use crate::error::{
-    ErrorStage, LlmError, ProtocolError, StructuredOutputError, StructuredOutputFailure,
-    TruncatedStreamError, UnknownFinishReason, UnsupportedResponseSemantics,
+    ErrorStage, LlmError, ProtocolError, TruncatedStreamError, UnknownFinishReason,
+    UnsupportedResponseSemantics,
 };
 use crate::provider::call_policy::ResponseLimits;
-use crate::transport::{ByteStream, SseConfig, SseDecoder, SseEvent};
+use crate::transport::SseEvent;
 
-/// Stable request context supplied by the future client orchestration layer.
-#[derive(Clone, Debug)]
-pub(crate) struct OpenAiChatStreamContext {
-    local_request_id: LocalRequestId,
-    provider_request_id: Option<ProviderRequestId>,
-    _model: ModelRef,
-}
-
-impl OpenAiChatStreamContext {
-    pub(crate) fn new(
-        local_request_id: LocalRequestId,
-        provider_request_id: Option<ProviderRequestId>,
-        model: ModelRef,
-    ) -> Self {
-        Self {
-            local_request_id,
-            provider_request_id,
-            _model: model,
-        }
-    }
-}
-
-/// Converts a byte stream using only the response policy captured by planning.
-pub(crate) fn decode_openai_chat_stream_with_plan(
-    body: ByteStream,
-    context: OpenAiChatStreamContext,
-    response_format: ResponseFormat,
-    sse: SseConfig,
-    limits: ResponseLimits,
-) -> OpenAiChatEventStream {
-    OpenAiChatEventStream {
-        source: SseDecoder::with_config(body, sse),
-        machine: ChatStateMachine::new_with_format(context, response_format, limits),
-        pending: VecDeque::new(),
-        terminal: false,
-    }
-}
-
-/// Stream adapter joining the protocol-neutral SSE decoder to Chat semantics.
-pub(crate) struct OpenAiChatEventStream {
-    source: SseDecoder,
-    machine: ChatStateMachine,
-    pending: VecDeque<Result<AssistantEvent, LlmError>>,
-    terminal: bool,
-}
-
-impl fmt::Debug for OpenAiChatEventStream {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("OpenAiChatEventStream")
-            .field("machine", &self.machine)
-            .field("pending_events", &self.pending.len())
-            .field("terminal", &self.terminal)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Stream for OpenAiChatEventStream {
-    type Item = Result<AssistantEvent, LlmError>;
-
-    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let stream = self.get_mut();
-        if let Some(item) = stream.pending.pop_front() {
-            return Poll::Ready(Some(item));
-        }
-        if stream.terminal {
-            return Poll::Ready(None);
-        }
-
-        loop {
-            match Pin::new(&mut stream.source).poll_next(context) {
-                Poll::Ready(Some(Ok(event))) => match stream.machine.accept(&event) {
-                    Ok(events) => {
-                        stream.pending.extend(events.into_iter().map(Ok));
-                        if let Some(item) = stream.pending.pop_front() {
-                            return Poll::Ready(Some(item));
-                        }
-                    }
-                    Err(error) => {
-                        stream.terminal = true;
-                        return Poll::Ready(Some(Err(error)));
-                    }
-                },
-                Poll::Ready(Some(Err(error))) => {
-                    stream.terminal = true;
-                    return Poll::Ready(Some(Err(error.into_llm_error())));
-                }
-                Poll::Ready(None) => {
-                    stream.terminal = true;
-                    match stream.machine.finish() {
-                        Ok(events) => {
-                            stream.pending.extend(events.into_iter().map(Ok));
-                            return Poll::Ready(stream.pending.pop_front());
-                        }
-                        Err(error) => return Poll::Ready(Some(Err(error))),
-                    }
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
-
-struct ChatStateMachine {
+pub(super) struct ChatStateMachine {
     context: OpenAiChatStreamContext,
     limits: ResponseLimits,
     started: bool,
     text: ContentBlockState,
     refusal: ContentBlockState,
-    tools: BTreeMap<WireToolIndex, PendingToolCall>,
-    seen_provider_call_ids: BTreeMap<ToolCallId, WireToolIndex>,
-    tool_order: Vec<WireToolIndex>,
+    tools: ToolCallAccumulator,
     next_content_index: u32,
-    total_tool_argument_bytes: usize,
     finish_reason: Option<FinishReason>,
     seen_done: bool,
-    response_format: ResponseFormat,
-    structured_text_buffer: Option<String>,
-    structured_validated: bool,
+    terminal: StructuredTerminal,
     usage_details: Option<UsageDetails>,
     generation_id: Option<GenerationId>,
     response_model: Option<String>,
@@ -151,7 +40,7 @@ impl fmt::Debug for ChatStateMachine {
             .field("started", &self.started)
             .field("text", &self.text)
             .field("refusal", &self.refusal)
-            .field("tool_calls", &self.tool_order.len())
+            .field("tool_calls", &self.tools.len())
             .field("finish_seen", &self.finish_reason.is_some())
             .field("done_seen", &self.seen_done)
             .field("usage_seen", &self.usage_details.is_some())
@@ -169,58 +58,23 @@ enum ContentBlockState {
     Closed,
 }
 
-struct PendingToolCall {
-    wire_index: WireToolIndex,
-    domain_content_index: ContentIndex,
-    provider_call_id: Option<ToolCallId>,
-    name_buffer: String,
-    arguments_buffer: String,
-    start_emitted: bool,
-    ended: bool,
-}
-
-impl fmt::Debug for PendingToolCall {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PendingToolCall")
-            .field("wire_index", &self.wire_index.get())
-            .field("domain_content_index", &self.domain_content_index.get())
-            .field("has_id", &self.provider_call_id.is_some())
-            .field("name_bytes", &self.name_buffer.len())
-            .field("arguments_bytes", &self.arguments_buffer.len())
-            .field("start_emitted", &self.start_emitted)
-            .field("ended", &self.ended)
-            .finish_non_exhaustive()
-    }
-}
-
 impl ChatStateMachine {
-    fn new_with_format(
+    pub(super) fn new_with_format(
         context: OpenAiChatStreamContext,
         response_format: ResponseFormat,
         limits: ResponseLimits,
     ) -> Self {
-        let structured_text_buffer = if matches!(response_format, ResponseFormat::Text) {
-            None
-        } else {
-            Some(String::new())
-        };
         Self {
             context,
             limits,
             started: false,
             text: ContentBlockState::NotStarted,
             refusal: ContentBlockState::NotStarted,
-            tools: BTreeMap::new(),
-            seen_provider_call_ids: BTreeMap::new(),
-            tool_order: Vec::new(),
+            tools: ToolCallAccumulator::new(limits),
             next_content_index: 0,
-            total_tool_argument_bytes: 0,
             finish_reason: None,
             seen_done: false,
-            response_format,
-            structured_text_buffer,
-            structured_validated: false,
+            terminal: StructuredTerminal::new(response_format),
             usage_details: None,
             generation_id: None,
             response_model: None,
@@ -232,7 +86,7 @@ impl ChatStateMachine {
         ProtocolError::at_stage(ErrorStage::Protocol, message).into()
     }
 
-    fn accept(&mut self, event: &SseEvent) -> Result<Vec<AssistantEvent>, LlmError> {
+    pub(super) fn accept(&mut self, event: &SseEvent) -> Result<Vec<AssistantEvent>, LlmError> {
         if self.seen_done {
             if event.data() == "[DONE]" {
                 return Err(Self::protocol("duplicate [DONE] marker"));
@@ -250,7 +104,14 @@ impl ChatStateMachine {
                     "[DONE] received before all content blocks ended",
                 ));
             }
-            self.validate_structured_completion()?;
+            self.terminal.validate(
+                self.finish_reason
+                    .as_ref()
+                    .expect("finish reason checked above"),
+                !self.tools.is_empty(),
+                !matches!(self.refusal, ContentBlockState::NotStarted),
+                &self.limits,
+            )?;
             self.seen_done = true;
             return Ok(Vec::new());
         }
@@ -299,7 +160,8 @@ impl ChatStateMachine {
             match outcome {
                 UsageMergeOutcome::Unchanged => {}
                 UsageMergeOutcome::EmitP1 { details } => {
-                    let usage = core_usage_from_details(details).map_err(Self::protocol)?;
+                    let usage =
+                        super::usage::core_usage_from_details(details).map_err(Self::protocol)?;
                     events.push(AssistantEvent::Usage(usage));
                     events.push(AssistantEvent::DetailedUsage(details));
                 }
@@ -459,26 +321,8 @@ impl ChatStateMachine {
         let ContentBlockState::Open { index } = self.text else {
             return Err(Self::protocol("text block is not open"));
         };
-        if let Some(buffer) = &mut self.structured_text_buffer {
-            let next = buffer.len().checked_add(content.len()).ok_or_else(|| {
-                StructuredOutputError::new(
-                    "structured_output",
-                    StructuredOutputFailure::TooLarge,
-                    None,
-                    "structured output byte count overflowed",
-                )
-            })?;
-            if next > self.limits.max_structured_output_bytes {
-                return Err(StructuredOutputError::new(
-                    "structured_output",
-                    StructuredOutputFailure::TooLarge,
-                    None,
-                    "structured output exceeds the configured byte limit",
-                )
-                .into());
-            }
-            buffer.push_str(content);
-        }
+        self.terminal
+            .push_text(content, self.limits.max_structured_output_bytes)?;
         events.push(AssistantEvent::TextDelta {
             index,
             delta: content.to_owned(),
@@ -534,151 +378,13 @@ impl ChatStateMachine {
             return Err(UnsupportedResponseSemantics::new("tool_call.type").into());
         }
 
-        let wire_index = parse_wire_tool_index(delta.index)?;
-        self.ensure_tool_accumulator(wire_index, delta.id.as_deref(), events)?;
-        self.append_tool_fragments(wire_index, delta, events)
-    }
-
-    fn ensure_tool_accumulator(
-        &mut self,
-        wire_index: WireToolIndex,
-        raw_id: Option<&str>,
-        events: &mut Vec<AssistantEvent>,
-    ) -> Result<(), LlmError> {
-        let parsed_id = raw_id.map(parse_tool_call_id).transpose()?;
-        if let Some(pending) = self.tools.get(&wire_index) {
-            if pending.ended {
-                return Err(Self::protocol(
-                    "tool call delta received after tool call end",
-                ));
-            }
-            if let (Some(existing), Some(parsed)) = (&pending.provider_call_id, &parsed_id)
-                && existing != parsed
-            {
-                return Err(Self::protocol("conflicting tool call id for wire index"));
-            }
-            if let Some(id) = &parsed_id {
-                self.register_tool_call_id(wire_index, id)?;
-                if self
-                    .tools
-                    .get(&wire_index)
-                    .is_some_and(|pending| pending.provider_call_id.is_none())
-                {
-                    self.tools
-                        .get_mut(&wire_index)
-                        .expect("tool accumulator checked above")
-                        .provider_call_id = Some(id.clone());
-                }
-            }
-            return Ok(());
-        }
-
-        if self.tool_order.len() >= self.limits.max_tool_calls {
-            return Err(Self::protocol("tool call count exceeds resource limit"));
-        }
-        let domain_content_index = self.allocate_content_index()?;
-        if let Some(id) = &parsed_id {
-            self.register_tool_call_id(wire_index, id)?;
-        }
-        let provider_call_id = parsed_id;
-        self.tool_order.push(wire_index);
-        self.tools.insert(
-            wire_index,
-            PendingToolCall {
-                wire_index,
-                domain_content_index,
-                provider_call_id: provider_call_id.clone(),
-                name_buffer: String::new(),
-                arguments_buffer: String::new(),
-                start_emitted: true,
-                ended: false,
-            },
-        );
-        events.push(AssistantEvent::ToolCallStart {
-            index: domain_content_index,
-            wire_index,
-            id: provider_call_id,
-        });
-        Ok(())
-    }
-
-    fn register_tool_call_id(
-        &mut self,
-        wire_index: WireToolIndex,
-        id: &ToolCallId,
-    ) -> Result<(), LlmError> {
-        match self.seen_provider_call_ids.get(id) {
-            Some(existing) if *existing != wire_index => {
-                Err(Self::protocol("duplicate tool call id across wire indexes"))
-            }
-            Some(_) => Ok(()),
-            None => {
-                self.seen_provider_call_ids.insert(id.clone(), wire_index);
-                Ok(())
-            }
-        }
-    }
-
-    fn append_tool_fragments(
-        &mut self,
-        wire_index: WireToolIndex,
-        delta: &ToolCallDeltaWire,
-        events: &mut Vec<AssistantEvent>,
-    ) -> Result<(), LlmError> {
-        let pending = self
-            .tools
-            .get_mut(&wire_index)
-            .ok_or_else(|| Self::protocol("missing tool call accumulator"))?;
-        if pending.ended {
-            return Err(Self::protocol(
-                "tool call delta received after tool call end",
-            ));
-        }
-
-        let name_delta = delta
-            .function
-            .as_ref()
-            .and_then(|function| function.name.as_ref())
-            .filter(|name| !name.is_empty())
-            .cloned();
-        let arguments_delta = delta
-            .function
-            .as_ref()
-            .and_then(|function| function.arguments.as_ref())
-            .filter(|arguments| !arguments.is_empty())
-            .cloned();
-
-        if let Some(delta) = &name_delta {
-            if pending.name_buffer.len().saturating_add(delta.len()) > ToolName::MAX_BYTES {
-                return Err(Self::protocol("tool name exceeds resource limit"));
-            }
-            pending.name_buffer.push_str(delta);
-        }
-        if let Some(delta) = &arguments_delta {
-            let next_call = pending.arguments_buffer.len().saturating_add(delta.len());
-            if next_call > self.limits.max_tool_arguments_bytes {
-                return Err(Self::protocol(
-                    "tool arguments exceed per-call resource limit",
-                ));
-            }
-            let next_total = self.total_tool_argument_bytes.saturating_add(delta.len());
-            if next_total > self.limits.max_all_tool_arguments_bytes {
-                return Err(Self::protocol(
-                    "tool arguments exceed aggregate resource limit",
-                ));
-            }
-            pending.arguments_buffer.push_str(delta);
-            self.total_tool_argument_bytes = next_total;
-        }
-
-        if name_delta.is_some() || arguments_delta.is_some() {
-            events.push(AssistantEvent::ToolCallDelta {
-                index: pending.domain_content_index,
-                wire_index,
-                name_delta,
-                arguments_delta,
-            });
-        }
+        let wire_index = ToolCallAccumulator::parse_wire_index(delta.index)?;
+        let content_index = if self.tools.prepare(wire_index)? {
+            Some(self.allocate_content_index()?)
+        } else {
+            None
+        };
+        events.extend(self.tools.observe_delta(wire_index, content_index, delta)?);
         Ok(())
     }
 
@@ -697,15 +403,12 @@ impl ChatStateMachine {
                 if !matches!(self.refusal, ContentBlockState::NotStarted) {
                     return Err(UnsupportedResponseSemantics::new("tool_calls with refusal").into());
                 }
-                if self.tool_order.is_empty() {
+                if self.tools.is_empty() {
                     return Err(Self::protocol(
                         "finish reason tool_calls without tool call deltas",
                     ));
                 }
-                let order = self.tool_order.clone();
-                for wire_index in order {
-                    self.end_tool_call(wire_index, events)?;
-                }
+                events.extend(self.tools.finish_all()?);
             }
             FinishReason::Stop | FinishReason::Length => {
                 if !self.tools.is_empty() {
@@ -763,41 +466,6 @@ impl ChatStateMachine {
         }
     }
 
-    fn end_tool_call(
-        &mut self,
-        wire_index: WireToolIndex,
-        events: &mut Vec<AssistantEvent>,
-    ) -> Result<(), LlmError> {
-        let pending = self
-            .tools
-            .get_mut(&wire_index)
-            .ok_or_else(|| Self::protocol("missing tool call accumulator"))?;
-        if pending.ended {
-            return Err(Self::protocol("duplicate tool call end"));
-        }
-        let id = pending
-            .provider_call_id
-            .clone()
-            .ok_or_else(|| Self::protocol("tool call completed without an id"))?;
-        if pending.name_buffer.is_empty() {
-            return Err(Self::protocol("tool call completed without a name"));
-        }
-        let name = ToolName::new(pending.name_buffer.clone())
-            .map_err(|_| Self::protocol("tool call completed with an invalid name"))?;
-        let arguments = ToolArguments::from_raw_json(pending.arguments_buffer.clone())
-            .map_err(|_| Self::protocol("tool call completed with incomplete JSON arguments"))?;
-        if json_depth(arguments.value()) > self.limits.max_schema_depth {
-            return Err(Self::protocol(
-                "tool call arguments exceed maximum JSON nesting depth",
-            ));
-        }
-        let call = ToolCall::new(id, name, arguments);
-        let index = pending.domain_content_index;
-        pending.ended = true;
-        events.push(AssistantEvent::ToolCallEnd { index, call });
-        Ok(())
-    }
-
     fn allocate_content_index(&mut self) -> Result<ContentIndex, LlmError> {
         let index = ContentIndex::new(self.next_content_index);
         self.next_content_index = self
@@ -810,36 +478,14 @@ impl ChatStateMachine {
     fn has_open_blocks(&self) -> bool {
         matches!(self.text, ContentBlockState::Open { .. })
             || matches!(self.refusal, ContentBlockState::Open { .. })
-            || self.tools.values().any(|tool| !tool.ended)
+            || self.tools.has_open_calls()
     }
 
-    fn validate_structured_completion(&mut self) -> Result<(), LlmError> {
-        let finish_reason = self
-            .finish_reason
-            .as_ref()
-            .ok_or_else(|| Self::protocol("structured validation requires a finish reason"))?;
-        let text = self.structured_text_buffer.as_deref().unwrap_or_default();
-        crate::domain::structured::validate_structured_response(
-            &self.response_format,
-            finish_reason,
-            text,
-            !self.tools.is_empty(),
-            !matches!(self.refusal, ContentBlockState::NotStarted),
-            SchemaLimits {
-                max_schema_bytes: usize::MAX,
-                max_schema_depth: self.limits.max_schema_depth,
-                max_json_array_items: self.limits.max_json_array_items,
-            },
-        )?;
-        self.structured_validated = true;
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<Vec<AssistantEvent>, LlmError> {
+    pub(super) fn finish(&mut self) -> Result<Vec<AssistantEvent>, LlmError> {
         if !self.seen_done {
             return Err(TruncatedStreamError.into());
         }
-        if !self.structured_validated {
+        if !self.terminal.is_validated() {
             return Err(Self::protocol(
                 "stream ended before structured output validation",
             ));
@@ -858,199 +504,6 @@ impl ChatStateMachine {
     }
 }
 
-struct PreparedChunk {
-    finish_reason: Option<FinishReason>,
-    usage: Option<UsageDetails>,
-}
-
-impl PreparedChunk {
-    fn validate(
-        chunk: &ChatCompletionChunkWire,
-        finish_already_seen: bool,
-    ) -> Result<Self, LlmError> {
-        if chunk.choices.len() > 1 {
-            return Err(UnsupportedResponseSemantics::new("multiple choices").into());
-        }
-        if chunk.choices.is_empty() && chunk.usage.is_none() {
-            return Err(ChatStateMachine::protocol(
-                "chunk has neither a choice nor usage",
-            ));
-        }
-
-        let finish_reason = if let Some(choice) = chunk.choices.first() {
-            Self::validate_choice(choice, finish_already_seen)?
-        } else {
-            None
-        };
-        let usage = chunk
-            .usage
-            .as_ref()
-            .map(parse_usage_details)
-            .transpose()?
-            .flatten();
-        Ok(Self {
-            finish_reason,
-            usage,
-        })
-    }
-
-    fn validate_choice(
-        choice: &ChoiceWire,
-        finish_already_seen: bool,
-    ) -> Result<Option<FinishReason>, LlmError> {
-        if choice.index != 0 {
-            return Err(UnsupportedResponseSemantics::new("nonzero choice index").into());
-        }
-        if finish_already_seen {
-            if choice.finish_reason.is_some() {
-                return Err(ChatStateMachine::protocol("duplicate finish reason"));
-            }
-            return Err(ChatStateMachine::protocol(
-                "choice data received after finish reason",
-            ));
-        }
-        if let Some(delta) = &choice.delta {
-            if delta.function_call.is_some() {
-                return Err(UnsupportedResponseSemantics::new("function_call").into());
-            }
-            if delta
-                .role
-                .as_deref()
-                .is_some_and(|role| role != "assistant")
-            {
-                return Err(UnsupportedResponseSemantics::new("delta.role").into());
-            }
-        }
-        choice
-            .finish_reason
-            .as_deref()
-            .map(parse_finish_reason)
-            .transpose()
-    }
-}
-
-fn parse_usage_details(wire: &UsageWire) -> Result<Option<UsageDetails>, LlmError> {
-    let input = optional_token_count(wire.prompt_tokens, "usage.prompt_tokens")?;
-    let output = optional_token_count(wire.completion_tokens, "usage.completion_tokens")?;
-    let total = optional_token_count(wire.total_tokens, "usage.total_tokens")?;
-    let cached_input = optional_token_count(
-        wire.prompt_tokens_details
-            .as_ref()
-            .and_then(|details| details.cached_tokens),
-        "usage.prompt_tokens_details.cached_tokens",
-    )?;
-    let cache_write = optional_token_count(
-        wire.prompt_tokens_details
-            .as_ref()
-            .and_then(|details| details.cache_write_tokens),
-        "usage.prompt_tokens_details.cache_write_tokens",
-    )?;
-    let reasoning = optional_token_count(
-        wire.completion_tokens_details
-            .as_ref()
-            .and_then(|details| details.reasoning_tokens),
-        "usage.completion_tokens_details.reasoning_tokens",
-    )?;
-
-    let details = UsageDetails::new(input, output, total, cached_input, cache_write, reasoning);
-    details
-        .validate_relationships()
-        .map_err(|error| ChatStateMachine::protocol(error.message()))?;
-    if !details.has_any_known() {
-        return Ok(None);
-    }
-    Ok(Some(details))
-}
-
-fn optional_token_count(value: Option<i64>, field: &str) -> Result<TokenCount, LlmError> {
-    match value {
-        None => Ok(TokenCount::Unknown),
-        Some(raw) => {
-            let count = u64::try_from(raw)
-                .map_err(|_| ChatStateMachine::protocol(format!("{field} must be non-negative")))?;
-            Ok(TokenCount::Known(count))
-        }
-    }
-}
-
-fn core_usage_from_details(details: UsageDetails) -> Result<Usage, &'static str> {
-    match (
-        details.input_tokens(),
-        details.output_tokens(),
-        details.total_tokens(),
-    ) {
-        (TokenCount::Known(input), TokenCount::Known(output), TokenCount::Known(total)) => {
-            Usage::new(input, output, total)
-                .map_err(|_| "usage total does not equal input + output")
-        }
-        _ => Err("core usage counters are incomplete"),
-    }
-}
-
-fn parse_finish_reason(raw: &str) -> Result<FinishReason, LlmError> {
-    match raw {
-        "stop" => Ok(FinishReason::Stop),
-        "length" => Ok(FinishReason::Length),
-        "content_filter" => Ok(FinishReason::ContentFilter),
-        "tool_calls" => Ok(FinishReason::ToolCalls),
-        "function_call" => Err(UnsupportedResponseSemantics::new(raw).into()),
-        _ => Err(UnknownFinishReason::new(bounded_label(raw, 64)).into()),
-    }
-}
-
-fn parse_wire_tool_index(raw: i64) -> Result<WireToolIndex, LlmError> {
-    if raw < 0 {
-        return Err(ChatStateMachine::protocol(
-            "tool call index must be non-negative",
-        ));
-    }
-    let value = u32::try_from(raw)
-        .map_err(|_| ChatStateMachine::protocol("tool call index exceeds u32 range"))?;
-    Ok(WireToolIndex::new(value))
-}
-
-fn parse_tool_call_id(raw: &str) -> Result<ToolCallId, LlmError> {
-    ToolCallId::new(raw).map_err(|_| ChatStateMachine::protocol("invalid tool call id"))
-}
-
-fn json_depth(value: &serde_json::Value) -> usize {
-    match value {
-        serde_json::Value::Array(items) => 1 + items.iter().map(json_depth).max().unwrap_or(0),
-        serde_json::Value::Object(map) => 1 + map.values().map(json_depth).max().unwrap_or(0),
-        _ => 1,
-    }
-}
-
-fn bounded_label(value: &str, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value.to_owned();
-    }
-    let mut end = max_bytes;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &value[..end])
-}
-
-fn record_field_names<'a>(
-    destination: &mut BTreeSet<String>,
-    scope: &str,
-    names: impl Iterator<Item = &'a String>,
-) {
-    for name in names {
-        let safe = if name.len() <= 64
-            && name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-        {
-            name.as_str()
-        } else {
-            "<invalid-field-name>"
-        };
-        destination.insert(format!("{scope}.{safe}"));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
@@ -1058,8 +511,15 @@ mod tests {
     use proptest::prelude::*;
     use serde_json::json;
 
-    use crate::domain::{ResourceLimits, StructuredSchema, ToolSchema};
+    use crate::domain::{
+        LocalRequestId, ModelRef, ProviderRequestId, ResourceLimits, StructuredSchema, TokenCount,
+        ToolArguments, ToolCallId, ToolSchema, Usage, WireToolIndex,
+    };
+    use crate::error::StructuredOutputFailure;
+    use crate::transport::{ByteStream, SseConfig};
 
+    use super::super::stream::decode_openai_chat_stream_with_plan;
+    use super::super::tool_calls::{PendingToolCall, ToolCallAccumulator};
     use super::*;
 
     fn context() -> OpenAiChatStreamContext {
@@ -1156,7 +616,7 @@ mod tests {
     #[tokio::test]
     async fn text_fixture_produces_exact_event_sequence() {
         let events = decode(include_bytes!(
-            "../../../tests/fixtures/responses/openai_chat/text.sse"
+            "../../../../tests/fixtures/responses/openai_chat/text.sse"
         ))
         .await
         .into_iter()
@@ -1213,11 +673,11 @@ mod tests {
     #[tokio::test]
     async fn successful_fixture_variants_preserve_boundaries_and_usage() {
         for fixture in [
-            include_bytes!("../../../tests/fixtures/responses/openai_chat/usage-only.sse")
+            include_bytes!("../../../../tests/fixtures/responses/openai_chat/usage-only.sse")
                 .as_slice(),
-            include_bytes!("../../../tests/fixtures/responses/openai_chat/empty-content.sse")
+            include_bytes!("../../../../tests/fixtures/responses/openai_chat/empty-content.sse")
                 .as_slice(),
-            include_bytes!("../../../tests/fixtures/responses/openai_chat/unknown-fields.sse")
+            include_bytes!("../../../../tests/fixtures/responses/openai_chat/unknown-fields.sse")
                 .as_slice(),
         ] {
             let events = decode(fixture)
@@ -1247,7 +707,7 @@ mod tests {
     #[tokio::test]
     async fn single_tool_call_stream_emits_start_delta_end_and_tool_calls_finish() {
         let fixture =
-            include_bytes!("../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse");
+            include_bytes!("../../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse");
         let events = decode(fixture)
             .await
             .into_iter()
@@ -1291,7 +751,7 @@ mod tests {
     #[tokio::test]
     async fn parallel_tool_calls_preserve_first_seen_domain_order() {
         let fixture = include_bytes!(
-            "../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+            "../../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
         );
         let events = decode(fixture)
             .await
@@ -1319,18 +779,18 @@ mod tests {
     #[tokio::test]
     async fn name_and_argument_splits_reassemble_identically() {
         for fixture in [
-            include_bytes!("../../../tests/fixtures/phase-2/streams/tool-calls/name-split.sse")
+            include_bytes!("../../../../tests/fixtures/phase-2/streams/tool-calls/name-split.sse")
                 .as_slice(),
             include_bytes!(
-                "../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
+                "../../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
             )
             .as_slice(),
             include_bytes!(
-                "../../../tests/fixtures/phase-2/streams/tool-calls/id-first-chunk-only.sse"
+                "../../../../tests/fixtures/phase-2/streams/tool-calls/id-first-chunk-only.sse"
             )
             .as_slice(),
             include_bytes!(
-                "../../../tests/fixtures/phase-2/streams/tool-calls/usage-after-tool.sse"
+                "../../../../tests/fixtures/phase-2/streams/tool-calls/usage-after-tool.sse"
             )
             .as_slice(),
         ] {
@@ -1368,30 +828,30 @@ mod tests {
         let cases: &[ErrorCase] = &[
             (
                 include_bytes!(
-                    "../../../tests/fixtures/phase-2/streams/tool-calls/incomplete-arguments.sse"
+                    "../../../../tests/fixtures/phase-2/streams/tool-calls/incomplete-arguments.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../tests/fixtures/phase-2/streams/tool-calls/conflicting-id.sse"
+                    "../../../../tests/fixtures/phase-2/streams/tool-calls/conflicting-id.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../tests/fixtures/phase-2/streams/tool-calls/duplicate-finish.sse"
+                    "../../../../tests/fixtures/phase-2/streams/tool-calls/duplicate-finish.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../tests/fixtures/phase-2/streams/tool-calls/done-before-call-end.sse"
+                    "../../../../tests/fixtures/phase-2/streams/tool-calls/done-before-call-end.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
-                include_bytes!("../../../tests/fixtures/responses/openai_chat/tool-finish.sse"),
+                include_bytes!("../../../../tests/fixtures/responses/openai_chat/tool-finish.sse"),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
         ];
@@ -1415,7 +875,7 @@ mod tests {
     #[tokio::test]
     async fn oversized_tool_arguments_fail_with_reduced_limits() {
         let fixture = include_bytes!(
-            "../../../tests/fixtures/phase-2/streams/tool-calls/oversized-arguments.sse"
+            "../../../../tests/fixtures/phase-2/streams/tool-calls/oversized-arguments.sse"
         );
         let limits = ResourceLimits::builder()
             .with_max_tool_arguments_bytes(16)
@@ -1452,16 +912,16 @@ mod tests {
     #[tokio::test]
     async fn random_and_forced_partitions_match_single_chunk_baseline() {
         let fixtures: &[&[u8]] = &[
-            include_bytes!("../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse"),
+            include_bytes!("../../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse"),
             include_bytes!(
-                "../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+                "../../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
             ),
             include_bytes!(
-                "../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
+                "../../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
             ),
-            include_bytes!("../../../tests/fixtures/responses/openai_chat/text.sse"),
+            include_bytes!("../../../../tests/fixtures/responses/openai_chat/text.sse"),
             include_bytes!(
-                "../../../tests/fixtures/phase-2/streams/usage/usage-only-after-stop.sse"
+                "../../../../tests/fixtures/phase-2/streams/usage/usage-only-after-stop.sse"
             ),
         ];
 
@@ -1510,15 +970,15 @@ mod tests {
             chunk_sizes in prop::collection::vec(1usize..48, 0..64),
         ) {
             let fixtures: &[&[u8]] = &[
-                include_bytes!("../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse"),
+                include_bytes!("../../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse"),
                 include_bytes!(
-                    "../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+                    "../../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
                 ),
                 include_bytes!(
-                    "../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
+                    "../../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
                 ),
                 include_bytes!(
-                    "../../../tests/fixtures/phase-2/streams/tool-calls/name-split.sse"
+                    "../../../../tests/fixtures/phase-2/streams/tool-calls/name-split.sse"
                 ),
             ];
 
@@ -1549,7 +1009,7 @@ mod tests {
     #[tokio::test]
     async fn phase2_unknown_finish_fails_closed() {
         let results = decode(include_bytes!(
-            "../../../tests/fixtures/phase-2/streams/finish/unknown-finish-fail-closed.sse"
+            "../../../../tests/fixtures/phase-2/streams/finish/unknown-finish-fail-closed.sse"
         ))
         .await;
         let errors: Vec<_> = results
@@ -1568,7 +1028,7 @@ mod tests {
     #[tokio::test]
     async fn phase2_tool_stream_preserves_parallel_calls() {
         let events = decode(include_bytes!(
-            "../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+            "../../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
         ))
         .await
         .into_iter()
@@ -1587,7 +1047,7 @@ mod tests {
     #[tokio::test]
     async fn usage_only_after_stop_merges_without_extra_text() {
         let events = decode(include_bytes!(
-            "../../../tests/fixtures/phase-2/streams/usage/usage-only-after-stop.sse"
+            "../../../../tests/fixtures/phase-2/streams/usage/usage-only-after-stop.sse"
         ))
         .await
         .into_iter()
@@ -1621,7 +1081,7 @@ mod tests {
     #[tokio::test]
     async fn official_reasoning_content_is_ignored_and_usage_tokens_are_kept() {
         let events = decode(include_bytes!(
-            "../../../tests/fixtures/phase-2/streams/thinking/official-reasoning-content-ignored.sse"
+            "../../../../tests/fixtures/phase-2/streams/thinking/official-reasoning-content-ignored.sse"
         ))
         .await
         .into_iter()
@@ -1649,7 +1109,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_tool_argument_json_fails_without_tool_call_end() {
         let results = decode(include_bytes!(
-            "../../../tests/fixtures/phase-2/streams/malformed/tool-arguments-invalid-json.sse"
+            "../../../../tests/fixtures/phase-2/streams/malformed/tool-arguments-invalid-json.sse"
         ))
         .await;
         assert!(
@@ -1666,54 +1126,62 @@ mod tests {
         let cases: &[ErrorCase] = &[
             (
                 include_bytes!(
-                    "../../../tests/fixtures/responses/openai_chat/unknown-finish-reason.sse"
+                    "../../../../tests/fixtures/responses/openai_chat/unknown-finish-reason.sse"
                 ),
                 |error| matches!(error, LlmError::UnknownFinishReason(_)),
             ),
             (
-                include_bytes!("../../../tests/fixtures/responses/openai_chat/content-filter.sse"),
+                include_bytes!(
+                    "../../../../tests/fixtures/responses/openai_chat/content-filter.sse"
+                ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../tests/fixtures/responses/openai_chat/nonzero-choice-index.sse"
+                    "../../../../tests/fixtures/responses/openai_chat/nonzero-choice-index.sse"
                 ),
                 |error| matches!(error, LlmError::UnsupportedResponseSemantics(_)),
             ),
             (
                 include_bytes!(
-                    "../../../tests/fixtures/responses/openai_chat/done-without-finish.sse"
+                    "../../../../tests/fixtures/responses/openai_chat/done-without-finish.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../tests/fixtures/responses/openai_chat/finish-without-done.sse"
+                    "../../../../tests/fixtures/responses/openai_chat/finish-without-done.sse"
                 ),
                 |error| matches!(error, LlmError::TruncatedStream(_)),
             ),
             (
                 include_bytes!(
-                    "../../../tests/fixtures/responses/openai_chat/duplicate-finish.sse"
+                    "../../../../tests/fixtures/responses/openai_chat/duplicate-finish.sse"
                 ),
-                |error| matches!(error, LlmError::Protocol(_)),
-            ),
-            (
-                include_bytes!("../../../tests/fixtures/responses/openai_chat/duplicate-done.sse"),
-                |error| matches!(error, LlmError::Protocol(_)),
-            ),
-            (
-                include_bytes!("../../../tests/fixtures/responses/openai_chat/data-after-done.sse"),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../tests/fixtures/responses/openai_chat/json-error-object.sse"
+                    "../../../../tests/fixtures/responses/openai_chat/duplicate-done.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
-                include_bytes!("../../../tests/fixtures/responses/openai_chat/malformed-json.sse"),
+                include_bytes!(
+                    "../../../../tests/fixtures/responses/openai_chat/data-after-done.sse"
+                ),
+                |error| matches!(error, LlmError::Protocol(_)),
+            ),
+            (
+                include_bytes!(
+                    "../../../../tests/fixtures/responses/openai_chat/json-error-object.sse"
+                ),
+                |error| matches!(error, LlmError::Protocol(_)),
+            ),
+            (
+                include_bytes!(
+                    "../../../../tests/fixtures/responses/openai_chat/malformed-json.sse"
+                ),
                 |error| {
                     matches!(
                         error,
@@ -1722,7 +1190,7 @@ mod tests {
                 },
             ),
             (
-                include_bytes!("../../../tests/fixtures/responses/openai_chat/truncated.sse"),
+                include_bytes!("../../../../tests/fixtures/responses/openai_chat/truncated.sse"),
                 |error| matches!(error, LlmError::TruncatedStream(_)),
             ),
         ];
@@ -1746,7 +1214,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_json_diagnostics_do_not_echo_data() {
         let results = decode(include_bytes!(
-            "../../../tests/fixtures/responses/openai_chat/malformed-json.sse"
+            "../../../../tests/fixtures/responses/openai_chat/malformed-json.sse"
         ))
         .await;
         let error = results.last().unwrap().as_ref().unwrap_err();
@@ -1756,7 +1224,7 @@ mod tests {
 
     #[tokio::test]
     async fn byte_by_byte_chat_fixture_matches_single_chunk() {
-        let fixture = include_bytes!("../../../tests/fixtures/responses/openai_chat/text.sse");
+        let fixture = include_bytes!("../../../../tests/fixtures/responses/openai_chat/text.sse");
         let baseline = decode(fixture)
             .await
             .into_iter()
@@ -1863,7 +1331,7 @@ mod tests {
     #[tokio::test]
     async fn structured_output_is_validated_before_done_is_emitted() {
         let invalid = include_bytes!(
-            "../../../tests/fixtures/phase-2/repair/response/structured-invalid-json.sse"
+            "../../../../tests/fixtures/phase-2/repair/response/structured-invalid-json.sse"
         );
         let results = decode_with_format(
             invalid,
@@ -1882,8 +1350,9 @@ mod tests {
                 .any(|item| matches!(item, Ok(AssistantEvent::Done { .. })))
         );
 
-        let valid =
-            include_bytes!("../../../tests/fixtures/phase-2/repair/response/structured-valid.sse");
+        let valid = include_bytes!(
+            "../../../../tests/fixtures/phase-2/repair/response/structured-valid.sse"
+        );
         let events = decode_with_format(
             valid,
             ResponseFormat::JsonObject,
@@ -1910,7 +1379,7 @@ mod tests {
         );
         let results = decode_with_format(
             include_bytes!(
-                "../../../tests/fixtures/phase-2/repair/response/structured-schema-violation.sse"
+                "../../../../tests/fixtures/phase-2/repair/response/structured-schema-violation.sse"
             ),
             format,
             ResourceLimits::official().into(),
@@ -2017,24 +1486,20 @@ mod tests {
         assert!(pending_debug.contains("arguments_bytes"));
 
         pending.ended = true;
+        let limits = ResourceLimits::official().into();
         let machine_debug = format!(
             "{:?}",
             ChatStateMachine {
                 context: context(),
-                limits: ResourceLimits::official().into(),
+                limits,
                 started: true,
                 text: ContentBlockState::NotStarted,
                 refusal: ContentBlockState::NotStarted,
-                tools: BTreeMap::from([(WireToolIndex::new(0), pending)]),
-                seen_provider_call_ids: BTreeMap::new(),
-                tool_order: vec![WireToolIndex::new(0)],
+                tools: ToolCallAccumulator::from_pending(pending, limits, 32),
                 next_content_index: 1,
-                total_tool_argument_bytes: 32,
                 finish_reason: Some(FinishReason::ToolCalls),
                 seen_done: true,
-                response_format: ResponseFormat::Text,
-                structured_text_buffer: None,
-                structured_validated: true,
+                terminal: StructuredTerminal::new(ResponseFormat::Text),
                 usage_details: None,
                 generation_id: None,
                 response_model: None,

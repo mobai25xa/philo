@@ -1,4 +1,4 @@
-//! Executable R2-A06 ownership and dependency checks.
+//! Executable architecture ownership and dependency checks.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -34,6 +34,7 @@ fn rust_sources(directory: &Path, output: &mut Vec<PathBuf>) {
 fn production_sources_under(directory: &str) -> Vec<(String, String)> {
     let mut files = Vec::new();
     rust_sources(&crate_root().join(directory), &mut files);
+    files.sort();
     files
         .into_iter()
         .map(|file| {
@@ -51,6 +52,23 @@ fn production_sources_under(directory: &str) -> Vec<(String, String)> {
             (relative, production)
         })
         .collect()
+}
+
+fn assert_production_file(path: &str) {
+    let full = crate_root().join(path);
+    assert!(full.is_file(), "missing production owner: {path}");
+    let production = production_source(path);
+    let meaningful_lines = production
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty() && !line.starts_with("//") && !matches!(*line, "{" | "}" | ");")
+        })
+        .count();
+    assert!(
+        meaningful_lines >= 2,
+        "production owner is empty or comment-only: {path}"
+    );
 }
 
 #[test]
@@ -131,7 +149,11 @@ fn execution_and_protocol_layers_keep_their_dependency_boundaries() {
         "src/execution/planner.rs",
         "src/execution/executor.rs",
         "src/protocol/openai_chat/driver.rs",
-        "src/protocol/openai_chat/state.rs",
+        "src/protocol/openai_chat/response/machine.rs",
+        "src/protocol/openai_chat/response/stream.rs",
+        "src/protocol/openai_chat/response/terminal.rs",
+        "src/protocol/openai_chat/response/tool_calls.rs",
+        "src/protocol/openai_chat/response/usage.rs",
     ] {
         assert!(
             !production_source(file).contains("ResourceLimits::official()"),
@@ -188,6 +210,44 @@ fn execution_and_protocol_layers_keep_their_dependency_boundaries() {
 }
 
 #[test]
+fn openai_response_uses_one_private_module_tree() {
+    let root = crate_root();
+    let required = [
+        "src/protocol/openai_chat/response/mod.rs",
+        "src/protocol/openai_chat/response/stream.rs",
+        "src/protocol/openai_chat/response/machine.rs",
+        "src/protocol/openai_chat/response/tool_calls.rs",
+        "src/protocol/openai_chat/response/usage.rs",
+        "src/protocol/openai_chat/response/terminal.rs",
+    ];
+    for path in required {
+        assert!(root.join(path).is_file(), "missing response module: {path}");
+    }
+    assert!(
+        !root.join("src/protocol/openai_chat/state.rs").exists(),
+        "legacy response state.rs remains"
+    );
+
+    let module = production_source("src/protocol/openai_chat/mod.rs");
+    assert!(module.contains("mod response;"));
+    assert!(!module.contains("mod state;"));
+
+    for (file, text) in production_sources_under("src/protocol/openai_chat/response") {
+        for forbidden in [
+            "ProviderRuntime",
+            "OfficialOpenAiProfile",
+            "TestOnlyProfile",
+            "AuthProvider",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "response dependency leak in {file}: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn domain_is_provider_protocol_and_transport_independent() {
     for (file, text) in production_sources_under("src/domain") {
         for forbidden in ["crate::provider", "crate::protocol", "crate::transport"] {
@@ -200,6 +260,81 @@ fn domain_is_provider_protocol_and_transport_independent() {
 }
 
 #[test]
+fn history_uses_one_domain_only_module_tree() {
+    let root = crate_root();
+    for path in [
+        "src/domain/history/mod.rs",
+        "src/domain/history/policy.rs",
+        "src/domain/history/diagnostics.rs",
+        "src/domain/history/normalize.rs",
+        "src/domain/history/replay.rs",
+    ] {
+        assert!(root.join(path).is_file(), "missing history module: {path}");
+    }
+    assert!(
+        !root.join("src/domain/history.rs").exists(),
+        "legacy domain/history.rs remains"
+    );
+
+    for (file, text) in production_sources_under("src/domain/history") {
+        for forbidden in [
+            "crate::provider",
+            "crate::protocol",
+            "crate::transport",
+            "OfficialOpenAiProfile",
+            "TestOnlyProfile",
+            "provider_id.as_str()",
+            "openrouter",
+            "deepseek",
+            "z.ai",
+            "reqwest",
+        ] {
+            assert!(
+                !text
+                    .to_ascii_lowercase()
+                    .contains(&forbidden.to_ascii_lowercase()),
+                "history dependency or brand leak in {file}: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn provider_generic_contract_and_presets_are_physically_separate() {
+    let root = crate_root();
+    for path in [
+        "src/provider/profile.rs",
+        "src/provider/profiles/mod.rs",
+        "src/provider/profiles/official_openai.rs",
+        "src/provider/profiles/test_only.rs",
+    ] {
+        assert!(
+            root.join(path).is_file(),
+            "missing provider profile module: {path}"
+        );
+    }
+
+    let generic = production_source("src/provider/profile.rs");
+    for forbidden in ["struct OfficialOpenAiProfile", "struct TestOnlyProfile"] {
+        assert!(
+            !generic.contains(forbidden),
+            "preset remains in generic profile: {forbidden}"
+        );
+    }
+    assert!(generic.contains("pub(super) struct ProviderProfileParts"));
+    assert!(!generic.contains("pub(crate) struct ProviderProfileParts"));
+    assert!(!generic.contains("pub struct ProviderProfileParts"));
+
+    let runtime = production_source("src/provider/runtime.rs");
+    for forbidden in ["profiles::", "OfficialOpenAiProfile", "TestOnlyProfile"] {
+        assert!(
+            !runtime.contains(forbidden),
+            "runtime depends on concrete preset: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn production_default_limit_lookups_have_an_explicit_file_allowlist() {
     let owners = production_sources_under("src")
         .into_iter()
@@ -208,9 +343,10 @@ fn production_default_limit_lookups_have_an_explicit_file_allowlist() {
     let allowed = BTreeSet::from([
         "src/domain/content.rs".to_owned(),
         "src/domain/request.rs".to_owned(),
-        "src/domain/schema.rs".to_owned(),
+        "src/domain/schema/budget.rs".to_owned(),
         "src/domain/tools.rs".to_owned(),
-        "src/provider/profile.rs".to_owned(),
+        "src/provider/profiles/official_openai.rs".to_owned(),
+        "src/provider/profiles/test_only.rs".to_owned(),
     ]);
     assert_eq!(owners, allowed);
 }
@@ -249,5 +385,251 @@ fn public_request_api_has_no_untyped_wire_extension_escape_hatch() {
                 "serde flatten outside private response wire allowlist: {file}"
             );
         }
+    }
+}
+
+#[test]
+fn completed_phase_2_5_layout_exists_and_legacy_files_are_absent() {
+    for path in [
+        "src/protocol/openai_chat/response/mod.rs",
+        "src/protocol/openai_chat/response/stream.rs",
+        "src/protocol/openai_chat/response/machine.rs",
+        "src/protocol/openai_chat/response/tool_calls.rs",
+        "src/protocol/openai_chat/response/usage.rs",
+        "src/protocol/openai_chat/response/terminal.rs",
+        "src/domain/schema/mod.rs",
+        "src/domain/schema/compile.rs",
+        "src/domain/schema/reference.rs",
+        "src/domain/schema/validate.rs",
+        "src/domain/schema/budget.rs",
+        "src/domain/history/mod.rs",
+        "src/domain/history/policy.rs",
+        "src/domain/history/diagnostics.rs",
+        "src/domain/history/normalize.rs",
+        "src/domain/history/replay.rs",
+        "src/provider/profiles/mod.rs",
+        "src/provider/profiles/official_openai.rs",
+        "src/provider/profiles/test_only.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    for path in [
+        "src/protocol/openai_chat/state.rs",
+        "src/domain/schema.rs",
+        "src/domain/history.rs",
+    ] {
+        assert!(
+            !crate_root().join(path).exists(),
+            "legacy production owner remains: {path}"
+        );
+    }
+}
+
+#[test]
+fn response_submodules_keep_ownership_boundaries() {
+    for (file, text) in production_sources_under("src/protocol/openai_chat/response") {
+        for forbidden in [
+            "crate::client",
+            "crate::execution",
+            "ProviderRuntime",
+            "OfficialOpenAiProfile",
+            "TestOnlyProfile",
+            "AuthProvider",
+            "reqwest",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "response ownership leak in {file}: {forbidden}"
+            );
+        }
+    }
+
+    let stream = production_source("src/protocol/openai_chat/response/stream.rs");
+    for forbidden in [
+        "validate_structured_response",
+        "ToolCallAccumulator",
+        "ToolArguments::",
+    ] {
+        assert!(
+            !stream.contains(forbidden),
+            "stream owns response semantics: {forbidden}"
+        );
+    }
+
+    let tool_calls = production_source("src/protocol/openai_chat/response/tool_calls.rs");
+    for forbidden in ["crate::client", "crate::execution", "crate::transport"] {
+        assert!(
+            !tool_calls.contains(forbidden),
+            "tool accumulator dependency leak: {forbidden}"
+        );
+    }
+
+    let usage = production_source("src/protocol/openai_chat/response/usage.rs");
+    for forbidden in [
+        "crate::client",
+        "crate::execution",
+        "crate::provider",
+        "crate::transport",
+    ] {
+        assert!(
+            !usage.contains(forbidden),
+            "usage dependency leak: {forbidden}"
+        );
+    }
+
+    let terminal = production_source("src/protocol/openai_chat/response/terminal.rs");
+    for forbidden in [
+        "crate::transport",
+        "HttpRequest",
+        "ProviderRuntime",
+        "reqwest",
+    ] {
+        assert!(
+            !terminal.contains(forbidden),
+            "terminal network/profile leak: {forbidden}"
+        );
+    }
+
+    let module = production_source("src/protocol/openai_chat/mod.rs");
+    assert_eq!(
+        module
+            .matches("decode_openai_chat_stream_with_plan")
+            .count(),
+        1,
+        "openai_chat must expose exactly one response decoder route"
+    );
+    for legacy in [
+        "mod state;",
+        "decode_openai_chat_stream_with_limits",
+        "pub(crate) fn decode_openai_chat_stream(",
+    ] {
+        assert!(
+            !module.contains(legacy),
+            "legacy decoder route remains: {legacy}"
+        );
+    }
+}
+
+#[test]
+fn schema_and_history_stay_pure_domain_without_remote_resolvers() {
+    let mut owners = production_sources_under("src/domain/history");
+    owners.extend(production_sources_under("src/domain/schema"));
+    owners.sort_by(|left, right| left.0.cmp(&right.0));
+
+    for (file, text) in owners {
+        for forbidden in [
+            "crate::provider",
+            "crate::protocol",
+            "crate::transport",
+            "reqwest",
+            "tokio::fs",
+            "std::fs",
+            "url::Url",
+            "resolve_remote",
+            "OfficialOpenAiProfile",
+            "TestOnlyProfile",
+            "openrouter",
+            "deepseek",
+            "z.ai",
+        ] {
+            assert!(
+                !text
+                    .to_ascii_lowercase()
+                    .contains(&forbidden.to_ascii_lowercase()),
+                "domain algorithm dependency leak in {file}: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn provider_runtime_and_core_pipeline_are_preset_independent() {
+    let runtime = production_source("src/provider/runtime.rs");
+    for forbidden in [
+        "profiles::",
+        "OfficialOpenAiProfile",
+        "TestOnlyProfile",
+        "official-openai",
+        "test-only",
+    ] {
+        assert!(
+            !runtime.contains(forbidden),
+            "generic runtime depends on preset: {forbidden}"
+        );
+    }
+
+    for directory in [
+        "src/client",
+        "src/protocol",
+        "src/execution",
+        "src/domain/history",
+    ] {
+        for (file, text) in production_sources_under(directory) {
+            for forbidden in [
+                "OfficialOpenAiProfile",
+                "TestOnlyProfile",
+                "official-openai",
+                "openrouter",
+                "deepseek",
+                "z.ai",
+                "provider_id.as_str()",
+            ] {
+                assert!(
+                    !text
+                        .to_ascii_lowercase()
+                        .contains(&forbidden.to_ascii_lowercase()),
+                    "preset or provider-brand control flow in {file}: {forbidden}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn private_migration_types_are_not_reexported() {
+    for facade in ["src/lib.rs", "src/domain/mod.rs", "src/provider/mod.rs"] {
+        let text = production_source(facade);
+        for forbidden in [
+            "ProviderProfileParts",
+            "ChatStateMachine",
+            "OpenAiChatStreamContext",
+            "ProtocolDispatch",
+            "PreparedCall",
+            "ProtocolDriver",
+            "CompiledSchemaMetadata",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "private migration type re-exported by {facade}: {forbidden}"
+            );
+        }
+    }
+
+    let profile = production_source("src/provider/profile.rs");
+    assert!(profile.contains("pub(super) struct ProviderProfileParts"));
+    assert!(profile.contains("pub(super) fn from_parts"));
+    for forbidden in [
+        "pub struct ProviderProfileParts",
+        "pub(crate) struct ProviderProfileParts",
+        "pub fn from_parts",
+        "pub(crate) fn from_parts",
+    ] {
+        assert!(
+            !profile.contains(forbidden),
+            "internal ProviderProfile seam visibility widened: {forbidden}"
+        );
+    }
+
+    let schema_compile = production_source("src/domain/schema/compile.rs");
+    assert!(schema_compile.contains("pub(super) struct CompiledSchemaMetadata"));
+    for forbidden in [
+        "pub struct CompiledSchemaMetadata",
+        "pub(crate) struct CompiledSchemaMetadata",
+    ] {
+        assert!(
+            !schema_compile.contains(forbidden),
+            "compiled schema metadata visibility widened: {forbidden}"
+        );
     }
 }
