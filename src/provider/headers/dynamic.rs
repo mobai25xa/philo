@@ -180,6 +180,12 @@ impl DynamicHeaderPolicy {
         })
     }
 
+    /// Returns the finite value-free header-name allowlist.
+    #[must_use]
+    pub fn allowed_headers(&self) -> &[HeaderName] {
+        &self.allowed_headers
+    }
+
     /// Sets the callback timeout. Zero is rejected.
     pub fn with_timeout(mut self, timeout: Duration) -> Result<Self, LlmError> {
         if timeout.is_zero() {

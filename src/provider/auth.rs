@@ -27,6 +27,36 @@ pub use dynamic::{
 };
 pub use providers::{ApiKeyHeaderAuth, MultiHeaderAuth, NoAuth};
 
+/// Value-free authentication shape exposed to diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthSchemeKind {
+    /// `Authorization: Bearer <secret>`.
+    Bearer,
+    /// One explicitly registered API-key header.
+    ApiKeyHeader,
+    /// An atomic group of authentication headers.
+    MultiHeader,
+    /// A dynamic source whose allowed schemes are validated at runtime.
+    Dynamic,
+    /// Explicit unauthenticated operation.
+    None,
+    /// A downstream implementation that did not provide a more specific shape.
+    Custom,
+}
+
+/// Value-free credential source class exposed to diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CredentialSourceKind {
+    /// Credential material was provided when the profile was built.
+    Static,
+    /// Credential material is acquired through a bounded callback and cache.
+    Dynamic,
+    /// The profile intentionally has no credential.
+    None,
+    /// A downstream implementation that did not declare its source class.
+    Custom,
+}
+
 /// API key wrapper whose Debug and Display representations are always redacted.
 #[derive(Clone)]
 pub struct ApiKey(SecretString);
@@ -182,6 +212,16 @@ pub trait AuthProvider: fmt::Debug + Send + Sync {
     fn validate_final(&self, _headers: &HeaderMap) -> Result<(), LlmError> {
         Ok(())
     }
+
+    /// Returns the authentication shape without resolving or exposing a credential.
+    fn scheme_kind(&self) -> AuthSchemeKind {
+        AuthSchemeKind::Custom
+    }
+
+    /// Returns the credential source class without resolving or exposing a credential.
+    fn credential_source_kind(&self) -> CredentialSourceKind {
+        CredentialSourceKind::Custom
+    }
 }
 
 /// Phase-one Bearer authentication provider.
@@ -257,6 +297,14 @@ impl AuthProvider for BearerAuth {
                 "Bearer auth provider must set authorization",
             ))
         }
+    }
+
+    fn scheme_kind(&self) -> AuthSchemeKind {
+        AuthSchemeKind::Bearer
+    }
+
+    fn credential_source_kind(&self) -> CredentialSourceKind {
+        CredentialSourceKind::Static
     }
 }
 

@@ -227,6 +227,7 @@ fn third_party(
     endpoint: &'static str,
     fixture_manifest: &'static str,
     expected_headers: &'static [(&'static str, &'static str)],
+    request_id_expected: bool,
 ) -> ConformanceCase {
     let mut capabilities = BTreeMap::new();
     let mut online = BTreeMap::new();
@@ -268,7 +269,7 @@ fn third_party(
         capabilities,
         online,
         fixture_manifest,
-        request_id_expected: true,
+        request_id_expected,
         usage_expected: true,
         source_kind: "official-doc-plus-synthetic-offline",
         reviewed_at: "2026-07-23",
@@ -291,6 +292,7 @@ fn openrouter() -> ConformanceCase {
             ("x-openrouter-title", "philo conformance"),
             ("x-openrouter-categories", "sdk,conformance"),
         ],
+        true,
     )
 }
 
@@ -305,6 +307,7 @@ fn deepseek() -> ConformanceCase {
         "https://api.deepseek.com/chat/completions",
         "provider-compat/deepseek/manifest.toml",
         &[],
+        true,
     )
 }
 
@@ -319,6 +322,7 @@ fn zai_standard() -> ConformanceCase {
         "https://api.z.ai/api/paas/v4/chat/completions",
         "provider-compat/zai-standard/manifest.toml",
         &[("accept-language", "en-US")],
+        false,
     )
 }
 
@@ -333,6 +337,7 @@ fn zai_coding() -> ConformanceCase {
         "https://api.z.ai/api/coding/paas/v4/chat/completions",
         "provider-compat/zai-coding/manifest.toml",
         &[("accept-language", "en-US")],
+        false,
     )
 }
 

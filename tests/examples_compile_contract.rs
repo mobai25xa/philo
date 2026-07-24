@@ -19,6 +19,12 @@ fn required_examples() -> &'static [&'static str] {
         "complete_text.rs",
         "typed_errors.rs",
         "provider_registry.rs",
+        "provider_profiles.rs",
+        "provider_diagnostics.rs",
+        "provider_auth_shapes.rs",
+        "provider_config.rs",
+        "deployment_mapping.rs",
+        "provider_routing.rs",
     ]
 }
 

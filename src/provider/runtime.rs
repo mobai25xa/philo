@@ -25,6 +25,7 @@ use super::catalog::{ModelCatalog, ModelEntry, ModelKey, ProductId, ProviderMode
 use super::compat::{
     CompatPatch, OpenRouterRoutingContract, ProviderRequestOptions, resolve_compat, validate_compat,
 };
+use super::diagnostics::{DiagnosticsInput, ProviderDiagnostics};
 use super::endpoint::{
     EndpointConfig, EndpointMode, EndpointValues, ResolvedEndpoint, ResolvedModelMapping,
     resolve_official, resolve_official_for, resolve_test_only, resolve_test_only_for,
@@ -221,6 +222,54 @@ impl ProviderRuntime {
             capabilities.apply_model(profile);
         }
         capabilities
+    }
+
+    /// Compiles value-free diagnostics for the same target-aware policy used by a call.
+    ///
+    /// The snapshot contains identifiers, sources, enum decisions, Header names, and
+    /// evidence dates. It never retains messages, Header values, credentials, request
+    /// metadata values, or URL query values.
+    pub fn diagnostics_for_request(
+        &self,
+        request: &GenerateRequest,
+        provider_options: &ProviderRequestOptions,
+        as_of: &str,
+    ) -> Result<ProviderDiagnostics, LlmError> {
+        let plan = self.plan_policy_for_with_options(request, provider_options)?;
+        let endpoint = self.resolve_target_endpoint(&plan.target)?;
+        let entry = self.model_entry(request.model().model());
+        let provider_headers = self
+            .provider_headers
+            .iter()
+            .map(HeaderOperation::name)
+            .cloned()
+            .collect();
+        let model_headers = self
+            .model_headers
+            .iter()
+            .map(HeaderOperation::name)
+            .cloned()
+            .collect();
+        let dynamic_headers = self
+            .dynamic_header_policy
+            .as_deref()
+            .map(DynamicHeaderPolicy::allowed_headers)
+            .unwrap_or_default()
+            .to_vec();
+        let request_headers = request.options().headers().keys().cloned().collect();
+        ProviderDiagnostics::compile(DiagnosticsInput {
+            plan: &plan,
+            endpoint: &endpoint,
+            entry,
+            as_of,
+            auth_scheme: self.auth.scheme_kind(),
+            credential_source: self.auth.credential_source_kind(),
+            auth_headers: self.auth.protected_headers(),
+            provider_headers,
+            model_headers,
+            dynamic_headers,
+            request_headers,
+        })
     }
 
     /// Returns dialect.

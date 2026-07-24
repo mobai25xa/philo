@@ -50,7 +50,11 @@ async fn protected_provider_conformance_smoke() {
         .await
         .expect("online text case failed");
     if descriptor.request_id_expected {
-        assert!(message.provider_request_id().is_some());
+        assert!(
+            message.provider_request_id().is_some(),
+            "provider_request_id expected for provider={} but was None",
+            descriptor.provider
+        );
     }
     if descriptor.usage_expected {
         assert!(message.usage().is_some());
