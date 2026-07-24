@@ -4,7 +4,9 @@ use http::StatusCode;
 
 use crate::error::{HttpStatusError, LlmError, RetriableHint};
 use crate::execution::executor::{AttemptResponse, AttemptResponseBody};
-use crate::protocol::openai_chat::{OpenAiChatStreamContext, decode_openai_chat_stream_with_plan};
+use crate::protocol::openai_chat::{
+    OpenAiChatStreamContext, decode_openai_chat_stream_with_policy,
+};
 
 use super::{EventStream, OpenAiChatResponsePlan, ProtocolResponsePlan, ResponseMeta};
 
@@ -38,12 +40,13 @@ fn open_openai_chat(
 ) -> EventStream {
     let context =
         OpenAiChatStreamContext::new(meta.local_request_id, meta.provider_request_id, plan.model);
-    Box::pin(decode_openai_chat_stream_with_plan(
+    Box::pin(decode_openai_chat_stream_with_policy(
         body,
         context,
         plan.response_format,
         plan.sse,
         plan.limits,
+        *plan.compat.profile.response(),
     ))
 }
 
@@ -88,6 +91,7 @@ mod tests {
                     response_format: format,
                     compat: ResolvedCompat {
                         dialect: DialectPolicy::official_openai(),
+                        profile: crate::provider::CompatProfile::openai_chat_default(),
                     },
                     limits: ResponseLimits::from(ResourceLimits::official()),
                     sse: SseConfig::default(),

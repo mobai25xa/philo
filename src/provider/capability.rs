@@ -3,6 +3,7 @@
 
 use crate::domain::{CapabilitySet, CapabilityStatus, ModelId, ReasoningEffortSupport};
 use crate::error::LlmError;
+use crate::provider::catalog::CatalogCapabilities;
 use crate::provider::endpoint::RedirectPolicy;
 
 /// Date on which official phase-two capability declarations were last reviewed.
@@ -101,6 +102,19 @@ impl ProviderCapabilities {
     }
 
     pub(super) fn apply_model(&mut self, profile: &ModelCapabilityProfile) {
+        self.function_tools = profile.function_tools;
+        self.tool_choice_required = profile.tool_choice_required;
+        self.tool_choice_specific = profile.tool_choice_specific;
+        self.parallel_tool_calls = profile.parallel_tool_calls;
+        self.strict_tools = profile.strict_tools;
+        self.vision_input = profile.vision_input;
+        self.image_detail_original = profile.image_detail_original;
+        self.response_format_json_object = profile.response_format_json_object;
+        self.response_format_json_schema = profile.response_format_json_schema;
+        self.reasoning_efforts = profile.reasoning_efforts.clone();
+    }
+
+    pub(super) fn apply_catalog(&mut self, profile: &CatalogCapabilities) {
         self.function_tools = profile.function_tools;
         self.tool_choice_required = profile.tool_choice_required;
         self.tool_choice_specific = profile.tool_choice_specific;

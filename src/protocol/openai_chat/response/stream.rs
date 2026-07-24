@@ -8,6 +8,7 @@ use futures_core::Stream;
 use super::machine::ChatStateMachine;
 use crate::domain::{AssistantEvent, LocalRequestId, ModelRef, ProviderRequestId, ResponseFormat};
 use crate::error::LlmError;
+use crate::provider::ResponseCompat;
 use crate::provider::call_policy::ResponseLimits;
 use crate::transport::{ByteStream, SseConfig, SseDecoder};
 
@@ -34,6 +35,7 @@ impl OpenAiChatStreamContext {
 }
 
 /// Converts response bytes using only the policy captured by planning.
+#[allow(dead_code)]
 pub(crate) fn decode_openai_chat_stream_with_plan(
     body: ByteStream,
     context: OpenAiChatStreamContext,
@@ -41,9 +43,28 @@ pub(crate) fn decode_openai_chat_stream_with_plan(
     sse: SseConfig,
     limits: ResponseLimits,
 ) -> OpenAiChatEventStream {
+    decode_openai_chat_stream_with_policy(
+        body,
+        context,
+        response_format,
+        sse,
+        limits,
+        ResponseCompat::default(),
+    )
+}
+
+/// Converts response bytes using the typed compatibility policy captured by planning.
+pub(crate) fn decode_openai_chat_stream_with_policy(
+    body: ByteStream,
+    context: OpenAiChatStreamContext,
+    response_format: ResponseFormat,
+    sse: SseConfig,
+    limits: ResponseLimits,
+    compat: ResponseCompat,
+) -> OpenAiChatEventStream {
     OpenAiChatEventStream {
         source: SseDecoder::with_config(body, sse),
-        machine: ChatStateMachine::new_with_format(context, response_format, limits),
+        machine: ChatStateMachine::new_with_format(context, response_format, limits, compat),
         pending: VecDeque::new(),
         terminal: false,
     }

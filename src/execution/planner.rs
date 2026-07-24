@@ -1,8 +1,8 @@
 //! Deterministic compilation of a logical generation request.
 
 use crate::domain::{
-    GenerateRequest, HistoryCapabilities, PolicySource, normalize_history,
-    validate_planned_request, validate_request_shape,
+    GenerateRequest, HistoryCapabilities, normalize_history, validate_planned_request,
+    validate_request_shape,
 };
 use crate::error::LlmError;
 use crate::provider::ProviderRuntime;
@@ -25,6 +25,18 @@ impl CallPlanner {
         let (capability_source, model_override_applied) =
             runtime.policy_provenance_for(request.model().model());
         let capabilities = policy.capabilities.generation_options();
+        if let (Some(requested), Some(maximum)) = (
+            request.options().max_output_tokens(),
+            policy.limits.model.max_output_tokens,
+        ) && requested > maximum
+        {
+            return Err(crate::error::ValidationError::new(
+                "max_output_tokens",
+                crate::error::ValidationReason::OutOfRange,
+                "max_output_tokens exceeds the exact model catalog limit",
+            )
+            .into());
+        }
         validate_request_shape(request, &capabilities, &policy.limits.request)?;
 
         let input_message_count = request.messages().len();
@@ -60,7 +72,10 @@ impl CallPlanner {
             planned,
             provenance: PlanProvenance {
                 capability_source,
-                compat_source: PolicySource::ProtocolDefault,
+                compat_source: policy
+                    .compat
+                    .profile
+                    .source(crate::provider::CompatField::RequestMaxOutputTokens),
                 model_override_applied,
             },
             execution: CallExecutionIntent {

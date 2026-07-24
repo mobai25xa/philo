@@ -8,27 +8,33 @@ use std::sync::Arc;
 use http::{HeaderMap, HeaderValue, Method, header};
 
 use crate::domain::{
-    DialectPolicy, GenerateRequest, HistoryPolicy, ModelId, PolicySource, ProtocolId, ProviderId,
+    GenerateRequest, HistoryPolicy, LocalRequestId, ModelId, PolicySource, ProtocolId, ProviderId,
 };
 use crate::error::LlmError;
 use crate::protocol::RequestFacts;
-use crate::transport::SseConfig;
+use crate::transport::{RequestLifecycle, SseConfig};
 
-use super::auth::{AuthContext, AuthProvider, BearerAuth, ClientIdentity};
+use super::auth::{AuthContext, AuthProvider, ClientIdentity};
 use super::call_policy::{
     CallPolicySnapshot, ProtocolKind, ResolvedCompat, ResolvedLimits, ResolvedTarget,
 };
 use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
+use super::catalog::{ModelCatalog, ModelEntry, ModelKey, ProductId};
+use super::compat::{CompatPatch, resolve_compat, validate_compat};
 use super::endpoint::{ResolvedEndpoint, resolve_official, resolve_test_only};
-use super::headers::{HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource, ResolvedHeaders};
+use super::headers::{
+    DynamicHeaderContext, DynamicHeaderPolicy, DynamicResponseFormat, HeaderLayer, HeaderOperation,
+    HeaderPipeline, HeaderSource, ResolvedHeaders,
+};
 use super::profile::ProviderProfile;
 
 /// Immutable, concurrency-safe provider runtime.
 #[derive(Clone)]
 pub struct ProviderRuntime {
     provider_id: ProviderId,
+    product_id: ProductId,
     protocol_id: ProtocolId,
     protocol_kind: ProtocolKind,
     endpoint: ResolvedEndpoint,
@@ -36,8 +42,12 @@ pub struct ProviderRuntime {
     client_identity: ClientIdentity,
     provider_headers: Arc<[HeaderOperation]>,
     model_headers: Arc<[HeaderOperation]>,
+    dynamic_header_policy: Option<Arc<DynamicHeaderPolicy>>,
     capabilities: ProviderCapabilities,
     model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
+    catalog: ModelCatalog,
+    provider_compat: CompatPatch,
+    model_compat: BTreeMap<ModelId, CompatPatch>,
     dialect: ProtocolDialect,
     transport: ProviderTransportOptions,
     resource_limits: crate::domain::ResourceLimits,
@@ -46,10 +56,28 @@ pub struct ProviderRuntime {
     pipeline: HeaderPipeline,
 }
 
+pub(crate) struct HeaderAttemptContext<'a> {
+    pub(crate) facts: &'a RequestFacts,
+    pub(crate) lifecycle: &'a RequestLifecycle,
+    pub(crate) model_id: &'a ModelId,
+    pub(crate) local_request_id: &'a LocalRequestId,
+    pub(crate) attempt_number: u32,
+}
+
 impl ProviderRuntime {
     /// Validates and freezes a profile.
     pub fn build(profile: ProviderProfile) -> Result<Self, LlmError> {
         profile.capabilities.validate()?;
+        for entry in profile.catalog.entries() {
+            if entry.key.provider_id != profile.provider_id
+                || entry.key.product_id != profile.product_id
+                || entry.protocol_id != profile.protocol_id
+            {
+                return Err(LlmError::Configuration(
+                    "catalog entry does not match provider product protocol".to_owned(),
+                ));
+            }
+        }
         for (model, declaration) in &profile.model_capabilities {
             if model != declaration.model() {
                 return Err(LlmError::Configuration(
@@ -76,9 +104,12 @@ impl ProviderRuntime {
             resolve_official(&profile.endpoint)?
         };
         profile.audience.validate(&endpoint)?;
-        let auth = Arc::new(BearerAuth::new(profile.credential));
+        profile.auth.validate_endpoint(&endpoint)?;
+        let auth_headers = profile.auth.protected_headers();
+        let auth = profile.auth;
         Ok(Self {
             provider_id: profile.provider_id,
+            product_id: profile.product_id,
             protocol_id: profile.protocol_id,
             protocol_kind,
             endpoint,
@@ -86,14 +117,18 @@ impl ProviderRuntime {
             client_identity: profile.client_identity,
             provider_headers: profile.provider_headers.into(),
             model_headers: profile.model_headers.into(),
+            dynamic_header_policy: profile.dynamic_header_policy,
             capabilities: profile.capabilities,
             model_capabilities: profile.model_capabilities,
+            catalog: profile.catalog,
+            provider_compat: profile.provider_compat,
+            model_compat: profile.model_compat,
             dialect: profile.dialect,
             transport: profile.transport,
             resource_limits: profile.resource_limits,
             sse: profile.sse,
             max_http_error_body_bytes: profile.max_http_error_body_bytes,
-            pipeline: HeaderPipeline::new(),
+            pipeline: HeaderPipeline::with_auth_headers(auth_headers),
         })
     }
 
@@ -105,6 +140,25 @@ impl ProviderRuntime {
     /// Returns protocol identifier.
     pub fn protocol_id(&self) -> &ProtocolId {
         &self.protocol_id
+    }
+
+    /// Returns the exact provider product identifier.
+    pub fn product_id(&self) -> &ProductId {
+        &self.product_id
+    }
+
+    /// Returns the immutable catalog snapshot.
+    pub fn catalog(&self) -> &ModelCatalog {
+        &self.catalog
+    }
+
+    /// Returns an exact catalog entry for a domain model.
+    pub fn model_entry(&self, model: &ModelId) -> Option<&ModelEntry> {
+        self.catalog.get(&ModelKey {
+            provider_id: self.provider_id.clone(),
+            product_id: self.product_id.clone(),
+            domain_model_id: model.clone(),
+        })
     }
 
     /// Returns resolved endpoint.
@@ -125,6 +179,9 @@ impl ProviderRuntime {
     /// Resolves provider defaults plus an exact model capability declaration.
     pub fn capabilities_for(&self, model: &ModelId) -> ProviderCapabilities {
         let mut capabilities = self.capabilities.clone();
+        if let Some(entry) = self.model_entry(model) {
+            capabilities.apply_catalog(&entry.capabilities);
+        }
         if let Some(profile) = self.model_capabilities.get(model) {
             capabilities.apply_model(profile);
         }
@@ -155,15 +212,28 @@ impl ProviderRuntime {
             .into());
         }
 
+        let entry = self.model_entry(request.model().model());
         let capabilities = self.capabilities_for(request.model().model());
         capabilities.validate()?;
-        let dialect = match self.dialect {
-            ProtocolDialect::OpenAiChatCompletions => DialectPolicy::official_openai(),
+        let mut compat_layers = vec![self.provider_compat.clone()];
+        if let Some(entry) = entry {
+            compat_layers.push(entry.compat_overrides.clone());
+        }
+        if let Some(model) = self.model_compat.get(request.model().model()) {
+            compat_layers.push(model.clone());
+        }
+        let compat_profile = match self.dialect {
+            ProtocolDialect::OpenAiChatCompletions => resolve_compat(&compat_layers),
         };
+        validate_compat(&compat_profile, &capabilities)?;
+        let dialect = compat_profile.dialect_policy();
+        let model_limits = entry.map(|entry| entry.limits).unwrap_or_default();
         let limits = ResolvedLimits::compile(
-            self.resource_limits,
+            model_limits.apply_to(self.resource_limits),
             self.sse,
             self.max_http_error_body_bytes,
+            model_limits.max_output_tokens,
+            entry.and_then(|entry| entry.default_max_output_tokens),
         )?;
         let mut history = HistoryPolicy::official_openai();
         history.max_messages = limits.request.max_messages;
@@ -175,10 +245,16 @@ impl ProviderRuntime {
                 protocol_id: self.protocol_id.clone(),
                 protocol_kind: self.protocol_kind,
                 domain_model: request.model().model().clone(),
-                wire_model: request.model().model().clone(),
+                wire_model: entry
+                    .map(|entry| ModelId::new(entry.wire_model_value.as_str()))
+                    .transpose()?
+                    .unwrap_or_else(|| request.model().model().clone()),
             },
             capabilities,
-            compat: ResolvedCompat { dialect },
+            compat: ResolvedCompat {
+                dialect,
+                profile: compat_profile,
+            },
             history,
             limits,
             response_format: request.options().response_format().clone(),
@@ -186,7 +262,9 @@ impl ProviderRuntime {
     }
 
     pub(crate) fn policy_provenance_for(&self, model: &ModelId) -> (PolicySource, bool) {
-        let model_override_applied = self.model_capabilities.contains_key(model);
+        let model_override_applied = self.model_capabilities.contains_key(model)
+            || self.model_entry(model).is_some()
+            || self.model_compat.contains_key(model);
         let source = if model_override_applied {
             PolicySource::ModelProfile
         } else {
@@ -241,7 +319,9 @@ impl ProviderRuntime {
             .iter()
             .map(|(name, value)| HeaderOperation::set(name.clone(), value.clone()))
             .collect();
-        let auth = self.auth.operation(AuthContext::new(&self.endpoint))?;
+        let auth = self
+            .auth
+            .resolve_immediate(AuthContext::new(&self.endpoint))?;
         let _ = facts;
         let resolved = self.pipeline.resolve_without_auth_assumption(vec![
             HeaderLayer::new(HeaderSource::Transport, Vec::new()),
@@ -254,7 +334,78 @@ impl ProviderRuntime {
             HeaderLayer::new(HeaderSource::Model, model_operations),
             HeaderLayer::new(HeaderSource::DynamicPolicy, Vec::new()),
             HeaderLayer::new(HeaderSource::Request, request_operations),
-            HeaderLayer::new(HeaderSource::Auth, vec![auth]),
+            HeaderLayer::new(HeaderSource::Auth, auth),
+        ])?;
+        if resolved.headers().get(header::CONTENT_TYPE)
+            != Some(&HeaderValue::from_static("application/json"))
+        {
+            return Err(crate::error::ValidationError::new(
+                "request_headers.content-type",
+                crate::error::ValidationReason::ProtectedHeader,
+                "OpenAI Chat protocol must set application/json",
+            )
+            .into());
+        }
+        self.auth.validate_final(resolved.headers())?;
+        Ok(resolved)
+    }
+
+    pub(crate) async fn resolve_headers_for_attempt(
+        &self,
+        protocol: Vec<HeaderOperation>,
+        model: Vec<HeaderOperation>,
+        request: &HeaderMap,
+        attempt: HeaderAttemptContext<'_>,
+    ) -> Result<ResolvedHeaders, LlmError> {
+        let mut model_operations = self.model_headers.to_vec();
+        model_operations.extend(model);
+        let request_operations = request
+            .iter()
+            .map(|(name, value)| HeaderOperation::set(name.clone(), value.clone()))
+            .collect();
+        let auth = self
+            .auth
+            .resolve(AuthContext::for_attempt(
+                &self.endpoint,
+                &self.provider_id,
+                &self.product_id,
+                attempt.lifecycle,
+            ))
+            .await?;
+        let dynamic = if let Some(policy) = &self.dynamic_header_policy {
+            policy
+                .resolve(
+                    DynamicHeaderContext::for_attempt(
+                        self.provider_id.clone(),
+                        self.product_id.clone(),
+                        attempt.model_id.clone(),
+                        self.protocol_id.clone(),
+                        attempt.local_request_id.clone(),
+                        attempt.attempt_number,
+                        attempt.facts.contains_tools,
+                        attempt.facts.contains_images,
+                        attempt.facts.reasoning_enabled,
+                        DynamicResponseFormat::from(attempt.facts.response_format),
+                        attempt.lifecycle,
+                    ),
+                    attempt.lifecycle,
+                )
+                .await?
+        } else {
+            Vec::new()
+        };
+        let resolved = self.pipeline.resolve_without_auth_assumption(vec![
+            HeaderLayer::new(HeaderSource::Transport, Vec::new()),
+            HeaderLayer::new(HeaderSource::Protocol, protocol),
+            HeaderLayer::new(HeaderSource::Provider, self.provider_headers.to_vec()),
+            HeaderLayer::new(
+                HeaderSource::ClientIdentity,
+                vec![self.client_identity.operation()?],
+            ),
+            HeaderLayer::new(HeaderSource::Model, model_operations),
+            HeaderLayer::new(HeaderSource::DynamicPolicy, dynamic),
+            HeaderLayer::new(HeaderSource::Request, request_operations),
+            HeaderLayer::new(HeaderSource::Auth, auth),
         ])?;
         if resolved.headers().get(header::CONTENT_TYPE)
             != Some(&HeaderValue::from_static("application/json"))
@@ -287,12 +438,14 @@ impl fmt::Debug for ProviderRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderRuntime")
             .field("provider_id", &self.provider_id)
+            .field("product_id", &self.product_id)
             .field("protocol_id", &self.protocol_id)
             .field("endpoint", &self.endpoint)
             .field("auth", &"[REDACTED]")
             .field("client_identity", &self.client_identity)
             .field("capabilities", &self.capabilities)
             .field("model_capability_count", &self.model_capabilities.len())
+            .field("catalog_entry_count", &self.catalog.entries().count())
             .field("dialect", &self.dialect)
             .field("transport", &self.transport)
             .field("resource_limits", &self.resource_limits)

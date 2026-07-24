@@ -106,7 +106,7 @@ impl fmt::Debug for ResolvedEndpoint {
 }
 
 /// Credential destination restriction.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum CredentialAudience {
     /// Official `OpenAI` API at `https://api.openai.com:443`.
     OfficialOpenAi,

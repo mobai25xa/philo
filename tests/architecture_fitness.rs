@@ -389,6 +389,52 @@ fn public_request_api_has_no_untyped_wire_extension_escape_hatch() {
 }
 
 #[test]
+fn catalog_and_typed_compat_have_single_owners_and_no_provider_brand_branches() {
+    for path in [
+        "src/provider/catalog/mod.rs",
+        "src/provider/catalog/entry.rs",
+        "src/provider/catalog/ids.rs",
+        "src/provider/catalog/source.rs",
+        "src/provider/catalog/merge.rs",
+        "src/provider/catalog/validate.rs",
+        "src/provider/compat/mod.rs",
+        "src/provider/compat/profile.rs",
+        "src/provider/compat/request.rs",
+        "src/provider/compat/response.rs",
+        "src/provider/compat/history.rs",
+        "src/provider/compat/merge.rs",
+        "src/provider/compat/validate.rs",
+        "src/protocol/openai_chat/compat/mod.rs",
+        "src/protocol/openai_chat/compat/request.rs",
+        "src/protocol/openai_chat/compat/response.rs",
+        "src/protocol/openai_chat/compat/error.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    for directory in ["src/provider/catalog", "src/provider/compat"] {
+        for (file, text) in production_sources_under(directory) {
+            for forbidden in [
+                "official-openai",
+                "test-only",
+                "openrouter",
+                "deepseek",
+                "z.ai",
+            ] {
+                assert!(
+                    !text.to_ascii_lowercase().contains(forbidden),
+                    "provider brand leaked into generic policy owner {file}: {forbidden}"
+                );
+            }
+        }
+    }
+
+    let driver = production_source("src/protocol/openai_chat/driver.rs");
+    assert!(!driver.contains("MaxOutputTokensWireFormat"));
+    assert!(!driver.contains("ToolArgumentsCompat"));
+}
+
+#[test]
 fn completed_phase_2_5_layout_exists_and_legacy_files_are_absent() {
     for path in [
         "src/protocol/openai_chat/response/mod.rs",
@@ -680,4 +726,86 @@ fn provider_config_has_one_network_free_versioned_module_tree() {
     assert!(merge.contains("pub fn merge_layers"));
     assert!(!merge.contains("ApiKey"));
     assert!(!merge.contains("SecretString"));
+}
+
+#[test]
+fn provider_registry_keeps_factory_and_runtime_snapshot_boundaries() {
+    for path in [
+        "src/provider/registry.rs",
+        "src/provider/factory.rs",
+        "src/provider/runtime.rs",
+    ] {
+        assert_production_file(path);
+    }
+    let registry = production_source("src/provider/registry.rs");
+    assert!(registry.contains("Arc<RwLock<BTreeMap"));
+    assert!(
+        registry.contains("registration.factory.build(config, resolver)")
+            || registry.contains("factory.build(config, resolver)")
+    );
+    assert!(registry.contains("let registration = {"));
+    for forbidden in [
+        "tokio::sync",
+        "std::env::vars",
+        "serde(flatten)",
+        "extra_body",
+    ] {
+        assert!(
+            !registry.contains(forbidden),
+            "registry escape hatch: {forbidden}"
+        );
+    }
+    let factory = production_source("src/provider/factory.rs");
+    assert!(factory.contains("pub trait ProviderRuntimeFactory"));
+    assert!(!factory.contains("crate::client"));
+    let runtime = production_source("src/provider/runtime.rs");
+    assert!(runtime.contains("pub struct ProviderRuntime"));
+    assert!(!runtime.contains("RwLock"));
+}
+
+#[test]
+fn auth_and_header_policy_have_bounded_owners_before_transport() {
+    for path in [
+        "src/provider/auth.rs",
+        "src/provider/auth/providers.rs",
+        "src/provider/auth/dynamic.rs",
+        "src/provider/auth/cache.rs",
+        "src/provider/headers.rs",
+        "src/provider/headers/identity.rs",
+        "src/provider/headers/dynamic.rs",
+        "tests/provider_auth_contract.rs",
+        "tests/provider_header_contract.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    for (file, text) in production_sources_under("src/provider/auth") {
+        for forbidden in [
+            "query_pairs_mut",
+            "append_pair",
+            "serde_json",
+            "crate::protocol",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "auth URL/payload/protocol escape hatch in {file}: {forbidden}"
+            );
+        }
+    }
+
+    let dynamic_headers = production_source("src/provider/headers/dynamic.rs");
+    for forbidden in ["SecretString", "ApiKey", "AuthContext", "&mut HeaderMap"] {
+        assert!(
+            !dynamic_headers.contains(forbidden),
+            "dynamic header secret/final-map capability: {forbidden}"
+        );
+    }
+
+    let executor = production_source("src/execution/executor.rs");
+    let headers = executor.find("resolve_headers_for_attempt").unwrap();
+    let transport = executor.find("self.transport.execute").unwrap();
+    assert!(
+        headers < transport,
+        "headers/auth must resolve before transport I/O"
+    );
 }

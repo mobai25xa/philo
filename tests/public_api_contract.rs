@@ -31,6 +31,29 @@ fn resource_limits_builder_is_the_downstream_construction_path() {
 }
 
 #[test]
+fn extensible_auth_and_header_policy_have_root_and_deep_public_paths() {
+    use philo::provider::auth::{
+        ApiKeyHeaderAuth as DeepApiKeyHeaderAuth, DynamicAuth as DeepDynamicAuth,
+        DynamicCredentialSource as DeepDynamicCredentialSource,
+    };
+    use philo::provider::headers::{
+        ClientIdentityFragment as DeepClientIdentityFragment,
+        DynamicHeaderPolicy as DeepDynamicHeaderPolicy,
+        DynamicHeaderSource as DeepDynamicHeaderSource,
+    };
+
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<philo::DynamicAuth>();
+    assert_send_sync::<DeepDynamicAuth>();
+    assert_send_sync::<philo::DynamicHeaderPolicy>();
+    assert_send_sync::<DeepDynamicHeaderPolicy>();
+    let _: Option<philo::ApiKeyHeaderAuth> = None::<DeepApiKeyHeaderAuth>;
+    let _: Option<philo::ClientIdentityFragment> = None::<DeepClientIdentityFragment>;
+    let _: Option<&dyn philo::DynamicCredentialSource> = None::<&dyn DeepDynamicCredentialSource>;
+    let _: Option<&dyn philo::DynamicHeaderSource> = None::<&dyn DeepDynamicHeaderSource>;
+}
+
+#[test]
 fn primary_public_surface_does_not_name_private_implementation_types() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let public_sources = [
@@ -238,4 +261,49 @@ fn versioned_provider_config_has_root_and_deep_public_paths() {
         "safe public configuration error",
     );
     assert_eq!(error.field(), "field");
+}
+
+#[test]
+fn provider_registry_factory_public_paths_are_additive() {
+    use philo::provider::{
+        OfficialOpenAiFactory as DeepFactory, ProviderRegistration as DeepRegistration,
+        ProviderRegistry as DeepRegistry, ProviderRuntimeFactory as DeepFactoryTrait,
+    };
+
+    let _: &dyn DeepFactoryTrait = &DeepFactory;
+    let registration: philo::ProviderRegistration =
+        DeepRegistration::new("official-openai", "1.0", DeepFactory).unwrap();
+    let registry: philo::ProviderRegistry = DeepRegistry::new();
+    registry.register(registration).unwrap();
+    assert_eq!(registry.list().unwrap().len(), 1);
+}
+
+#[test]
+fn model_catalog_and_typed_compat_have_root_and_deep_public_paths() {
+    use philo::provider::catalog::{
+        CatalogSource as DeepCatalogSource, CatalogSourceId as DeepCatalogSourceId,
+        ModelCatalog as DeepModelCatalog, ProductId as DeepProductId,
+    };
+    use philo::provider::compat::{
+        CompatPatch as DeepCompatPatch, MaxOutputTokensWireFormat as DeepTokenFormat,
+        resolve_compat as deep_resolve_compat,
+    };
+
+    let _: philo::ProductId = DeepProductId::new("chat-completions").unwrap();
+    let _: philo::CatalogSource = DeepCatalogSource::new(
+        DeepCatalogSourceId::new("contract").unwrap(),
+        "2026-07-23",
+        None::<String>,
+    )
+    .unwrap();
+    let _: philo::ModelCatalog = DeepModelCatalog::default();
+    let resolved =
+        deep_resolve_compat(&[
+            DeepCompatPatch::from_source(philo::PolicySource::ProviderProfile)
+                .with_max_output_tokens(DeepTokenFormat::MaxTokens),
+        ]);
+    assert_eq!(
+        resolved.request().max_output_tokens,
+        philo::MaxOutputTokensWireFormat::MaxTokens
+    );
 }

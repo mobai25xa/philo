@@ -12,6 +12,7 @@ use crate::error::{ValidationError, ValidationReason};
 use crate::transport::SseConfig;
 
 use super::ProviderCapabilities;
+use super::compat::CompatProfile;
 
 /// Provider and protocol policy resolved before request preparation.
 #[derive(Clone)]
@@ -58,9 +59,10 @@ pub(crate) enum ProtocolKind {
 }
 
 /// Protocol compatibility policy compiled from the provider dialect.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedCompat {
     pub(crate) dialect: DialectPolicy,
+    pub(crate) profile: CompatProfile,
 }
 
 /// Complete request, response, and transport limits for one logical call.
@@ -69,6 +71,7 @@ pub(crate) struct ResolvedLimits {
     pub(crate) request: RequestLimits,
     pub(crate) response: ResponseLimits,
     pub(crate) transport: TransportLimits,
+    pub(crate) model: ModelPlanLimits,
 }
 
 impl ResolvedLimits {
@@ -77,6 +80,8 @@ impl ResolvedLimits {
         resources: ResourceLimits,
         sse: SseConfig,
         max_http_error_body_bytes: usize,
+        max_output_tokens: Option<u32>,
+        default_max_output_tokens: Option<u32>,
     ) -> Result<Self, ValidationError> {
         resources.validate()?;
         if max_http_error_body_bytes == 0 {
@@ -112,8 +117,19 @@ impl ResolvedLimits {
                 max_http_error_body_bytes,
                 sse,
             },
+            model: ModelPlanLimits {
+                max_output_tokens,
+                default_max_output_tokens,
+            },
         })
     }
+}
+
+/// Token ceilings that cannot be represented by byte-oriented resource limits.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ModelPlanLimits {
+    pub(crate) max_output_tokens: Option<u32>,
+    pub(crate) default_max_output_tokens: Option<u32>,
 }
 
 /// Request-side ceilings consumed by planning and wire encoding.
@@ -179,7 +195,8 @@ mod tests {
             .with_max_structured_output_bytes(200)
             .build()
             .unwrap();
-        let limits = ResolvedLimits::compile(resources, SseConfig::default(), 300).unwrap();
+        let limits =
+            ResolvedLimits::compile(resources, SseConfig::default(), 300, None, None).unwrap();
         assert_eq!(limits.request.max_body_bytes, 100);
         assert_eq!(limits.response.max_structured_output_bytes, 200);
         assert_eq!(limits.transport.max_http_error_body_bytes, 300);
@@ -207,12 +224,15 @@ mod tests {
             capabilities: ProviderCapabilities::official_openai(),
             compat: ResolvedCompat {
                 dialect: DialectPolicy::official_openai(),
+                profile: crate::provider::CompatProfile::openai_chat_default(),
             },
             history: HistoryPolicy::official_openai(),
             limits: ResolvedLimits::compile(
                 ResourceLimits::official(),
                 SseConfig::default(),
                 16 * 1024,
+                None,
+                None,
             )
             .unwrap(),
             response_format,

@@ -2,13 +2,30 @@
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 
-use http::{HeaderMap, HeaderValue, header};
+use http::{HeaderMap, HeaderName, HeaderValue, header};
 use secrecy::{ExposeSecret, SecretString};
 
+use super::catalog::ProductId;
 use super::endpoint::{CredentialAudience, ResolvedEndpoint};
+pub use super::headers::ClientIdentity;
 use super::headers::HeaderOperation;
+use crate::domain::ProviderId;
 use crate::error::{LlmError, ValidationError, ValidationReason};
+use crate::transport::RequestLifecycle;
+
+mod cache;
+mod dynamic;
+mod providers;
+
+pub use cache::DynamicCredentialCache;
+pub use dynamic::{
+    CredentialFuture, CredentialIdentity, DynamicAuth, DynamicCredential, DynamicCredentialContext,
+    DynamicCredentialScheme, DynamicCredentialSource, TenantId,
+};
+pub use providers::{ApiKeyHeaderAuth, MultiHeaderAuth, NoAuth};
 
 /// API key wrapper whose Debug and Display representations are always redacted.
 #[derive(Clone)]
@@ -88,23 +105,78 @@ impl fmt::Debug for BearerCredential {
 #[derive(Clone, Copy, Debug)]
 pub struct AuthContext<'a> {
     endpoint: &'a ResolvedEndpoint,
+    provider_id: Option<&'a ProviderId>,
+    product_id: Option<&'a ProductId>,
+    lifecycle: Option<&'a RequestLifecycle>,
 }
 
 impl<'a> AuthContext<'a> {
     /// Creates an authentication context for a resolved endpoint.
     pub fn new(endpoint: &'a ResolvedEndpoint) -> Self {
-        Self { endpoint }
+        Self {
+            endpoint,
+            provider_id: None,
+            product_id: None,
+            lifecycle: None,
+        }
     }
     /// Returns the final endpoint.
     pub fn endpoint(&self) -> &'a ResolvedEndpoint {
         self.endpoint
     }
+
+    /// Returns the provider identifier when resolving a real attempt.
+    pub fn provider_id(&self) -> Option<&'a ProviderId> {
+        self.provider_id
+    }
+
+    /// Returns the product identifier when resolving a real attempt.
+    pub fn product_id(&self) -> Option<&'a ProductId> {
+        self.product_id
+    }
+
+    /// Returns the request lifecycle when resolving a real attempt.
+    pub fn lifecycle(&self) -> Option<&'a RequestLifecycle> {
+        self.lifecycle
+    }
+
+    pub(crate) const fn for_attempt(
+        endpoint: &'a ResolvedEndpoint,
+        provider_id: &'a ProviderId,
+        product_id: &'a ProductId,
+        lifecycle: &'a RequestLifecycle,
+    ) -> Self {
+        Self {
+            endpoint,
+            provider_id: Some(provider_id),
+            product_id: Some(product_id),
+            lifecycle: Some(lifecycle),
+        }
+    }
 }
+
+/// Future returned by an authentication provider.
+pub type AuthFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<HeaderOperation>, LlmError>> + Send + 'a>>;
 
 /// Authentication source that contributes only protected auth headers.
 pub trait AuthProvider: fmt::Debug + Send + Sync {
-    /// Produces the authentication header after validating credential audience.
-    fn operation(&self, context: AuthContext<'_>) -> Result<HeaderOperation, LlmError>;
+    /// Resolves a complete, atomic group of authentication headers.
+    fn resolve<'a>(&'a self, context: AuthContext<'a>) -> AuthFuture<'a>;
+
+    /// Resolves an immediately available credential for compatibility-only sync APIs.
+    fn resolve_immediate(
+        &self,
+        _context: AuthContext<'_>,
+    ) -> Result<Vec<HeaderOperation>, LlmError> {
+        Err(crate::error::CredentialError::new(crate::error::CredentialFailure::Unavailable).into())
+    }
+
+    /// Returns every header name owned by this authentication provider.
+    fn protected_headers(&self) -> Vec<HeaderName>;
+
+    /// Validates credential audience before the runtime becomes usable.
+    fn validate_endpoint(&self, endpoint: &ResolvedEndpoint) -> Result<(), LlmError>;
 
     /// Validates the final authentication fields for this concrete scheme.
     fn validate_final(&self, _headers: &HeaderMap) -> Result<(), LlmError> {
@@ -127,6 +199,20 @@ impl BearerAuth {
     pub fn audience(&self) -> &CredentialAudience {
         self.credential.audience()
     }
+
+    /// Produces the Bearer header after validating credential audience.
+    pub fn operation(&self, context: AuthContext<'_>) -> Result<HeaderOperation, LlmError> {
+        self.credential.audience.validate(context.endpoint())?;
+        let value = HeaderValue::from_str(&format!("Bearer {}", self.credential.key.expose()))
+            .map_err(|_| {
+                validation(
+                    "authorization",
+                    ValidationReason::InvalidHeader,
+                    "Bearer credential cannot form a header",
+                )
+            })?;
+        Ok(HeaderOperation::set_sensitive(header::AUTHORIZATION, value))
+    }
 }
 
 impl fmt::Debug for BearerAuth {
@@ -138,17 +224,23 @@ impl fmt::Debug for BearerAuth {
 }
 
 impl AuthProvider for BearerAuth {
-    fn operation(&self, context: AuthContext<'_>) -> Result<HeaderOperation, LlmError> {
-        self.credential.audience.validate(context.endpoint())?;
-        let value = HeaderValue::from_str(&format!("Bearer {}", self.credential.key.expose()))
-            .map_err(|_| {
-                validation(
-                    "authorization",
-                    ValidationReason::InvalidHeader,
-                    "Bearer credential cannot form a header",
-                )
-            })?;
-        Ok(HeaderOperation::set_sensitive(header::AUTHORIZATION, value))
+    fn resolve<'a>(&'a self, context: AuthContext<'a>) -> AuthFuture<'a> {
+        Box::pin(async move { Ok(vec![self.operation(context)?]) })
+    }
+
+    fn resolve_immediate(
+        &self,
+        context: AuthContext<'_>,
+    ) -> Result<Vec<HeaderOperation>, LlmError> {
+        Ok(vec![self.operation(context)?])
+    }
+
+    fn protected_headers(&self) -> Vec<HeaderName> {
+        vec![header::AUTHORIZATION]
+    }
+
+    fn validate_endpoint(&self, endpoint: &ResolvedEndpoint) -> Result<(), LlmError> {
+        self.credential.audience.validate(endpoint)
     }
 
     fn validate_final(&self, headers: &HeaderMap) -> Result<(), LlmError> {
@@ -166,83 +258,6 @@ impl AuthProvider for BearerAuth {
             ))
         }
     }
-}
-
-/// Truthful User-Agent identity.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClientIdentity {
-    product: String,
-    version: String,
-}
-
-impl ClientIdentity {
-    /// Creates a controlled product identity.
-    pub fn new(product: impl Into<String>, version: impl Into<String>) -> Result<Self, LlmError> {
-        let product = product.into();
-        let version = version.into();
-        if !valid_identity_token(&product) || !valid_identity_token(&version) {
-            return Err(validation(
-                "client_identity",
-                ValidationReason::InvalidHeader,
-                "product and version must be non-empty ASCII tokens",
-            ));
-        }
-        if product.to_ascii_lowercase().contains("openai") {
-            return Err(validation(
-                "client_identity.product",
-                ValidationReason::OutOfRange,
-                "identity must not impersonate an OpenAI SDK",
-            ));
-        }
-        let identity = Self { product, version };
-        identity.header_value()?;
-        Ok(identity)
-    }
-    /// Returns the default `philo/<crate-version>` identity.
-    pub fn philo() -> Self {
-        Self {
-            product: crate::SDK_NAME.to_owned(),
-            version: crate::SDK_VERSION.to_owned(),
-        }
-    }
-    /// Returns product name.
-    pub fn product(&self) -> &str {
-        &self.product
-    }
-    /// Returns product version.
-    pub fn version(&self) -> &str {
-        &self.version
-    }
-    /// Produces a User-Agent header operation.
-    pub fn operation(&self) -> Result<HeaderOperation, LlmError> {
-        Ok(HeaderOperation::set(
-            header::USER_AGENT,
-            self.header_value()?,
-        ))
-    }
-
-    fn header_value(&self) -> Result<HeaderValue, LlmError> {
-        HeaderValue::from_str(&format!("{}/{}", self.product, self.version)).map_err(|_| {
-            validation(
-                "user-agent",
-                ValidationReason::InvalidHeader,
-                "client identity is not a valid User-Agent",
-            )
-        })
-    }
-}
-
-impl Default for ClientIdentity {
-    fn default() -> Self {
-        Self::philo()
-    }
-}
-
-fn valid_identity_token(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn validation(

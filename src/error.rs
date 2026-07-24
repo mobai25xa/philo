@@ -58,6 +58,72 @@ pub enum AuthFailureKind {
     RateLimit,
 }
 
+/// Failure codes for external credential providers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CredentialFailure {
+    /// The callback could not provide a credential.
+    Unavailable,
+    /// The callback returned a credential that violates the typed contract.
+    Invalid,
+    /// Refresh failed while an old credential may still be usable.
+    RefreshFailed,
+    /// The callback exceeded its configured time budget.
+    Timeout,
+}
+
+/// Safe failure returned by an external credential provider.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("credential provider failure: {kind:?}")]
+pub struct CredentialError {
+    kind: CredentialFailure,
+}
+
+impl CredentialError {
+    /// Creates a value-free credential failure.
+    pub const fn new(kind: CredentialFailure) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the stable failure code.
+    pub const fn kind(&self) -> CredentialFailure {
+        self.kind
+    }
+}
+
+/// Failure codes for controlled dynamic header policies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum HeaderPolicyFailure {
+    /// The callback exceeded its configured time budget.
+    Timeout,
+    /// The callback failed or panicked.
+    Callback,
+    /// A returned operation is not permitted by the allowlist.
+    InvalidOperation,
+    /// The callback exceeded operation or byte budgets.
+    BudgetExceeded,
+}
+
+/// Safe failure returned by a dynamic header policy.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("header policy failure: {kind:?}")]
+pub struct HeaderPolicyError {
+    kind: HeaderPolicyFailure,
+}
+
+impl HeaderPolicyError {
+    /// Creates a value-free header policy failure.
+    pub const fn new(kind: HeaderPolicyFailure) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the stable failure code.
+    pub const fn kind(&self) -> HeaderPolicyFailure {
+        self.kind
+    }
+}
+
 /// Validation reason code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -196,6 +262,69 @@ impl ProviderConfigError {
     /// Returns the non-sensitive source identifier, when known.
     pub fn source(&self) -> Option<&str> {
         self.source_id.as_deref()
+    }
+}
+
+/// Failure codes for provider registration and factory lookup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProviderRegistryFailure {
+    /// A provider identifier cannot be normalized into the registry key space.
+    InvalidProviderId,
+    /// Registration metadata contains an invalid implementation version.
+    InvalidVersion,
+    /// A normalized provider identifier is already registered.
+    DuplicateRegistration,
+    /// The requested registration is absent.
+    RegistrationNotFound,
+    /// A factory returned a runtime for a different provider identifier.
+    FactoryProviderMismatch,
+    /// Registry synchronization state is unavailable after a poisoned lock.
+    StateUnavailable,
+}
+
+impl fmt::Display for ProviderRegistryFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+/// A typed, value-free provider Registry or Factory selection failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("provider registry: {reason} ({message})")]
+pub struct ProviderRegistryError {
+    reason: ProviderRegistryFailure,
+    provider_id: Option<String>,
+    message: &'static str,
+}
+
+impl ProviderRegistryError {
+    /// Creates a registry error without retaining configuration or Secret values.
+    pub fn new(
+        reason: ProviderRegistryFailure,
+        provider_id: Option<&str>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            reason,
+            provider_id: provider_id.map(str::to_owned),
+            message,
+        }
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> ProviderRegistryFailure {
+        self.reason
+    }
+
+    /// Returns the normalized non-sensitive provider identifier, when known.
+    pub fn provider_id(&self) -> Option<&str> {
+        self.provider_id.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
     }
 }
 impl ValidationError {
@@ -864,6 +993,9 @@ pub enum LlmError {
     /// Versioned provider configuration failure.
     #[error("provider configuration: {0}")]
     ProviderConfig(#[from] ProviderConfigError),
+    /// Provider registry or runtime factory selection failure.
+    #[error("provider registry: {0}")]
+    ProviderRegistry(#[from] ProviderRegistryError),
     /// Request validation failure.
     #[error("validation: {0}")]
     Validation(#[from] ValidationError),
@@ -888,6 +1020,12 @@ pub enum LlmError {
     /// Authentication, permission, quota, or rate-limit failure.
     #[error("{0}")]
     Authentication(#[from] AuthenticationError),
+    /// External credential provider failure.
+    #[error("{0}")]
+    Credential(#[from] CredentialError),
+    /// Dynamic header policy failure.
+    #[error("{0}")]
+    HeaderPolicy(#[from] HeaderPolicyError),
     /// Transport failure.
     #[error("{0}")]
     Transport(#[from] TransportError),

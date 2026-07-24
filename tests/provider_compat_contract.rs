@@ -12,6 +12,10 @@ use philo::{
     ProtocolDialect, ReasoningEffort, ReasoningEffortSupport, ResponseFormat, StructuredSchema,
     ToolChoice, ToolDefinition, ToolName, ToolSchema,
 };
+use philo::{
+    CompatField, CompatPatch, MaxOutputTokensWireFormat, PolicySource, ToolArgumentsCompat,
+    resolve_compat,
+};
 use philo::{OfficialOpenAiProfile, ProviderRuntime};
 use serde_json::json;
 
@@ -137,6 +141,135 @@ fn cases() -> [ProviderContractCase; 2] {
             build_with_capabilities: test_only_runtime_with_capabilities,
         },
     ]
+}
+
+#[tokio::test]
+async fn typed_request_compat_selects_max_tokens_without_a_public_payload_escape_hatch() {
+    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+        .unwrap()
+        .with_model_compat(
+            ModelId::new("gpt-compat-wire").unwrap(),
+            CompatPatch::from_source(PolicySource::ModelProfile)
+                .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens),
+        )
+        .build()
+        .unwrap();
+    let mock = MockTransport::scripted([MockExchange::response(success_response_with_text("ok"))]);
+    let request = GenerateRequest::new(
+        ModelRef::new("test-only", "gpt-compat-wire").unwrap(),
+        vec![Message::user("hello")],
+    )
+    .with_options(GenerationOptions::new().with_max_output_tokens(5));
+    philo::LlmClient::new(runtime, mock.clone())
+        .complete(request)
+        .await
+        .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(mock.captured_requests()[0].body()).unwrap();
+    assert_eq!(body["max_tokens"], 5);
+    assert!(body.get("max_completion_tokens").is_none());
+}
+
+#[test]
+fn compat_merge_is_fieldwise_deterministic_and_traced() {
+    let provider = CompatPatch::from_source(PolicySource::ProviderProfile)
+        .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens);
+    let model = CompatPatch::from_source(PolicySource::ModelProfile)
+        .with_tool_arguments(ToolArgumentsCompat::StringOrObject);
+    let resolved = resolve_compat(&[provider, model]);
+    assert_eq!(
+        resolved.request().max_output_tokens,
+        MaxOutputTokensWireFormat::MaxTokens
+    );
+    assert_eq!(
+        resolved.response().tool_arguments,
+        ToolArgumentsCompat::StringOrObject
+    );
+    assert_eq!(
+        resolved.source(CompatField::RequestMaxOutputTokens),
+        PolicySource::ProviderProfile
+    );
+    assert_eq!(
+        resolved.source(CompatField::ResponseToolArguments),
+        PolicySource::ModelProfile
+    );
+    assert_eq!(
+        resolved.source(CompatField::RequestImage),
+        PolicySource::ProtocolDefault
+    );
+}
+
+#[tokio::test]
+async fn illegal_capability_compat_pairs_fail_before_transport() {
+    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+        .unwrap()
+        .with_model_compat(
+            ModelId::new("gpt-invalid-compat").unwrap(),
+            CompatPatch::from_source(PolicySource::ModelProfile)
+                .with_tool_arguments(ToolArgumentsCompat::StringOrObject),
+        )
+        .build()
+        .unwrap();
+    let mock = MockTransport::default();
+    let request = GenerateRequest::new(
+        ModelRef::new("test-only", "gpt-invalid-compat").unwrap(),
+        vec![Message::user("hello")],
+    );
+    let error = philo::LlmClient::new(runtime, mock.clone())
+        .complete(request)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("tool argument compatibility"));
+    assert!(mock.captured_requests().is_empty());
+}
+
+#[tokio::test]
+async fn typed_response_compat_normalizes_object_tool_arguments_in_the_private_adapter() {
+    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+        .unwrap()
+        .with_model_capabilities(model_capability_status(
+            CapabilityStatus::Supported,
+            "gpt-object",
+        ))
+        .with_model_compat(
+            ModelId::new("gpt-object").unwrap(),
+            CompatPatch::from_source(PolicySource::ModelProfile)
+                .with_tool_arguments(ToolArgumentsCompat::StringOrObject),
+        )
+        .build()
+        .unwrap();
+    let response = MockResponse::new(
+        StatusCode::OK,
+        HeaderMap::from_iter([(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))]),
+        vec![MockBodyItem::chunk(Bytes::from_static(
+            br#"data: {"id":"object-tool","model":"gpt-object","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":{"city":"Paris"}}}]},"finish_reason":null}]}
+
+data: {"id":"object-tool","model":"gpt-object","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#,
+        ))],
+    );
+    let mock = MockTransport::scripted([MockExchange::response(response)]);
+    let request = GenerateRequest::new(
+        ModelRef::new("test-only", "gpt-object").unwrap(),
+        vec![Message::user("lookup")],
+    )
+    .with_options(GenerationOptions::new().with_tools(vec![tool()]));
+    let message = philo::LlmClient::new(runtime, mock)
+        .complete(request)
+        .await
+        .unwrap();
+    let tool_call = message
+        .content()
+        .iter()
+        .find_map(|part| match part {
+            ContentPart::ToolCall(call) => Some(call),
+            _ => None,
+        })
+        .expect("object tool call should be normalized");
+    assert_eq!(tool_call.arguments().raw_json(), r#"{"city":"Paris"}"#);
 }
 
 fn assert_capabilities(
