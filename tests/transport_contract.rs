@@ -154,6 +154,17 @@ impl RunningServer {
             .unwrap();
         lock(&self.captured).clone()
     }
+
+    async fn finish_after_client_stop(mut self) -> Vec<InboundRequest> {
+        if timeout(Duration::from_secs(3), &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            let _ = self.task.await;
+        }
+        lock(&self.captured).clone()
+    }
 }
 
 async fn handle_connection(
@@ -711,7 +722,8 @@ async fn reqwest_propagates_cancel_deadline_and_body_cancel() {
     sleep(Duration::from_millis(20)).await;
     cancellation.cancel();
     assert!(matches!(cancelled.await.unwrap(), Err(LlmError::Cancelled)));
-    cancellation_server.finish().await;
+    let cancellation_requests = cancellation_server.finish_after_client_stop().await;
+    assert!(cancellation_requests.len() <= 1);
 
     let deadline_server = RunningServer::spawn(vec![
         ResponsePlan::fixed(StatusCode::OK, "late").with_start_delay(Duration::from_millis(200)),
@@ -728,7 +740,8 @@ async fn reqwest_propagates_cancel_deadline_and_body_cancel() {
         ))
         .await;
     assert!(matches!(deadline, Err(LlmError::Timeout(_))));
-    deadline_server.finish().await;
+    let deadline_requests = deadline_server.finish_after_client_stop().await;
+    assert!(deadline_requests.len() <= 1);
 
     let body_server = RunningServer::spawn(vec![
         ResponsePlan::chunked(
@@ -757,7 +770,7 @@ async fn reqwest_propagates_cancel_deadline_and_body_cancel() {
         body.next().await.unwrap(),
         Err(LlmError::Cancelled)
     ));
-    body_server.finish().await;
+    assert_eq!(body_server.finish_after_client_stop().await.len(), 1);
 }
 
 #[tokio::test]

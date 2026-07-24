@@ -60,19 +60,16 @@ struct MatrixCapability {
     evidence_id: String,
 }
 
-fn workspace_root() -> PathBuf {
+fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace parent")
-        .to_path_buf()
 }
 
 fn matrix_path() -> PathBuf {
-    workspace_root().join("docs/philo/stage/evidence/phase-3/support-matrix.toml")
+    repository_root().join("support/provider-support-matrix.toml")
 }
 
 fn matrix_markdown_path() -> PathBuf {
-    workspace_root().join("docs/philo/stage/evidence/phase-3/support-matrix.md")
+    repository_root().join("support/provider-support-matrix.md")
 }
 
 fn load_matrix() -> Matrix {
@@ -314,12 +311,7 @@ fn docs_matrix_is_a_checked_rendering_of_the_structured_source() {
         );
         assert!(markdown.contains(&row), "missing generated row: {row}");
     }
-    assert!(
-        Path::new(
-            &workspace_root().join("docs/philo/stage/evidence/phase-3/p3-012-real-providers.md")
-        )
-        .exists()
-    );
+    assert!(Path::new(&repository_root().join("support/provider-limitations.md")).exists());
     for forbidden in [
         CREDENTIAL_CANARY,
         PROMPT_CANARY,

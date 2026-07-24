@@ -60,6 +60,10 @@ Examples:
   `provider_routing.rs`
 
 Provider guides live in the workspace under `docs/philo/stage/guide/providers/`.
+The standalone repository keeps its checked support declaration in
+[`support/provider-support-matrix.md`](./support/provider-support-matrix.md),
+with [`provider-support-matrix.toml`](./support/provider-support-matrix.toml) as
+the machine-readable source of truth.
 
 ## Build
 

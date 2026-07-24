@@ -1,0 +1,164 @@
+schema_version = 1
+generated_as_of = "2026-07-24"
+status_vocabulary = ["Supported", "Experimental", "Unsupported", "Unknown", "Stale"]
+evidence_level_vocabulary = ["OfflineContractVerified", "RealProviderVerified"]
+
+[[entries]]
+provider_id = "openrouter"
+product_id = "openrouter-chat"
+exact_model = "openai/gpt-4o-mini"
+profile_version = "3.0.0-experimental"
+contract_version = "provider-fixture-v1"
+catalog_version = "p3-001-reviewed-2026-07-23"
+compat_version = "openai-chat-compatible-v1"
+catalog_status = "Experimental"
+effective_status = "Experimental"
+evidence_levels = ["OfflineContractVerified"]
+offline_evidence_id = "p3-012-real-providers"
+fixture_manifest = "provider-compat/openrouter/manifest.toml"
+candidate_sha = ""
+run_url = ""
+online_status = "Pending"
+reviewed_at = "2026-07-23"
+expires_at = "2026-10-23"
+limitations = ["online-pending", "optional-capabilities-unknown", "cost-native-finish-reasoning-not-public"]
+
+[[entries.capabilities]]
+case = "text_stream"
+status = "Experimental"
+evidence_id = "offline:openrouter-chat"
+
+[[entries.capabilities]]
+case = "usage_and_request_id"
+status = "Experimental"
+evidence_id = "offline:openrouter-chat"
+
+[[entries.capabilities]]
+case = "single_tool"
+status = "Unknown"
+evidence_id = "none"
+
+[[entries.capabilities]]
+case = "thinking_and_replay"
+status = "Unknown"
+evidence_id = "none"
+
+[[entries]]
+provider_id = "deepseek"
+product_id = "deepseek-chat-openai"
+exact_model = "deepseek-v4-flash"
+profile_version = "3.0.0-experimental"
+contract_version = "provider-fixture-v1"
+catalog_version = "p3-001-reviewed-2026-07-23"
+compat_version = "openai-chat-compatible-v1"
+catalog_status = "Experimental"
+effective_status = "Experimental"
+evidence_levels = ["OfflineContractVerified"]
+offline_evidence_id = "p3-012-real-providers"
+fixture_manifest = "provider-compat/deepseek/manifest.toml"
+candidate_sha = ""
+run_url = ""
+online_status = "Pending"
+reviewed_at = "2026-07-23"
+expires_at = "2026-10-23"
+limitations = ["online-pending", "optional-capabilities-unknown", "thinking-replay-not-enabled", "strict-beta-excluded"]
+
+[[entries.capabilities]]
+case = "text_stream"
+status = "Experimental"
+evidence_id = "offline:deepseek-chat-openai"
+
+[[entries.capabilities]]
+case = "usage_and_request_id"
+status = "Experimental"
+evidence_id = "offline:deepseek-chat-openai"
+
+[[entries.capabilities]]
+case = "single_tool"
+status = "Unknown"
+evidence_id = "none"
+
+[[entries.capabilities]]
+case = "thinking_and_replay"
+status = "Unknown"
+evidence_id = "none"
+
+[[entries]]
+provider_id = "zai"
+product_id = "zai-standard-api"
+exact_model = "glm-5"
+profile_version = "3.0.0-experimental"
+contract_version = "provider-fixture-v1"
+catalog_version = "p3-001-reviewed-2026-07-23"
+compat_version = "openai-chat-compatible-v1"
+catalog_status = "Experimental"
+effective_status = "Experimental"
+evidence_levels = ["OfflineContractVerified"]
+offline_evidence_id = "p3-012-real-providers"
+fixture_manifest = "provider-compat/zai-standard/manifest.toml"
+candidate_sha = ""
+run_url = ""
+online_status = "Pending"
+reviewed_at = "2026-07-23"
+expires_at = "2026-10-23"
+limitations = ["online-pending", "optional-capabilities-unknown", "thinking-tool-stream-not-enabled"]
+
+[[entries.capabilities]]
+case = "text_stream"
+status = "Experimental"
+evidence_id = "offline:zai-standard-api"
+
+[[entries.capabilities]]
+case = "usage_and_request_id"
+status = "Experimental"
+evidence_id = "offline:zai-standard-api"
+
+[[entries.capabilities]]
+case = "single_tool"
+status = "Unknown"
+evidence_id = "none"
+
+[[entries.capabilities]]
+case = "thinking_and_replay"
+status = "Unknown"
+evidence_id = "none"
+
+[[entries]]
+provider_id = "zai"
+product_id = "zai-coding-plan"
+exact_model = "glm-5"
+profile_version = "3.0.0-experimental"
+contract_version = "provider-fixture-v1"
+catalog_version = "p3-001-reviewed-2026-07-23"
+compat_version = "openai-chat-compatible-v1"
+catalog_status = "Experimental"
+effective_status = "Experimental"
+evidence_levels = ["OfflineContractVerified"]
+offline_evidence_id = "p3-012-real-providers"
+fixture_manifest = "provider-compat/zai-coding/manifest.toml"
+candidate_sha = ""
+run_url = ""
+online_status = "Pending"
+reviewed_at = "2026-07-23"
+expires_at = "2026-10-23"
+limitations = ["online-pending", "optional-capabilities-unknown", "coding-key-product-scoped", "thinking-tool-stream-not-enabled"]
+
+[[entries.capabilities]]
+case = "text_stream"
+status = "Experimental"
+evidence_id = "offline:zai-coding-plan"
+
+[[entries.capabilities]]
+case = "usage_and_request_id"
+status = "Experimental"
+evidence_id = "offline:zai-coding-plan"
+
+[[entries.capabilities]]
+case = "single_tool"
+status = "Unknown"
+evidence_id = "none"
+
+[[entries.capabilities]]
+case = "thinking_and_replay"
+status = "Unknown"
+evidence_id = "none"

@@ -530,6 +530,12 @@ fn provider_diagnostics_are_value_free_and_cannot_resolve_or_send() {
     assert!(diagnostics.contains("PolicySource"));
     assert!(diagnostics.contains("EvidenceVerification"));
     assert!(!diagnostics.contains("url().query"));
+
+    let contract = source("tests/provider_diagnostics_contract.rs");
+    assert!(contract.contains("support/provider-support-matrix.toml"));
+    assert!(contract.contains("support/provider-support-matrix.md"));
+    assert!(!contract.contains("docs/philo"));
+    assert!(!contract.contains(".parent()"));
 }
 
 #[test]
