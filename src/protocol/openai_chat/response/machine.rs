@@ -26,6 +26,7 @@ pub(super) struct ChatStateMachine {
     tools: ToolCallAccumulator,
     next_content_index: u32,
     finish_reason: Option<FinishReason>,
+    duplicate_finish_seen: bool,
     seen_done: bool,
     terminal: StructuredTerminal,
     usage_details: Option<UsageDetails>,
@@ -44,6 +45,7 @@ impl fmt::Debug for ChatStateMachine {
             .field("refusal", &self.refusal)
             .field("tool_calls", &self.tools.len())
             .field("finish_seen", &self.finish_reason.is_some())
+            .field("duplicate_finish_seen", &self.duplicate_finish_seen)
             .field("done_seen", &self.seen_done)
             .field("usage_seen", &self.usage_details.is_some())
             .field("generation_id_seen", &self.generation_id.is_some())
@@ -76,6 +78,7 @@ impl ChatStateMachine {
             tools: ToolCallAccumulator::new(limits),
             next_content_index: 0,
             finish_reason: None,
+            duplicate_finish_seen: false,
             seen_done: false,
             terminal: StructuredTerminal::new(response_format),
             usage_details: None,
@@ -150,7 +153,12 @@ impl ChatStateMachine {
         }
         self.record_unknown_fields(&chunk);
 
-        let prepared = PreparedChunk::validate(&chunk, self.finish_reason.is_some())?;
+        let prepared = PreparedChunk::validate(
+            &chunk,
+            self.finish_reason.as_ref(),
+            self.duplicate_finish_seen,
+            self.response_compat.finish_reason,
+        )?;
         self.observe_identity(chunk.id.as_deref(), chunk.model.as_deref())?;
 
         let mut events = Vec::new();
@@ -158,6 +166,9 @@ impl ChatStateMachine {
 
         if let Some(choice) = chunk.choices.first() {
             self.apply_choice(choice, prepared.finish_reason, &mut events)?;
+        }
+        if prepared.duplicate_finish {
+            self.duplicate_finish_seen = true;
         }
         if let Some(details) = prepared.usage {
             let (merged, outcome) = merge_usage_details(self.usage_details, details)
@@ -1508,6 +1519,7 @@ mod tests {
                 tools: ToolCallAccumulator::from_pending(pending, limits, 32),
                 next_content_index: 1,
                 finish_reason: Some(FinishReason::ToolCalls),
+                duplicate_finish_seen: false,
                 seen_done: true,
                 terminal: StructuredTerminal::new(ResponseFormat::Text),
                 usage_details: None,

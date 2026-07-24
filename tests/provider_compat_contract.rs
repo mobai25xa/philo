@@ -13,8 +13,8 @@ use philo::{
     ToolChoice, ToolDefinition, ToolName, ToolSchema,
 };
 use philo::{
-    CompatField, CompatPatch, MaxOutputTokensWireFormat, PolicySource, ToolArgumentsCompat,
-    resolve_compat,
+    CompatField, CompatPatch, FinishReasonCompat, MaxOutputTokensWireFormat, PolicySource,
+    ToolArgumentsCompat, resolve_compat,
 };
 use philo::{OfficialOpenAiProfile, ProviderRuntime};
 use serde_json::json;
@@ -221,6 +221,128 @@ async fn illegal_capability_compat_pairs_fail_before_transport() {
         .unwrap_err();
     assert!(error.to_string().contains("tool argument compatibility"));
     assert!(mock.captured_requests().is_empty());
+}
+
+#[tokio::test]
+async fn finish_compat_accepts_one_identical_payload_free_repeat_with_usage() {
+    let runtime = duplicate_finish_runtime();
+    let mock = MockTransport::scripted([MockExchange::response(sse_response(
+        br#"data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}
+
+data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{"content":"","reasoning_details":[]},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+
+data: [DONE]
+
+"#,
+    ))]);
+    let message = philo::LlmClient::new(runtime, mock)
+        .complete(duplicate_finish_request())
+        .await
+        .unwrap();
+    assert_eq!(message.finish_reason(), &philo::FinishReason::Stop);
+    assert!(message.usage().is_some());
+}
+
+#[tokio::test]
+async fn strict_finish_compat_still_rejects_an_identical_repeat() {
+    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+        .unwrap()
+        .build()
+        .unwrap();
+    let mock = MockTransport::scripted([MockExchange::response(sse_response(
+        br#"data: {"id":"strict-dup","model":"gpt-test","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}
+
+data: {"id":"strict-dup","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#,
+    ))]);
+    let error = philo::LlmClient::new(runtime, mock)
+        .complete(GenerateRequest::new(
+            ModelRef::new("test-only", "gpt-test").unwrap(),
+            vec![Message::user("strict finish")],
+        ))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("duplicate finish reason"));
+}
+
+#[tokio::test]
+async fn finish_compat_rejects_conflicts_late_reasoning_and_multiple_repeats() {
+    let suffixes = [
+        r#"data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}
+
+data: [DONE]
+
+"#,
+        r#"data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"late"}]},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#,
+        r#"data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{"future_control":{}},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#,
+        r#"data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#,
+    ];
+    let expected = [
+        "conflicting duplicate finish reason",
+        "choice data received after finish reason",
+        "choice data received after finish reason",
+        "multiple duplicate finish reasons",
+    ];
+    for (suffix, expected) in suffixes.into_iter().zip(expected) {
+        let body = format!(
+            "data: {{\"id\":\"dup-finish\",\"model\":\"gpt-duplicate-finish\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"ok\"}},\"finish_reason\":\"stop\"}}]}}\n\n{suffix}"
+        );
+        let mock = MockTransport::scripted([MockExchange::response(sse_response(body.as_bytes()))]);
+        let error = philo::LlmClient::new(duplicate_finish_runtime(), mock)
+            .complete(duplicate_finish_request())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+fn duplicate_finish_runtime() -> ProviderRuntime {
+    TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+        .unwrap()
+        .with_model_compat(
+            ModelId::new("gpt-duplicate-finish").unwrap(),
+            CompatPatch::from_source(PolicySource::ModelProfile)
+                .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate),
+        )
+        .build()
+        .unwrap()
+}
+
+fn duplicate_finish_request() -> GenerateRequest {
+    GenerateRequest::new(
+        ModelRef::new("test-only", "gpt-duplicate-finish").unwrap(),
+        vec![Message::user("duplicate finish compatibility")],
+    )
+}
+
+fn sse_response(body: impl AsRef<[u8]>) -> MockResponse {
+    MockResponse::new(
+        StatusCode::OK,
+        HeaderMap::from_iter([(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        )]),
+        vec![MockBodyItem::chunk(Bytes::copy_from_slice(body.as_ref()))],
+    )
 }
 
 #[tokio::test]

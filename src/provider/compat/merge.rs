@@ -94,6 +94,13 @@ impl CompatPatch {
         self
     }
 
+    /// Sets streamed finish-reason handling.
+    #[must_use]
+    pub const fn with_finish_reason(mut self, value: FinishReasonCompat) -> Self {
+        self.response_finish_reason = Some(value);
+        self
+    }
+
     /// Sets streamed tool-argument handling.
     #[must_use]
     pub const fn with_tool_arguments(mut self, value: ToolArgumentsCompat) -> Self {
