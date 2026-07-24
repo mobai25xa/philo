@@ -155,11 +155,13 @@ fn hosted_workflow_exposes_only_the_selected_secret_to_the_test_process() {
     assert!(!workflow.contains("pull_request_target"));
     assert!(workflow.contains("permissions:\n  contents: read"));
     assert!(workflow.contains("if: github.event_name == 'workflow_dispatch'"));
+    assert!(workflow.contains("environment: provider-conformance"));
     assert!(!workflow.contains("env:\n      OPENAI_API_KEY"));
+    assert!(!workflow.contains("secrets.OPENAI_API_KEY"));
+    assert!(!workflow.contains("secrets.DEEPSEEK_API_KEY"));
+    assert!(!workflow.contains("docs/apikey.md"));
     for secret in [
-        "secrets.OPENAI_API_KEY",
         "secrets.OPENROUTER_API_KEY",
-        "secrets.DEEPSEEK_API_KEY",
         "secrets.ZAI_API_KEY",
         "secrets.ZAI_CODING_API_KEY",
     ] {
