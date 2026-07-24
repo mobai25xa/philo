@@ -143,4 +143,10 @@ impl CompatField {
         Self::HistoryToolResultName,
         Self::HistoryToolCallId,
     ];
+
+    /// Returns every stable compatibility leaf in deterministic order.
+    #[must_use]
+    pub const fn all() -> [Self; 16] {
+        Self::ALL
+    }
 }

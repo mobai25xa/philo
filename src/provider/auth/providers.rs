@@ -5,7 +5,7 @@ use std::fmt;
 
 use http::{HeaderMap, HeaderName, HeaderValue, header};
 
-use super::{ApiKey, AuthContext, AuthFuture, AuthProvider};
+use super::{ApiKey, AuthContext, AuthFuture, AuthProvider, AuthSchemeKind, CredentialSourceKind};
 use crate::error::{LlmError, ValidationError, ValidationReason};
 use crate::provider::endpoint::{CredentialAudience, ResolvedEndpoint};
 use crate::provider::headers::HeaderOperation;
@@ -84,6 +84,14 @@ impl AuthProvider for ApiKeyHeaderAuth {
                 "API-key auth provider must set its registered header",
             ))
         }
+    }
+
+    fn scheme_kind(&self) -> AuthSchemeKind {
+        AuthSchemeKind::ApiKeyHeader
+    }
+
+    fn credential_source_kind(&self) -> CredentialSourceKind {
+        CredentialSourceKind::Static
     }
 }
 
@@ -190,6 +198,14 @@ impl AuthProvider for MultiHeaderAuth {
             ))
         }
     }
+
+    fn scheme_kind(&self) -> AuthSchemeKind {
+        AuthSchemeKind::MultiHeader
+    }
+
+    fn credential_source_kind(&self) -> CredentialSourceKind {
+        CredentialSourceKind::Static
+    }
 }
 
 /// Explicit unauthenticated provider. Empty keys never imply this mode.
@@ -226,6 +242,14 @@ impl AuthProvider for NoAuth {
         } else {
             Ok(())
         }
+    }
+
+    fn scheme_kind(&self) -> AuthSchemeKind {
+        AuthSchemeKind::None
+    }
+
+    fn credential_source_kind(&self) -> CredentialSourceKind {
+        CredentialSourceKind::None
     }
 }
 

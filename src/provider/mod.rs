@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod compat;
 pub mod config;
 pub mod detection;
+pub mod diagnostics;
 pub mod endpoint;
 pub mod factory;
 pub mod headers;
@@ -16,10 +17,10 @@ pub mod registry;
 pub mod runtime;
 
 pub use auth::{
-    ApiKey, ApiKeyHeaderAuth, AuthContext, AuthProvider, BearerAuth, BearerCredential,
-    CredentialFuture, CredentialIdentity, DynamicAuth, DynamicCredential, DynamicCredentialCache,
-    DynamicCredentialContext, DynamicCredentialScheme, DynamicCredentialSource, MultiHeaderAuth,
-    NoAuth, TenantId,
+    ApiKey, ApiKeyHeaderAuth, AuthContext, AuthProvider, AuthSchemeKind, BearerAuth,
+    BearerCredential, CredentialFuture, CredentialIdentity, CredentialSourceKind, DynamicAuth,
+    DynamicCredential, DynamicCredentialCache, DynamicCredentialContext, DynamicCredentialScheme,
+    DynamicCredentialSource, MultiHeaderAuth, NoAuth, TenantId,
 };
 pub use capability::{
     ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, ProtocolDialect,
@@ -48,6 +49,10 @@ pub use config::{
 pub use detection::{
     DetectionConfidence, DetectionExplanation, DetectionSuggestion, DetectionUnknownReason,
     EndpointDetection, EndpointDetectionPolicy, EndpointDetector, NormalizedEndpointFacts,
+};
+pub use diagnostics::{
+    AuthDiagnostics, CompatDiagnostic, EffectiveSupportStatus, EndpointDiagnostics,
+    EvidenceVerification, HeaderDiagnostic, ProviderDiagnostics, SupportDiagnostics,
 };
 pub use endpoint::{
     CredentialAudience, EndpointConfig, EndpointNetworkPolicy, EndpointPathVariable, EndpointQuery,

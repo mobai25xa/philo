@@ -79,6 +79,7 @@ fn primary_public_surface_does_not_name_private_implementation_types() {
         "src/provider/profiles/official_openai.rs",
         "src/provider/profiles/test_only.rs",
         "src/provider/capability.rs",
+        "src/provider/diagnostics.rs",
         "src/provider/runtime.rs",
         "src/transport/mod.rs",
     ];
@@ -383,4 +384,43 @@ fn routing_and_detection_have_typed_root_and_deep_public_paths() {
         .with_detection_policy(DeepDetectionPolicy::Enabled);
     let selection: philo::ProviderSelection = DeepSelector::select(&input);
     assert_eq!(selection.provider_id().unwrap().as_str(), "official-openai");
+}
+
+#[test]
+fn provider_diagnostics_have_root_and_deep_public_paths() {
+    use philo::provider::diagnostics::{
+        AuthDiagnostics as DeepAuthDiagnostics,
+        EffectiveSupportStatus as DeepEffectiveSupportStatus,
+        EndpointDiagnostics as DeepEndpointDiagnostics,
+        EvidenceVerification as DeepEvidenceVerification,
+        ProviderDiagnostics as DeepProviderDiagnostics,
+        SupportDiagnostics as DeepSupportDiagnostics,
+    };
+
+    let runtime = philo::OpenRouterProfile::from_api_key("public-api-placeholder")
+        .unwrap()
+        .build()
+        .unwrap();
+    let request = philo::GenerateRequest::new(
+        philo::ModelRef::new("openrouter", "openai/gpt-4o-mini").unwrap(),
+        vec![philo::Message::user(
+            "diagnostics do not retain this content",
+        )],
+    );
+    let diagnostics: philo::ProviderDiagnostics = runtime
+        .diagnostics_for_request(
+            &request,
+            &philo::ProviderRequestOptions::new(),
+            "2026-07-24",
+        )
+        .unwrap();
+
+    let _: &DeepProviderDiagnostics = &diagnostics;
+    let _: &DeepAuthDiagnostics = diagnostics.auth();
+    let _: &DeepEndpointDiagnostics = diagnostics.endpoint();
+    let support: &DeepSupportDiagnostics = diagnostics.support();
+    let status: philo::EffectiveSupportStatus = support.status();
+    let verification: philo::EvidenceVerification = support.verification();
+    assert_eq!(status, DeepEffectiveSupportStatus::Experimental);
+    assert_eq!(verification, DeepEvidenceVerification::CatalogDeclaration);
 }

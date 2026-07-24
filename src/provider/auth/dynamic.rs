@@ -11,7 +11,10 @@ use tokio::time::Instant;
 
 use super::cache::AuthCacheKey;
 use super::providers::validate_auth_name;
-use super::{ApiKey, AuthContext, AuthFuture, AuthProvider, DynamicCredentialCache};
+use super::{
+    ApiKey, AuthContext, AuthFuture, AuthProvider, AuthSchemeKind, CredentialSourceKind,
+    DynamicCredentialCache,
+};
 use crate::domain::ProviderId;
 use crate::error::{
     CredentialError, CredentialFailure, LlmError, ValidationError, ValidationReason,
@@ -434,5 +437,13 @@ impl AuthProvider for DynamicAuth {
         } else {
             Err(CredentialError::new(CredentialFailure::Invalid).into())
         }
+    }
+
+    fn scheme_kind(&self) -> AuthSchemeKind {
+        AuthSchemeKind::Dynamic
+    }
+
+    fn credential_source_kind(&self) -> CredentialSourceKind {
+        CredentialSourceKind::Dynamic
     }
 }

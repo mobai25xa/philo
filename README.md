@@ -2,7 +2,7 @@
 
 `philo` is an experimental, streaming-first Rust SDK for LLM applications.
 
-The official OpenAI Chat Completions adapter implements the frozen phase-one text path and the phase-two official semantics for function tools, tool streams/results, history normalization, image inputs, reasoning effort/usage, structured output, and local cost estimation. Third-party Provider profiles, automatic retry, and arbitrary request-body extensions remain out of scope.
+The official OpenAI Chat Completions adapter implements the frozen phase-one text path and the phase-two official semantics for function tools, tool streams/results, history normalization, image inputs, reasoning effort/usage, structured output, and local cost estimation. Phase three adds experimental OpenRouter, DeepSeek, and Z.AI profiles plus versioned configuration, typed compatibility policy, deployment mapping, diagnostics, and offline conformance. Automatic retry and arbitrary request-body extensions remain out of scope.
 
 Behavior contracts:
 
@@ -23,6 +23,9 @@ The current implementation includes:
 - public `LlmClient::stream/complete` entry points that still consume one stream only;
 - typed errors/identifiers and value-free lifecycle observations;
 - rustls-backed transport with fail-closed headers/auth/body limits.
+- experimental exact-product profiles for OpenRouter, DeepSeek, Z.AI standard,
+  and Z.AI coding, all currently backed by offline contract evidence only;
+- value-free provider diagnostics and a five-state support vocabulary.
 
 Capabilities that are `Unknown` for an exact model id fail closed. The SDK never executes tools; applications validate, authorize, and run them.
 
@@ -52,8 +55,15 @@ Examples:
 
 - phase one: `stream_text.rs`, `complete_text.rs`, `cancellation_timeout.rs`, `request_headers.rs`, `typed_errors.rs`
 - phase two: `tool_single.rs`, `tool_parallel.rs`, `tool_reject.rs`, `image_url.rs`, `structured_json_schema.rs`
+- phase three: `provider_profiles.rs`, `provider_diagnostics.rs`,
+  `provider_auth_shapes.rs`, `provider_config.rs`, `deployment_mapping.rs`,
+  `provider_routing.rs`
 
-User guides live under `docs/philo/guide/`.
+Provider guides live in the workspace under `docs/philo/stage/guide/providers/`.
+The standalone repository keeps its checked support declaration in
+[`support/provider-support-matrix.md`](./support/provider-support-matrix.md),
+with [`provider-support-matrix.toml`](./support/provider-support-matrix.toml) as
+the machine-readable source of truth.
 
 ## Build
 
@@ -100,11 +110,16 @@ See [`SECURITY.md`](./SECURITY.md) for reporting and handling expectations.
 ## Limitations
 
 The official adapter still does not support audio, prompt-cache controls,
-third-party Provider profiles, the Responses API, automatic retry, arbitrary
+the Responses API, automatic retry, arbitrary
 `extra_body`, dangerous header overrides, or automatic tool execution. Visible
 thinking text and opaque reasoning signatures are not produced by Official Chat
 Completions in phase two; synthetic phase-three boundary fixtures only prove
 replay safety. Unsupported or unknown capabilities fail closed.
+
+OpenRouter, DeepSeek, and Z.AI profiles remain `Experimental`: offline fixtures
+do not constitute real-provider verification or a `Supported` claim. Their
+protected online runs, hosted exact-SHA evidence, and independent reviews are
+still pending.
 
 ## License
 

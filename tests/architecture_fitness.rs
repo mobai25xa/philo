@@ -495,6 +495,50 @@ fn routing_detection_and_conformance_keep_bounded_owners() {
 }
 
 #[test]
+fn provider_diagnostics_are_value_free_and_cannot_resolve_or_send() {
+    for path in [
+        "src/provider/diagnostics.rs",
+        "tests/provider_diagnostics_contract.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    let diagnostics = production_source("src/provider/diagnostics.rs");
+    for forbidden in [
+        "SecretString",
+        "ExposeSecret",
+        "SecretResolver",
+        "CredentialContext",
+        "AuthContext",
+        "HeaderValue",
+        "GenerateRequest",
+        "Message",
+        "RequestMetadata",
+        "HttpRequest",
+        "Transport",
+        "reqwest",
+        "std::env",
+        "tokio::",
+    ] {
+        assert!(
+            !diagnostics.contains(forbidden),
+            "diagnostics gained value or I/O authority: {forbidden}"
+        );
+    }
+
+    assert!(diagnostics.contains("HeaderName"));
+    assert!(diagnostics.contains("PolicySource"));
+    assert!(diagnostics.contains("EvidenceVerification"));
+    assert!(!diagnostics.contains("url().query"));
+
+    let contract = source("tests/provider_diagnostics_contract.rs");
+    assert!(contract.contains("support/provider-support-matrix.toml"));
+    assert!(contract.contains("support/provider-support-matrix.md"));
+    assert!(!contract.contains("docs/philo"));
+    assert!(!contract.contains(".parent()"));
+}
+
+#[test]
 fn completed_phase_2_5_layout_exists_and_legacy_files_are_absent() {
     for path in [
         "src/protocol/openai_chat/response/mod.rs",
