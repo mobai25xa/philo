@@ -402,7 +402,7 @@ fn provider_diagnostics_have_root_and_deep_public_paths() {
         .build()
         .unwrap();
     let request = philo::GenerateRequest::new(
-        philo::ModelRef::new("openrouter", "openai/gpt-4o-mini").unwrap(),
+        philo::ModelRef::new("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free").unwrap(),
         vec![philo::Message::user(
             "diagnostics do not retain this content",
         )],

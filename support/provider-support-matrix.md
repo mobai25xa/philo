@@ -28,9 +28,9 @@ The four third-party products below currently have only offline evidence.
 <!-- BEGIN GENERATED SUPPORT MATRIX -->
 | Provider | Product | Exact model | Profile | Catalog | Effective | Evidence | Online | Expires |
 |---|---|---|---|---|---|---|---|---|
-| openrouter | openrouter-chat | openai/gpt-4o-mini | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
+| openrouter | openrouter-chat | nvidia/nemotron-3-ultra-550b-a55b:free | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
 | deepseek | deepseek-chat-openai | deepseek-v4-flash | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
-| zai | zai-standard-api | glm-5 | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
+| zai | zai-standard-api | glm-4.7-flash | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
 | zai | zai-coding-plan | glm-5 | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
 <!-- END GENERATED SUPPORT MATRIX -->
 

@@ -87,7 +87,7 @@ fn openrouter_request() -> GenerateRequest {
         )
         .with_metadata(metadata);
     GenerateRequest::new(
-        ModelRef::new("openrouter", "openai/gpt-4o-mini").unwrap(),
+        ModelRef::new("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free").unwrap(),
         vec![Message::user(PROMPT_CANARY)],
     )
     .with_options(options)
@@ -114,9 +114,18 @@ fn diagnostics_explain_final_sources_without_values() {
 
     assert_eq!(diagnostics.provider_id().as_str(), "openrouter");
     assert_eq!(diagnostics.product_id().as_str(), "openrouter-chat");
-    assert_eq!(diagnostics.domain_model().as_str(), "openai/gpt-4o-mini");
-    assert_eq!(diagnostics.provider_model().as_str(), "openai/gpt-4o-mini");
-    assert_eq!(diagnostics.wire_model().as_str(), "openai/gpt-4o-mini");
+    assert_eq!(
+        diagnostics.domain_model().as_str(),
+        "nvidia/nemotron-3-ultra-550b-a55b:free"
+    );
+    assert_eq!(
+        diagnostics.provider_model().as_str(),
+        "nvidia/nemotron-3-ultra-550b-a55b:free"
+    );
+    assert_eq!(
+        diagnostics.wire_model().as_str(),
+        "nvidia/nemotron-3-ultra-550b-a55b:free"
+    );
     assert_eq!(diagnostics.endpoint().origin().host(), "openrouter.ai");
     assert_eq!(
         diagnostics.endpoint().path_shape(),

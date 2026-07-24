@@ -1,6 +1,5 @@
-data: {"id":"fixture","model":"openai/gpt-4o-mini","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}
+data: {"id":"fixture","model":"nvidia/nemotron-3-ultra-550b-a55b:free","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}
 
-data: {"id":"fixture","model":"openai/gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+data: {"id":"fixture","model":"nvidia/nemotron-3-ultra-550b-a55b:free","choices":[{"index":0,"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
 
 data: [DONE]
-

@@ -48,7 +48,16 @@ fn parse_language(value: &str) -> Result<HeaderValue, LlmError> {
 }
 
 macro_rules! zai_profile {
-    ($name:ident, $docs:literal, $product:literal, $base:literal, $audience:expr, $source:literal) => {
+    (
+        $name:ident,
+        $docs:literal,
+        $product:literal,
+        $base:literal,
+        $audience:expr,
+        $model:literal,
+        $display_name:literal,
+        $source:literal
+    ) => {
         #[doc = $docs]
         #[derive(Clone, Debug)]
         pub struct $name {
@@ -116,8 +125,8 @@ macro_rules! zai_profile {
                     client_identity: self.client_identity,
                     provider_headers: language_operation(self.accept_language),
                     dynamic_header_policy: self.dynamic_header_policy,
-                    exact_model: "glm-5",
-                    display_name: "Z.AI GLM-5",
+                    exact_model: $model,
+                    display_name: $display_name,
                     catalog_source: $source,
                     provider_compat: compat,
                     openrouter_routing: None,
@@ -138,6 +147,8 @@ zai_profile!(
     "zai-standard-api",
     "https://api.z.ai/api/paas/v4",
     CredentialAudience::ZaiStandard,
+    "glm-4.7-flash",
+    "Z.AI GLM-4.7-Flash",
     "p3-001-zai-standard-official-docs"
 );
 
@@ -147,5 +158,7 @@ zai_profile!(
     "zai-coding-plan",
     "https://api.z.ai/api/coding/paas/v4",
     CredentialAudience::ZaiCoding,
+    "glm-5",
+    "Z.AI GLM-5",
     "p3-001-zai-coding-official-docs"
 );

@@ -6,7 +6,7 @@ evidence_level_vocabulary = ["OfflineContractVerified", "RealProviderVerified"]
 [[entries]]
 provider_id = "openrouter"
 product_id = "openrouter-chat"
-exact_model = "openai/gpt-4o-mini"
+exact_model = "nvidia/nemotron-3-ultra-550b-a55b:free"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
 catalog_version = "p3-001-reviewed-2026-07-23"
@@ -86,7 +86,7 @@ evidence_id = "none"
 [[entries]]
 provider_id = "zai"
 product_id = "zai-standard-api"
-exact_model = "glm-5"
+exact_model = "glm-4.7-flash"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
 catalog_version = "p3-001-reviewed-2026-07-23"

@@ -35,7 +35,7 @@ fn presets_freeze_exact_product_endpoint_catalog_and_experimental_support() {
         (
             "openrouter",
             "openrouter-chat",
-            "openai/gpt-4o-mini",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
             "https://openrouter.ai/api/v1/chat/completions",
         ),
         (
@@ -47,7 +47,7 @@ fn presets_freeze_exact_product_endpoint_catalog_and_experimental_support() {
         (
             "zai",
             "zai-standard-api",
-            "glm-5",
+            "glm-4.7-flash",
             "https://api.z.ai/api/paas/v4/chat/completions",
         ),
         (
@@ -191,7 +191,7 @@ async fn deepseek_and_zai_use_legacy_max_tokens_without_driver_forks() {
                 .build()
                 .unwrap(),
             "zai",
-            "glm-5",
+            "glm-4.7-flash",
         ),
         (
             ZaiCodingProfile::from_api_key(CANARY)
