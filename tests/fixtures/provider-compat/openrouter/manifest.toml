@@ -1,0 +1,11 @@
+schema_version = 1
+provider = "openrouter"
+product = "openrouter-chat"
+profile_version = "3.0.0-experimental"
+catalog_version = "p3-001-reviewed-2026-07-23"
+compat_version = "openai-chat-compatible-v1"
+source = "official-doc-plus-synthetic-offline"
+reviewed_at = "2026-07-23"
+evidence_expires_at = "2026-10-23"
+synthetic_conformance_claim = false
+notes = "Synthetic fixtures exercise the reviewed shape; protected online evidence is still required."

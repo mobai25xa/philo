@@ -38,6 +38,12 @@ pub const PHASE_TWO_CONTRACT_ID: &str = "philo/openai-chat-p2";
 /// The version of the frozen phase-two behavior contract.
 pub const PHASE_TWO_CONTRACT_VERSION: &str = "1.1.0";
 
+/// The identifier of the versioned provider configuration schema.
+pub const PROVIDER_CONFIG_SCHEMA_ID: &str = "philo/provider-config";
+
+/// The current version of the provider configuration schema.
+pub const PROVIDER_CONFIG_SCHEMA_VERSION: &str = "1.0";
+
 pub mod client;
 pub mod domain;
 pub mod error;
@@ -68,9 +74,11 @@ pub use domain::{
 };
 pub use error::{
     AuthFailureKind, AuthenticationError, BodySummary, CapabilityError, CostError, CostFailure,
-    ErrorStage, HistoryError, HistoryFailure, HttpStatusError, LlmError, ProtocolError,
-    RetriableHint, SchemaError, SchemaFailure, StructuredOutputError, StructuredOutputFailure,
-    TimeoutError, ToolValidationError, ToolValidationFailure, TransportError, TruncatedStreamError,
+    CredentialError, CredentialFailure, ErrorStage, HeaderPolicyError, HeaderPolicyFailure,
+    HistoryError, HistoryFailure, HttpStatusError, LlmError, ProtocolError, ProviderConfigError,
+    ProviderConfigFailure, ProviderRegistryError, ProviderRegistryFailure, RetriableHint,
+    SchemaError, SchemaFailure, StructuredOutputError, StructuredOutputFailure, TimeoutError,
+    ToolValidationError, ToolValidationFailure, TransportError, TruncatedStreamError,
     UnknownFinishReason, ValidationError, ValidationReason,
 };
 pub use observability::{
@@ -78,12 +86,36 @@ pub use observability::{
     LifecycleObserver,
 };
 pub use provider::{
-    ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, ClientIdentity,
-    CredentialAudience, EndpointConfig, HeaderLayer, HeaderOperation, HeaderPipeline, HeaderPolicy,
-    HeaderSource, HeaderTraceEntry, ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE,
-    OfficialOpenAiProfile, Origin, ProtocolDialect, ProviderCapabilities, ProviderProfile,
-    ProviderRuntime, ProviderTransportOptions, RedirectPolicy, ResolvedEndpoint, ResolvedHeaders,
-    SensitiveHeaderValue, TraceDecision, TraceOperation,
+    ApiKey, ApiKeyHeaderAuth, AuthContext, AuthProvider, BearerAuth, BearerCredential,
+    CatalogCapabilities, CatalogDefaults, CatalogSource, CatalogSourceId, ClientIdentity,
+    ClientIdentityConfig, ClientIdentityFragment, CompatField, CompatPatch, CompatProfile,
+    ConfigSchemaVersion, ConfigSource, ConfigSourceId, ConfigSourceKind, ConfigSourceLocation,
+    ConfigValue, ConstraintStrength, CredentialAudience, CredentialAudienceSpec, CredentialFuture,
+    CredentialIdentity, DataRetention, DeepSeekProfile, DeploymentId, DetectionConfidence,
+    DetectionExplanation, DetectionSuggestion, DetectionUnknownReason, DomainModelId, DynamicAuth,
+    DynamicCredential, DynamicCredentialCache, DynamicCredentialContext, DynamicCredentialScheme,
+    DynamicCredentialSource, DynamicHeaderContext, DynamicHeaderFuture, DynamicHeaderPolicy,
+    DynamicHeaderSource, DynamicResponseFormat, EndpointConfig, EndpointDetection,
+    EndpointDetectionPolicy, EndpointDetector, EndpointNetworkPolicy, EndpointPathVariable,
+    EndpointQuery, EndpointQueryAction, EndpointQueryDiagnostic, EndpointQuerySource,
+    EndpointResolutionDiagnostics, EndpointSpec, EndpointTemplate, EndpointValues,
+    EnvironmentSecretResolver, FallbackDimension, FieldProvenance, FieldState, FinishReasonCompat,
+    HeaderLayer, HeaderOperation, HeaderPipeline, HeaderPolicy, HeaderSource, HeaderTraceEntry,
+    HistoryCompat, InlineErrorCompat, ListMerge, MapMerge, MaxOutputTokensWireFormat,
+    ModelBodyWireFormat, ModelCapabilityProfile, ModelCatalog, ModelEntry, ModelKey, ModelLimits,
+    MultiHeaderAuth, NamedConfigValue, NamedListMerge, NoAuth, NormalizedEndpointFacts,
+    OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, OfficialOpenAiFactory, OfficialOpenAiProfile,
+    OpenRouterAttribution, OpenRouterProfile, OpenRouterRoutingContract, OpenRouterRoutingPatch,
+    Origin, ProductId, ProtocolDialect, ProviderCapabilities, ProviderConfigDocument,
+    ProviderConfigField, ProviderConfigLayer, ProviderConfigSnapshot, ProviderModelId,
+    ProviderProfile, ProviderRegistration, ProviderRegistrationMetadata, ProviderRegistry,
+    ProviderRequestOptions, ProviderRuntime, ProviderRuntimeFactory, ProviderSelection,
+    ProviderSelectionInput, ProviderSelectionSource, ProviderSelector, ProviderTransportOptions,
+    QueryMergeRule, RedirectPolicy, RequestCompat, ResolvedEndpoint, ResolvedHeaders,
+    ResolvedModelMapping, ResolvedProviderRouting, ResponseCompat, RoutingFallback, RoutingField,
+    RoutingRegion, RoutingSort, SecretReference, SecretResolver, SensitiveHeaderValue,
+    SupportStatus, TenantId, ToolArgumentsCompat, TraceDecision, TraceOperation, UpstreamId,
+    UsageCompat, WireModelValue, ZaiCodingProfile, ZaiStandardProfile, resolve_compat,
 };
 pub use transport::{
     ByteStream, CancellationToken, HttpRequest, HttpResponse, LimitedBody, RequestLifecycle,

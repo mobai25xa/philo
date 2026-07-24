@@ -56,7 +56,7 @@ impl OpenAiChatDriver {
                 protocol: ProtocolResponsePlan::OpenAiChat(OpenAiChatResponsePlan {
                     model: plan.planned.model.clone(),
                     response_format: plan.policy.response_format.clone(),
-                    compat: plan.policy.compat,
+                    compat: plan.policy.compat.clone(),
                     limits: plan.policy.limits.response,
                     sse: plan.policy.limits.transport.sse,
                 }),

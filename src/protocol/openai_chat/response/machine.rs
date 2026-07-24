@@ -13,6 +13,7 @@ use crate::error::{
     ErrorStage, LlmError, ProtocolError, TruncatedStreamError, UnknownFinishReason,
     UnsupportedResponseSemantics,
 };
+use crate::provider::ResponseCompat;
 use crate::provider::call_policy::ResponseLimits;
 use crate::transport::SseEvent;
 
@@ -31,6 +32,7 @@ pub(super) struct ChatStateMachine {
     generation_id: Option<GenerationId>,
     response_model: Option<String>,
     unknown_fields: BTreeSet<String>,
+    response_compat: ResponseCompat,
 }
 
 impl fmt::Debug for ChatStateMachine {
@@ -63,6 +65,7 @@ impl ChatStateMachine {
         context: OpenAiChatStreamContext,
         response_format: ResponseFormat,
         limits: ResponseLimits,
+        response_compat: ResponseCompat,
     ) -> Self {
         Self {
             context,
@@ -79,6 +82,7 @@ impl ChatStateMachine {
             generation_id: None,
             response_model: None,
             unknown_fields: BTreeSet::new(),
+            response_compat,
         }
     }
 
@@ -133,9 +137,10 @@ impl ChatStateMachine {
                     ),
                 ))
             })?;
-        if chunk.error.is_some() {
-            return Err(Self::protocol("provider returned a JSON error object"));
-        }
+        super::super::compat::error::validate_inline_error(
+            chunk.error.is_some(),
+            self.response_compat.inline_error,
+        )?;
         if chunk
             .object
             .as_deref()
@@ -384,7 +389,12 @@ impl ChatStateMachine {
         } else {
             None
         };
-        events.extend(self.tools.observe_delta(wire_index, content_index, delta)?);
+        events.extend(self.tools.observe_delta(
+            wire_index,
+            content_index,
+            delta,
+            self.response_compat.tool_arguments,
+        )?);
         Ok(())
     }
 
@@ -1504,6 +1514,7 @@ mod tests {
                 generation_id: None,
                 response_model: None,
                 unknown_fields: BTreeSet::new(),
+                response_compat: ResponseCompat::default(),
             }
         );
         assert!(!machine_debug.contains("argument-canary"));
@@ -1520,6 +1531,7 @@ mod tests {
             context(),
             ResponseFormat::Text,
             ResourceLimits::official().into(),
+            ResponseCompat::default(),
         );
         machine.record_unknown_fields(&chunk);
         assert_eq!(

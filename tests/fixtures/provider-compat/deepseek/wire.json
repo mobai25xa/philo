@@ -1,0 +1,1 @@
+{"endpoint":"https://api.deepseek.com/chat/completions","auth":"bearer-header","headers":["Content-Type","Authorization"],"credential_audience":"deepseek-api","source":"synthetic"}

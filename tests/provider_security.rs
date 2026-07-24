@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use http::{HeaderMap, HeaderName, HeaderValue, header};
-use philo::provider::auth::{
-    ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, ClientIdentity,
-};
+use philo::provider::auth::{ApiKey, AuthContext, BearerAuth, BearerCredential, ClientIdentity};
 use philo::provider::endpoint::{
     CredentialAudience, EndpointConfig, RedirectPolicy, resolve_official, resolve_test_only,
 };

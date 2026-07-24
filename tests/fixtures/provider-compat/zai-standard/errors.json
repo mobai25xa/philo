@@ -1,0 +1,1 @@
+{"http":{"status":400,"body":{"error":{"code":"business_code","message":"redacted fixture"}}},"abnormal_finish":["sensitive","model_context_window_exceeded","network_error"],"source":"synthetic"}

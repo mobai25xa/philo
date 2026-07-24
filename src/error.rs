@@ -58,6 +58,72 @@ pub enum AuthFailureKind {
     RateLimit,
 }
 
+/// Failure codes for external credential providers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CredentialFailure {
+    /// The callback could not provide a credential.
+    Unavailable,
+    /// The callback returned a credential that violates the typed contract.
+    Invalid,
+    /// Refresh failed while an old credential may still be usable.
+    RefreshFailed,
+    /// The callback exceeded its configured time budget.
+    Timeout,
+}
+
+/// Safe failure returned by an external credential provider.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("credential provider failure: {kind:?}")]
+pub struct CredentialError {
+    kind: CredentialFailure,
+}
+
+impl CredentialError {
+    /// Creates a value-free credential failure.
+    pub const fn new(kind: CredentialFailure) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the stable failure code.
+    pub const fn kind(&self) -> CredentialFailure {
+        self.kind
+    }
+}
+
+/// Failure codes for controlled dynamic header policies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum HeaderPolicyFailure {
+    /// The callback exceeded its configured time budget.
+    Timeout,
+    /// The callback failed or panicked.
+    Callback,
+    /// A returned operation is not permitted by the allowlist.
+    InvalidOperation,
+    /// The callback exceeded operation or byte budgets.
+    BudgetExceeded,
+}
+
+/// Safe failure returned by a dynamic header policy.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("header policy failure: {kind:?}")]
+pub struct HeaderPolicyError {
+    kind: HeaderPolicyFailure,
+}
+
+impl HeaderPolicyError {
+    /// Creates a value-free header policy failure.
+    pub const fn new(kind: HeaderPolicyFailure) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the stable failure code.
+    pub const fn kind(&self) -> HeaderPolicyFailure {
+        self.kind
+    }
+}
+
 /// Validation reason code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -66,6 +132,8 @@ pub enum ValidationReason {
     Empty,
     /// Input has leading or trailing whitespace.
     BoundaryWhitespace,
+    /// Two typed inputs cannot be merged without weakening or ambiguity.
+    Conflict,
     /// Model reference has no provider.
     MissingProvider,
     /// Request model provider does not match the configured client runtime.
@@ -118,6 +186,148 @@ pub struct ValidationError {
     field: String,
     reason: ValidationReason,
     summary: String,
+}
+
+/// Failure codes for versioned provider configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProviderConfigFailure {
+    /// The document version cannot be compiled by this SDK.
+    InvalidVersion,
+    /// The document or layer shape is not valid.
+    InvalidDocument,
+    /// A required provider configuration field is absent.
+    MissingRequiredField,
+    /// A field value or cross-field relationship is invalid.
+    InvalidValue,
+    /// Two layers contain conflicting or duplicate entries.
+    MergeConflict,
+    /// A source attempted to modify a field outside its permission.
+    ForbiddenOverride,
+    /// A named secret could not be resolved.
+    SecretUnavailable,
+}
+
+impl fmt::Display for ProviderConfigFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+/// A safe, typed failure while parsing or compiling provider configuration.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("{field}: {reason} ({message})")]
+pub struct ProviderConfigError {
+    field: String,
+    reason: ProviderConfigFailure,
+    message: &'static str,
+    source_id: Option<String>,
+}
+
+impl ProviderConfigError {
+    /// Creates a configuration error without retaining a field value or secret.
+    pub fn new(
+        field: impl Into<String>,
+        reason: ProviderConfigFailure,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason,
+            message,
+            source_id: None,
+        }
+    }
+
+    /// Attaches a non-sensitive source identifier to this error.
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source_id = Some(source.into());
+        self
+    }
+
+    /// Returns the field path.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> ProviderConfigFailure {
+        self.reason
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+
+    /// Returns the non-sensitive source identifier, when known.
+    pub fn source(&self) -> Option<&str> {
+        self.source_id.as_deref()
+    }
+}
+
+/// Failure codes for provider registration and factory lookup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProviderRegistryFailure {
+    /// A provider identifier cannot be normalized into the registry key space.
+    InvalidProviderId,
+    /// Registration metadata contains an invalid implementation version.
+    InvalidVersion,
+    /// A normalized provider identifier is already registered.
+    DuplicateRegistration,
+    /// The requested registration is absent.
+    RegistrationNotFound,
+    /// A factory returned a runtime for a different provider identifier.
+    FactoryProviderMismatch,
+    /// Registry synchronization state is unavailable after a poisoned lock.
+    StateUnavailable,
+}
+
+impl fmt::Display for ProviderRegistryFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+/// A typed, value-free provider Registry or Factory selection failure.
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[error("provider registry: {reason} ({message})")]
+pub struct ProviderRegistryError {
+    reason: ProviderRegistryFailure,
+    provider_id: Option<String>,
+    message: &'static str,
+}
+
+impl ProviderRegistryError {
+    /// Creates a registry error without retaining configuration or Secret values.
+    pub fn new(
+        reason: ProviderRegistryFailure,
+        provider_id: Option<&str>,
+        message: &'static str,
+    ) -> Self {
+        Self {
+            reason,
+            provider_id: provider_id.map(str::to_owned),
+            message,
+        }
+    }
+
+    /// Returns the stable failure code.
+    pub fn reason(&self) -> ProviderRegistryFailure {
+        self.reason
+    }
+
+    /// Returns the normalized non-sensitive provider identifier, when known.
+    pub fn provider_id(&self) -> Option<&str> {
+        self.provider_id.as_deref()
+    }
+
+    /// Returns the safe summary.
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
 }
 impl ValidationError {
     /// Creates a validation error. The summary must not contain user or secret values.
@@ -782,6 +992,12 @@ pub enum LlmError {
     /// Configuration failure.
     #[error("configuration: {0}")]
     Configuration(String),
+    /// Versioned provider configuration failure.
+    #[error("provider configuration: {0}")]
+    ProviderConfig(#[from] ProviderConfigError),
+    /// Provider registry or runtime factory selection failure.
+    #[error("provider registry: {0}")]
+    ProviderRegistry(#[from] ProviderRegistryError),
     /// Request validation failure.
     #[error("validation: {0}")]
     Validation(#[from] ValidationError),
@@ -806,6 +1022,12 @@ pub enum LlmError {
     /// Authentication, permission, quota, or rate-limit failure.
     #[error("{0}")]
     Authentication(#[from] AuthenticationError),
+    /// External credential provider failure.
+    #[error("{0}")]
+    Credential(#[from] CredentialError),
+    /// Dynamic header policy failure.
+    #[error("{0}")]
+    HeaderPolicy(#[from] HeaderPolicyError),
     /// Transport failure.
     #[error("{0}")]
     Transport(#[from] TransportError),

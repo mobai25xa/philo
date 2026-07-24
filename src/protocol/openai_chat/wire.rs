@@ -5,13 +5,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::{ImageDetail, MessageRole};
+use crate::provider::MaxOutputTokensWireFormat;
 
+use super::compat::routing::ProviderRoutingWire;
 use super::structured_wire::ResponseFormatWire;
 use super::tool_wire::{ToolChoiceWire, ToolWire};
 
 #[derive(Serialize)]
 pub(super) struct ChatCompletionRequestWire<'a> {
-    model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
     messages: Vec<MessageWire<'a>>,
     stream: bool,
     stream_options: StreamOptionsWire,
@@ -20,6 +23,8 @@ pub(super) struct ChatCompletionRequestWire<'a> {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ToolWire<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,12 +35,14 @@ pub(super) struct ChatCompletionRequestWire<'a> {
     response_format: Option<ResponseFormatWire<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<ReasoningEffortWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<ProviderRoutingWire<'a>>,
 }
 
 impl<'a> ChatCompletionRequestWire<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        model: &'a str,
+        model: Option<&'a str>,
         messages: Vec<MessageWire<'a>>,
         temperature: Option<f64>,
         max_completion_tokens: Option<u32>,
@@ -44,22 +51,29 @@ impl<'a> ChatCompletionRequestWire<'a> {
         parallel_tool_calls: Option<bool>,
         response_format: Option<ResponseFormatWire<'a>>,
         reasoning_effort: Option<ReasoningEffortWire>,
+        max_output_tokens_format: MaxOutputTokensWireFormat,
+        include_usage: bool,
+        provider: Option<ProviderRoutingWire<'a>>,
     ) -> Self {
+        let (max_completion_tokens, max_tokens) = super::compat::request::output_token_fields(
+            max_completion_tokens,
+            max_output_tokens_format,
+        );
         Self {
             model,
             messages,
             stream: true,
-            stream_options: StreamOptionsWire {
-                include_usage: true,
-            },
+            stream_options: StreamOptionsWire { include_usage },
             n: 1,
             temperature,
             max_completion_tokens,
+            max_tokens,
             tools,
             tool_choice,
             parallel_tool_calls,
             response_format,
             reasoning_effort,
+            provider,
         }
     }
 }
@@ -73,6 +87,8 @@ pub(super) struct MessageWire<'a> {
     tool_calls: Option<Vec<AssistantToolCallWire<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
 }
 
 impl<'a> MessageWire<'a> {
@@ -82,6 +98,7 @@ impl<'a> MessageWire<'a> {
             content: Some(MessageContentWire::Text(content)),
             tool_calls: None,
             tool_call_id: None,
+            name: None,
         }
     }
 
@@ -91,6 +108,7 @@ impl<'a> MessageWire<'a> {
             content: Some(MessageContentWire::Parts(parts)),
             tool_calls: None,
             tool_call_id: None,
+            name: None,
         }
     }
 
@@ -103,15 +121,21 @@ impl<'a> MessageWire<'a> {
             content,
             tool_calls,
             tool_call_id: None,
+            name: None,
         }
     }
 
-    pub(super) fn tool_result(tool_call_id: &'a str, content: &'a str) -> Self {
+    pub(super) fn tool_result(
+        tool_call_id: &'a str,
+        content: &'a str,
+        name: Option<&'a str>,
+    ) -> Self {
         Self {
             role: MessageRoleWire::Tool,
             content: Some(MessageContentWire::Text(content)),
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
+            name,
         }
     }
 }
@@ -282,9 +306,16 @@ pub(super) struct ToolCallDeltaWire {
 #[derive(Deserialize)]
 pub(super) struct FunctionDeltaWire {
     pub(super) name: Option<String>,
-    pub(super) arguments: Option<String>,
+    pub(super) arguments: Option<ToolArgumentsWire>,
     #[serde(flatten)]
     pub(super) extra: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(super) enum ToolArgumentsWire {
+    String(String),
+    Object(Value),
 }
 
 #[derive(Deserialize)]

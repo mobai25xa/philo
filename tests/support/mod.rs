@@ -1,3 +1,4 @@
-#![allow(dead_code, unreachable_pub)]
+#![allow(dead_code, unreachable_pub, unused_imports)]
 
+pub mod conformance;
 pub mod http_server;

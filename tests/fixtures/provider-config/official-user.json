@@ -1,0 +1,21 @@
+{
+  "schema_version": { "major": 1, "minor": 0 },
+  "credential": {
+    "state": "set",
+    "value": {
+      "kind": "environment_variable",
+      "name": "PHILO_OPENAI_API_KEY"
+    }
+  },
+  "client_identity": {
+    "state": "set",
+    "value": {
+      "product": "my-app",
+      "version": "2.0.0"
+    }
+  },
+  "max_http_error_body_bytes": {
+    "state": "set",
+    "value": 8192
+  }
+}

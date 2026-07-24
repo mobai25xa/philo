@@ -1,0 +1,11 @@
+schema_version = 1
+provider = "official-openai"
+product = "chat-completions"
+profile_version = "3.0.0"
+catalog_version = "synthetic-default"
+compat_version = "openai-chat-default-v1"
+source = "synthetic-plus-protected-online"
+reviewed_at = "2026-07-24"
+evidence_expires_at = "2026-10-24"
+synthetic_conformance_claim = false
+notes = "Offline fixtures prove SDK contracts only; protected online results bind an exact workflow SHA."

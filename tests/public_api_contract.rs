@@ -31,6 +31,29 @@ fn resource_limits_builder_is_the_downstream_construction_path() {
 }
 
 #[test]
+fn extensible_auth_and_header_policy_have_root_and_deep_public_paths() {
+    use philo::provider::auth::{
+        ApiKeyHeaderAuth as DeepApiKeyHeaderAuth, DynamicAuth as DeepDynamicAuth,
+        DynamicCredentialSource as DeepDynamicCredentialSource,
+    };
+    use philo::provider::headers::{
+        ClientIdentityFragment as DeepClientIdentityFragment,
+        DynamicHeaderPolicy as DeepDynamicHeaderPolicy,
+        DynamicHeaderSource as DeepDynamicHeaderSource,
+    };
+
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<philo::DynamicAuth>();
+    assert_send_sync::<DeepDynamicAuth>();
+    assert_send_sync::<philo::DynamicHeaderPolicy>();
+    assert_send_sync::<DeepDynamicHeaderPolicy>();
+    let _: Option<philo::ApiKeyHeaderAuth> = None::<DeepApiKeyHeaderAuth>;
+    let _: Option<philo::ClientIdentityFragment> = None::<DeepClientIdentityFragment>;
+    let _: Option<&dyn philo::DynamicCredentialSource> = None::<&dyn DeepDynamicCredentialSource>;
+    let _: Option<&dyn philo::DynamicHeaderSource> = None::<&dyn DeepDynamicHeaderSource>;
+}
+
+#[test]
 fn primary_public_surface_does_not_name_private_implementation_types() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let public_sources = [
@@ -162,8 +185,10 @@ fn schema_history_and_provider_root_and_deep_paths_remain_compatible() {
     };
     use philo::domain::schema::{SchemaLimits as DeepSchemaLimits, ToolSchema as DeepToolSchema};
     use philo::provider::{
-        OfficialOpenAiProfile as DeepOfficialOpenAiProfile, ProviderProfile as DeepProviderProfile,
-        TestOnlyProfile,
+        DeepSeekProfile as DeepDeepSeekProfile, OfficialOpenAiProfile as DeepOfficialOpenAiProfile,
+        OpenRouterProfile as DeepOpenRouterProfile, ProviderProfile as DeepProviderProfile,
+        TestOnlyProfile, ZaiCodingProfile as DeepZaiCodingProfile,
+        ZaiStandardProfile as DeepZaiStandardProfile,
     };
 
     let schema_value = serde_json::json!({"type": "string"});
@@ -182,6 +207,26 @@ fn schema_history_and_provider_root_and_deep_paths_remain_compatible() {
     let deep_official = DeepOfficialOpenAiProfile::from_api_key("deep-path-key").unwrap();
     let _: philo::ProviderProfile = root_official.profile().unwrap();
     let _: DeepProviderProfile = deep_official.profile().unwrap();
+    let _: DeepProviderProfile = philo::OpenRouterProfile::from_api_key("root-openrouter")
+        .unwrap()
+        .profile()
+        .unwrap();
+    let _: DeepProviderProfile = DeepOpenRouterProfile::from_api_key("deep-openrouter")
+        .unwrap()
+        .profile()
+        .unwrap();
+    let _: DeepProviderProfile = DeepDeepSeekProfile::from_api_key("deep-deepseek")
+        .unwrap()
+        .profile()
+        .unwrap();
+    let _: DeepProviderProfile = DeepZaiStandardProfile::from_api_key("deep-zai-standard")
+        .unwrap()
+        .profile()
+        .unwrap();
+    let _: DeepProviderProfile = DeepZaiCodingProfile::from_api_key("deep-zai-coding")
+        .unwrap()
+        .profile()
+        .unwrap();
     assert!(
         TestOnlyProfile::localhost(
             "http://127.0.0.1:8787/v1/chat/completions",
@@ -211,4 +256,131 @@ fn migration_helpers_remain_absent_from_public_facades() {
             );
         }
     }
+}
+
+#[test]
+fn versioned_provider_config_has_root_and_deep_public_paths() {
+    use philo::provider::config::{
+        ConfigSchemaVersion as DeepVersion, ConfigSource as DeepSource, ConfigValue as DeepValue,
+        ProviderConfigLayer as DeepLayer, ProviderConfigSnapshot as DeepSnapshot,
+        SecretReference as DeepSecretReference,
+    };
+
+    let _: philo::ConfigSchemaVersion = DeepVersion::CURRENT;
+    let source: philo::ConfigSource = DeepSource::programmatic("public-api/config").unwrap();
+    let reference: philo::SecretReference =
+        DeepSecretReference::environment_variable("PHILO_PUBLIC_API_KEY").unwrap();
+    let layer: philo::ProviderConfigLayer =
+        DeepLayer::new(source).with_credential(DeepValue::set(reference));
+    let _: philo::ProviderConfigSnapshot = DeepSnapshot::official_openai()
+        .unwrap()
+        .merge_layers([layer])
+        .unwrap();
+
+    let error = philo::ProviderConfigError::new(
+        "field",
+        philo::ProviderConfigFailure::InvalidValue,
+        "safe public configuration error",
+    );
+    assert_eq!(error.field(), "field");
+}
+
+#[test]
+fn provider_registry_factory_public_paths_are_additive() {
+    use philo::provider::{
+        OfficialOpenAiFactory as DeepFactory, ProviderRegistration as DeepRegistration,
+        ProviderRegistry as DeepRegistry, ProviderRuntimeFactory as DeepFactoryTrait,
+    };
+
+    let _: &dyn DeepFactoryTrait = &DeepFactory;
+    let registration: philo::ProviderRegistration =
+        DeepRegistration::new("official-openai", "1.0", DeepFactory).unwrap();
+    let registry: philo::ProviderRegistry = DeepRegistry::new();
+    registry.register(registration).unwrap();
+    assert_eq!(registry.list().unwrap().len(), 1);
+}
+
+#[test]
+fn model_catalog_and_typed_compat_have_root_and_deep_public_paths() {
+    use philo::provider::catalog::{
+        CatalogSource as DeepCatalogSource, CatalogSourceId as DeepCatalogSourceId,
+        ModelCatalog as DeepModelCatalog, ProductId as DeepProductId,
+    };
+    use philo::provider::compat::{
+        CompatPatch as DeepCompatPatch, MaxOutputTokensWireFormat as DeepTokenFormat,
+        resolve_compat as deep_resolve_compat,
+    };
+
+    let _: philo::ProductId = DeepProductId::new("chat-completions").unwrap();
+    let _: philo::CatalogSource = DeepCatalogSource::new(
+        DeepCatalogSourceId::new("contract").unwrap(),
+        "2026-07-23",
+        None::<String>,
+    )
+    .unwrap();
+    let _: philo::ModelCatalog = DeepModelCatalog::default();
+    let resolved =
+        deep_resolve_compat(&[
+            DeepCompatPatch::from_source(philo::PolicySource::ProviderProfile)
+                .with_max_output_tokens(DeepTokenFormat::MaxTokens),
+        ]);
+    assert_eq!(
+        resolved.request().max_output_tokens,
+        philo::MaxOutputTokensWireFormat::MaxTokens
+    );
+}
+
+#[test]
+fn endpoint_mapping_and_model_body_policy_have_root_and_deep_public_paths() {
+    use philo::provider::endpoint::{
+        EndpointConfig as DeepConfig, EndpointQuery as DeepQuery,
+        EndpointQuerySource as DeepQuerySource, EndpointTemplate as DeepTemplate,
+        QueryMergeRule as DeepMergeRule,
+    };
+
+    let query: philo::EndpointQuery = DeepQuery::new()
+        .with_set(
+            "api-version",
+            "2026-07-01",
+            DeepMergeRule::Override,
+            DeepQuerySource::ProductProfile,
+        )
+        .unwrap();
+    let template: philo::EndpointTemplate =
+        DeepTemplate::parse("deployments/{deployment}/chat/completions").unwrap();
+    let _: philo::EndpointConfig =
+        DeepConfig::base_and_template("https://api.openai.com/v1", template, query).unwrap();
+    let _: philo::ModelBodyWireFormat = philo::provider::compat::ModelBodyWireFormat::Omit;
+    let _: philo::EndpointNetworkPolicy =
+        philo::provider::endpoint::EndpointNetworkPolicy::public_https();
+}
+
+#[test]
+fn routing_and_detection_have_typed_root_and_deep_public_paths() {
+    use philo::provider::compat::{
+        OpenRouterRoutingContract as DeepRoutingContract,
+        OpenRouterRoutingPatch as DeepRoutingPatch, ProviderRequestOptions as DeepProviderOptions,
+    };
+    use philo::provider::detection::{
+        EndpointDetectionPolicy as DeepDetectionPolicy,
+        NormalizedEndpointFacts as DeepEndpointFacts,
+    };
+    use philo::provider::factory::{
+        ProviderSelectionInput as DeepSelectionInput, ProviderSelector as DeepSelector,
+    };
+
+    let patch: philo::OpenRouterRoutingPatch =
+        DeepRoutingPatch::from_source(philo::PolicySource::ProviderProfile);
+    let _: philo::OpenRouterRoutingContract = DeepRoutingContract::new(patch.clone());
+    let options: philo::ProviderRequestOptions =
+        DeepProviderOptions::new().with_openrouter_routing(patch);
+    let _: philo::RequestControl = philo::RequestControl::new().with_provider_options(options);
+
+    let facts: philo::NormalizedEndpointFacts =
+        DeepEndpointFacts::parse("https://api.openai.com/v1/chat/completions").unwrap();
+    let input: philo::ProviderSelectionInput = DeepSelectionInput::new()
+        .with_endpoint(facts)
+        .with_detection_policy(DeepDetectionPolicy::Enabled);
+    let selection: philo::ProviderSelection = DeepSelector::select(&input);
+    assert_eq!(selection.provider_id().unwrap().as_str(), "official-openai");
 }

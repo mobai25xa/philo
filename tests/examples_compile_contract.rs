@@ -18,6 +18,7 @@ fn required_examples() -> &'static [&'static str] {
         "stream_text.rs",
         "complete_text.rs",
         "typed_errors.rs",
+        "provider_registry.rs",
     ]
 }
 

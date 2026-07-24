@@ -4,12 +4,14 @@ use bytes::Bytes;
 
 use crate::domain::{
     ContentPart, GenerationOptions, ImageContent, ImageSource, Message, MessageRole,
-    ReasoningEffort, ThinkingRequest, ToolCall, content,
+    ReasoningEffort, StreamUsagePolicy, ThinkingRequest, ToolCall, ToolResultNamePolicy, content,
 };
 use crate::error::{LlmError, ProtocolError, ValidationError, ValidationReason};
 use crate::execution::contract::ResolvedCallPlan;
-use crate::provider::ProviderCapabilities;
+use crate::provider::compat::ResolvedProviderRouting;
+use crate::provider::{ModelBodyWireFormat, ProviderCapabilities, RequestCompat};
 
+use super::compat::routing::ProviderRoutingWire;
 use super::structured_wire::ResponseFormatWire;
 use super::tool_wire::{encode_parallel_tool_calls, encode_tool_choice, encode_tools};
 use super::wire::{
@@ -20,25 +22,50 @@ use super::wire::{
 /// Encodes an already planned request without resolving policy or normalizing history.
 pub(super) fn encode_planned_request(plan: &ResolvedCallPlan) -> Result<Bytes, LlmError> {
     let planned = &plan.planned;
-    encode_request_parts(
-        plan.policy.target.wire_model.as_str(),
-        &planned.messages,
-        &planned.options,
-        &plan.policy.capabilities,
-        plan.policy.limits.request.max_body_bytes,
-    )
+    encode_request_parts(RequestEncodingContext {
+        model: match plan.policy.compat.profile.request().model_body {
+            ModelBodyWireFormat::Include => Some(plan.policy.target.wire_model.as_str()),
+            ModelBodyWireFormat::Omit => None,
+        },
+        domain_messages: &planned.messages,
+        options: &planned.options,
+        capabilities: &plan.policy.capabilities,
+        compat: *plan.policy.compat.profile.request(),
+        tool_result_name: plan.policy.compat.profile.history().tool_result_name,
+        default_max_output_tokens: plan.policy.limits.model.default_max_output_tokens,
+        max_body_bytes: plan.policy.limits.request.max_body_bytes,
+        provider_routing: plan.policy.provider_routing.as_ref(),
+    })
 }
 
-fn encode_request_parts(
-    model: &str,
-    domain_messages: &[Message],
-    options: &GenerationOptions,
-    capabilities: &ProviderCapabilities,
+#[derive(Clone, Copy)]
+struct RequestEncodingContext<'a> {
+    model: Option<&'a str>,
+    domain_messages: &'a [Message],
+    options: &'a GenerationOptions,
+    capabilities: &'a ProviderCapabilities,
+    compat: RequestCompat,
+    tool_result_name: ToolResultNamePolicy,
+    default_max_output_tokens: Option<u32>,
     max_body_bytes: usize,
-) -> Result<Bytes, LlmError> {
+    provider_routing: Option<&'a ResolvedProviderRouting>,
+}
+
+fn encode_request_parts(context: RequestEncodingContext<'_>) -> Result<Bytes, LlmError> {
+    let RequestEncodingContext {
+        model,
+        domain_messages,
+        options,
+        capabilities,
+        compat,
+        tool_result_name,
+        default_max_output_tokens,
+        max_body_bytes,
+        provider_routing,
+    } = context;
     let mut messages = Vec::with_capacity(domain_messages.len());
     for (index, message) in domain_messages.iter().enumerate() {
-        messages.push(encode_message(message, index)?);
+        messages.push(encode_message(message, index, tool_result_name)?);
     }
     let capabilities_for_tools = capabilities.generation_options();
     let tools = encode_tools(options.tools(), &capabilities_for_tools)?;
@@ -53,12 +80,15 @@ fn encode_request_parts(
         model,
         messages,
         options.temperature(),
-        options.max_output_tokens(),
+        options.max_output_tokens().or(default_max_output_tokens),
         tools,
         tool_choice,
         parallel_tool_calls,
         ResponseFormatWire::from_domain(options.response_format()),
         encode_reasoning_effort(options.reasoning()),
+        compat.max_output_tokens,
+        matches!(compat.stream_usage, StreamUsagePolicy::IncludeUsage),
+        provider_routing.map(ProviderRoutingWire::from),
     );
     let body = serde_json::to_vec(&wire).map_err(|_| {
         LlmError::from(ProtocolError::new(
@@ -76,7 +106,11 @@ fn encode_request_parts(
     Ok(Bytes::from(body))
 }
 
-fn encode_message(message: &Message, index: usize) -> Result<MessageWire<'_>, LlmError> {
+fn encode_message(
+    message: &Message,
+    index: usize,
+    tool_result_name: ToolResultNamePolicy,
+) -> Result<MessageWire<'_>, LlmError> {
     match message.role() {
         MessageRole::Developer | MessageRole::System => {
             let text = single_text(message, index)?;
@@ -100,6 +134,10 @@ fn encode_message(message: &Message, index: usize) -> Result<MessageWire<'_>, Ll
             Ok(MessageWire::tool_result(
                 result.tool_call_id().as_str(),
                 text,
+                super::compat::request::tool_result_name(
+                    result.tool_name().as_str(),
+                    tool_result_name,
+                ),
             ))
         }
     }

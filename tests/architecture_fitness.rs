@@ -345,6 +345,7 @@ fn production_default_limit_lookups_have_an_explicit_file_allowlist() {
         "src/domain/request.rs".to_owned(),
         "src/domain/schema/budget.rs".to_owned(),
         "src/domain/tools.rs".to_owned(),
+        "src/provider/profiles/common.rs".to_owned(),
         "src/provider/profiles/official_openai.rs".to_owned(),
         "src/provider/profiles/test_only.rs".to_owned(),
     ]);
@@ -386,6 +387,111 @@ fn public_request_api_has_no_untyped_wire_extension_escape_hatch() {
             );
         }
     }
+}
+
+#[test]
+fn catalog_and_typed_compat_have_single_owners_and_no_provider_brand_branches() {
+    for path in [
+        "src/provider/catalog/mod.rs",
+        "src/provider/catalog/entry.rs",
+        "src/provider/catalog/ids.rs",
+        "src/provider/catalog/source.rs",
+        "src/provider/catalog/merge.rs",
+        "src/provider/catalog/validate.rs",
+        "src/provider/compat/mod.rs",
+        "src/provider/compat/profile.rs",
+        "src/provider/compat/request.rs",
+        "src/provider/compat/response.rs",
+        "src/provider/compat/history.rs",
+        "src/provider/compat/merge.rs",
+        "src/provider/compat/validate.rs",
+        "src/protocol/openai_chat/compat/mod.rs",
+        "src/protocol/openai_chat/compat/request.rs",
+        "src/protocol/openai_chat/compat/response.rs",
+        "src/protocol/openai_chat/compat/error.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    for directory in ["src/provider/catalog", "src/provider/compat"] {
+        for (file, text) in production_sources_under(directory) {
+            if matches!(
+                file.as_str(),
+                "src/provider/compat/mod.rs" | "src/provider/compat/routing.rs"
+            ) {
+                continue;
+            }
+            for forbidden in [
+                "official-openai",
+                "test-only",
+                "openrouter",
+                "deepseek",
+                "z.ai",
+            ] {
+                assert!(
+                    !text.to_ascii_lowercase().contains(forbidden),
+                    "provider brand leaked into generic policy owner {file}: {forbidden}"
+                );
+            }
+        }
+    }
+
+    let driver = production_source("src/protocol/openai_chat/driver.rs");
+    assert!(!driver.contains("MaxOutputTokensWireFormat"));
+    assert!(!driver.contains("ToolArgumentsCompat"));
+}
+
+#[test]
+fn routing_detection_and_conformance_keep_bounded_owners() {
+    for path in [
+        "src/provider/compat/routing.rs",
+        "src/protocol/openai_chat/compat/routing.rs",
+        "src/provider/detection.rs",
+        "tests/provider_routing_contract.rs",
+        "tests/provider_detection_contract.rs",
+        "tests/provider_conformance.rs",
+        "tests/support/conformance/case.rs",
+        "tests/support/conformance/offline.rs",
+        "tests/support/conformance/online.rs",
+        "tests/support/conformance/report.rs",
+        "tests/support/conformance/redaction.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    for (file, text) in production_sources_under("src/domain") {
+        for forbidden in [
+            "OpenRouterRouting",
+            "ProviderRequestOptions",
+            "EndpointDetector",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "provider-scoped routing/detection leaked into domain {file}: {forbidden}"
+            );
+        }
+    }
+
+    let wire = production_source("src/protocol/openai_chat/compat/routing.rs");
+    assert!(!wire.contains("BTreeMap<String"));
+    assert!(!wire.contains("serde(flatten)"));
+    assert!(!wire.contains("extra_body"));
+
+    let detection = production_source("src/provider/detection.rs");
+    for forbidden in [
+        "reqwest",
+        "Transport",
+        "SecretResolver",
+        "std::net::ToSocketAddrs",
+    ] {
+        assert!(
+            !detection.contains(forbidden),
+            "endpoint detection gained I/O/secret authority: {forbidden}"
+        );
+    }
+    let factory = production_source("src/provider/factory.rs");
+    assert!(factory.contains("ProviderSelector"));
+    assert!(factory.contains("EndpointDetector::detect_with_policy"));
 }
 
 #[test]
@@ -632,4 +738,176 @@ fn private_migration_types_are_not_reexported() {
             "compiled schema metadata visibility widened: {forbidden}"
         );
     }
+}
+
+#[test]
+fn provider_config_has_one_network_free_versioned_module_tree() {
+    for path in [
+        "src/provider/config/mod.rs",
+        "src/provider/config/schema.rs",
+        "src/provider/config/source.rs",
+        "src/provider/config/merge.rs",
+        "src/provider/config/secret_ref.rs",
+        "src/provider/config/validate.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    let module = production_source("src/provider/mod.rs");
+    assert!(module.contains("pub mod config;"));
+    let config = production_sources_under("src/provider/config");
+    for (file, text) in &config {
+        for forbidden in [
+            "crate::client",
+            "crate::execution",
+            "crate::protocol",
+            "crate::transport",
+            "reqwest",
+            "std::env::vars(",
+            "std::env::vars_os(",
+            "serde(flatten)",
+            "extra_body",
+            "extra_headers",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "provider config dependency or escape-hatch leak in {file}: {forbidden}"
+            );
+        }
+    }
+
+    let secret = production_source("src/provider/config/secret_ref.rs");
+    assert_eq!(secret.matches("std::env::var(").count(), 1);
+    assert!(!secret.contains("std::env::vars("));
+    assert!(!secret.contains("std::env::vars_os("));
+
+    let merge = production_source("src/provider/config/merge.rs");
+    assert!(merge.contains("pub struct ProviderConfigSnapshot"));
+    assert!(merge.contains("pub fn merge_layers"));
+    assert!(!merge.contains("ApiKey"));
+    assert!(!merge.contains("SecretString"));
+}
+
+#[test]
+fn provider_registry_keeps_factory_and_runtime_snapshot_boundaries() {
+    for path in [
+        "src/provider/registry.rs",
+        "src/provider/factory.rs",
+        "src/provider/runtime.rs",
+    ] {
+        assert_production_file(path);
+    }
+    let registry = production_source("src/provider/registry.rs");
+    assert!(registry.contains("Arc<RwLock<BTreeMap"));
+    assert!(
+        registry.contains("registration.factory.build(config, resolver)")
+            || registry.contains("factory.build(config, resolver)")
+    );
+    assert!(registry.contains("let registration = {"));
+    for forbidden in [
+        "tokio::sync",
+        "std::env::vars",
+        "serde(flatten)",
+        "extra_body",
+    ] {
+        assert!(
+            !registry.contains(forbidden),
+            "registry escape hatch: {forbidden}"
+        );
+    }
+    let factory = production_source("src/provider/factory.rs");
+    assert!(factory.contains("pub trait ProviderRuntimeFactory"));
+    assert!(!factory.contains("crate::client"));
+    let runtime = production_source("src/provider/runtime.rs");
+    assert!(runtime.contains("pub struct ProviderRuntime"));
+    assert!(!runtime.contains("RwLock"));
+}
+
+#[test]
+fn auth_and_header_policy_have_bounded_owners_before_transport() {
+    for path in [
+        "src/provider/auth.rs",
+        "src/provider/auth/providers.rs",
+        "src/provider/auth/dynamic.rs",
+        "src/provider/auth/cache.rs",
+        "src/provider/headers.rs",
+        "src/provider/headers/identity.rs",
+        "src/provider/headers/dynamic.rs",
+        "tests/provider_auth_contract.rs",
+        "tests/provider_header_contract.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    for (file, text) in production_sources_under("src/provider/auth") {
+        for forbidden in [
+            "query_pairs_mut",
+            "append_pair",
+            "serde_json",
+            "crate::protocol",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "auth URL/payload/protocol escape hatch in {file}: {forbidden}"
+            );
+        }
+    }
+
+    let dynamic_headers = production_source("src/provider/headers/dynamic.rs");
+    for forbidden in ["SecretString", "ApiKey", "AuthContext", "&mut HeaderMap"] {
+        assert!(
+            !dynamic_headers.contains(forbidden),
+            "dynamic header secret/final-map capability: {forbidden}"
+        );
+    }
+
+    let executor = production_source("src/execution/executor.rs");
+    let headers = executor.find("resolve_headers_for_attempt").unwrap();
+    let transport = executor.find("self.transport.execute").unwrap();
+    assert!(
+        headers < transport,
+        "headers/auth must resolve before transport I/O"
+    );
+}
+
+#[test]
+fn endpoint_mapping_has_one_resolver_and_typed_pre_transport_owners() {
+    for path in [
+        "src/provider/endpoint/mod.rs",
+        "src/provider/endpoint/config.rs",
+        "src/provider/endpoint/template.rs",
+        "src/provider/endpoint/mapping.rs",
+        "src/provider/endpoint/origin.rs",
+        "src/provider/endpoint/audience.rs",
+        "src/provider/endpoint/policy.rs",
+        "tests/endpoint_mapping_contract.rs",
+    ] {
+        assert_production_file(path);
+    }
+    assert!(
+        !crate_root().join("src/provider/endpoint.rs").exists(),
+        "legacy endpoint resolver remains"
+    );
+
+    for directory in ["src/protocol", "src/transport"] {
+        for (file, text) in production_sources_under(directory) {
+            for forbidden in ["EndpointTemplate", "DeploymentId", "query_pairs_mut"] {
+                assert!(
+                    !text.contains(forbidden),
+                    "endpoint mapping ownership leaked into {file}: {forbidden}"
+                );
+            }
+        }
+    }
+
+    let executor = production_source("src/execution/executor.rs");
+    let endpoint = executor.find("resolve_target_endpoint").unwrap();
+    let headers = executor.find("resolve_headers_for_attempt").unwrap();
+    let transport = executor.find("self.transport.execute").unwrap();
+    assert!(endpoint < headers && headers < transport);
+
+    let request = production_source("src/protocol/openai_chat/request.rs");
+    assert!(request.contains("ModelBodyWireFormat::Include"));
+    assert!(request.contains("ModelBodyWireFormat::Omit"));
+    assert!(!request.contains("provider_id.as_str()"));
 }

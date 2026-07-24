@@ -1,0 +1,1 @@
+{"http":[{"status":401,"kind":"authentication"},{"status":429,"kind":"rate_limit"},{"status":503,"kind":"unavailable"}],"abnormal_finish":"insufficient_system_resource","source":"synthetic"}

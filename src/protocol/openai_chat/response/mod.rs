@@ -6,7 +6,10 @@ mod terminal;
 mod tool_calls;
 mod usage;
 
-pub(crate) use stream::{OpenAiChatStreamContext, decode_openai_chat_stream_with_plan};
+pub(crate) use stream::{
+    OpenAiChatStreamContext, decode_openai_chat_stream_with_plan,
+    decode_openai_chat_stream_with_policy,
+};
 
 use crate::error::{ErrorStage, LlmError, ProtocolError};
 

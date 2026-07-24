@@ -1,11 +1,21 @@
 //! Layered header resolution with protected-field enforcement and value-free tracing.
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
+use std::collections::HashSet;
 use std::fmt;
 
 use http::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::error::{LlmError, ValidationError, ValidationReason};
+
+mod dynamic;
+mod identity;
+
+pub use dynamic::{
+    DynamicHeaderContext, DynamicHeaderFuture, DynamicHeaderPolicy, DynamicHeaderSource,
+    DynamicResponseFormat,
+};
+pub use identity::{ClientIdentity, ClientIdentityFragment};
 
 /// Header source in ascending priority order.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -106,6 +116,12 @@ impl HeaderOperation {
     /// Creates a Remove operation.
     pub fn remove(name: HeaderName) -> Self {
         Self::Remove { name }
+    }
+
+    pub(crate) fn name(&self) -> &HeaderName {
+        match self {
+            Self::Set { name, .. } | Self::Remove { name } => name,
+        }
     }
 }
 
@@ -230,11 +246,47 @@ impl fmt::Debug for ResolvedHeaders {
     }
 }
 
-/// Protected-header policy.
-#[derive(Clone, Debug, Default)]
-pub struct HeaderPolicy;
+/// Protected-header policy with explicit authentication-header registration.
+#[derive(Clone, Debug)]
+pub struct HeaderPolicy {
+    auth_headers: HashSet<HeaderName>,
+    provider_headers: HashSet<HeaderName>,
+}
 
 impl HeaderPolicy {
+    /// Creates the compatibility policy with Bearer auth registered.
+    pub fn new() -> Self {
+        Self::with_auth_headers([http::header::AUTHORIZATION])
+    }
+
+    /// Creates a policy registering the exact authentication headers owned by Auth.
+    pub fn with_auth_headers<I>(headers: I) -> Self
+    where
+        I: IntoIterator<Item = HeaderName>,
+    {
+        Self {
+            auth_headers: headers.into_iter().collect(),
+            provider_headers: HashSet::new(),
+        }
+    }
+
+    /// Creates a policy with exact Auth and Provider-owned header registrations.
+    pub fn with_registered_headers<A, P>(auth_headers: A, provider_headers: P) -> Self
+    where
+        A: IntoIterator<Item = HeaderName>,
+        P: IntoIterator<Item = HeaderName>,
+    {
+        Self {
+            auth_headers: auth_headers.into_iter().collect(),
+            provider_headers: provider_headers.into_iter().collect(),
+        }
+    }
+
+    /// Returns whether Auth owns this header.
+    pub fn is_auth_header(&self, name: &HeaderName) -> bool {
+        self.auth_headers.contains(name)
+    }
+
     /// Returns whether a header is protected from ordinary layers.
     pub fn is_protected(&self, name: &HeaderName) -> bool {
         matches!(
@@ -244,19 +296,44 @@ impl HeaderPolicy {
                 | "host"
                 | "content-length"
                 | "content-type"
+                | "accept"
                 | "transfer-encoding"
                 | "connection"
                 | "cookie"
-        )
+                | "set-cookie"
+                | "user-agent"
+        ) || self.is_auth_header(name)
+            || self.provider_headers.contains(name)
     }
 
     fn allows(&self, source: HeaderSource, name: &HeaderName) -> bool {
         match name.as_str() {
-            "authorization" => source == HeaderSource::Auth,
-            "content-type" => source == HeaderSource::Protocol,
-            _ if self.is_protected(name) => false,
-            _ => true,
+            "authorization" | "proxy-authorization" => {
+                source == HeaderSource::Auth && self.is_auth_header(name)
+            }
+            "content-type" | "accept" => source == HeaderSource::Protocol,
+            "user-agent" => source == HeaderSource::ClientIdentity,
+            "host" | "content-length" | "transfer-encoding" | "connection" | "cookie"
+            | "set-cookie" => false,
+            _ if self.is_auth_header(name) => source == HeaderSource::Auth,
+            _ => match source {
+                HeaderSource::Transport | HeaderSource::Auth => false,
+                HeaderSource::Protocol => true,
+                HeaderSource::Provider => {
+                    self.provider_headers.contains(name) || ordinary_header(name)
+                }
+                HeaderSource::Model | HeaderSource::DynamicPolicy | HeaderSource::Request => {
+                    ordinary_header(name)
+                }
+                HeaderSource::ClientIdentity => name.as_str().starts_with("x-"),
+            },
         }
+    }
+}
+
+impl Default for HeaderPolicy {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -272,10 +349,31 @@ impl HeaderPipeline {
         Self::default()
     }
 
+    /// Creates a pipeline using the Auth provider's registered protected headers.
+    pub fn with_auth_headers<I>(headers: I) -> Self
+    where
+        I: IntoIterator<Item = HeaderName>,
+    {
+        Self {
+            policy: HeaderPolicy::with_auth_headers(headers),
+        }
+    }
+
+    /// Creates a pipeline with exact Auth and Provider-owned header registrations.
+    pub fn with_registered_headers<A, P>(auth_headers: A, provider_headers: P) -> Self
+    where
+        A: IntoIterator<Item = HeaderName>,
+        P: IntoIterator<Item = HeaderName>,
+    {
+        Self {
+            policy: HeaderPolicy::with_registered_headers(auth_headers, provider_headers),
+        }
+    }
+
     /// Resolves layers by source priority and validates the final protected headers.
     pub fn resolve(&self, layers: Vec<HeaderLayer>) -> Result<ResolvedHeaders, LlmError> {
         let resolved = self.resolve_layers(layers)?;
-        Self::validate_bearer_compatibility(&resolved.headers)?;
+        self.validate_compatibility(&resolved.headers)?;
         Ok(resolved)
     }
 
@@ -294,7 +392,7 @@ impl HeaderPipeline {
             for operation in layer.operations {
                 match operation {
                     HeaderOperation::Set { name, value } => {
-                        self.validate_operation(layer.source, &name)?;
+                        self.validate_operation(layer.source, &name, value.is_sensitive())?;
                         headers.insert(name.clone(), value.value().clone());
                         trace.push(HeaderTraceEntry {
                             protected: self.policy.is_protected(&name),
@@ -306,7 +404,7 @@ impl HeaderPipeline {
                         });
                     }
                     HeaderOperation::Remove { name } => {
-                        self.validate_operation(layer.source, &name)?;
+                        self.validate_operation(layer.source, &name, false)?;
                         headers.remove(&name);
                         trace.push(HeaderTraceEntry {
                             protected: self.policy.is_protected(&name),
@@ -323,8 +421,27 @@ impl HeaderPipeline {
         Ok(ResolvedHeaders { headers, trace })
     }
 
-    fn validate_operation(&self, source: HeaderSource, name: &HeaderName) -> Result<(), LlmError> {
+    fn validate_operation(
+        &self,
+        source: HeaderSource,
+        name: &HeaderName,
+        sensitive: bool,
+    ) -> Result<(), LlmError> {
         if self.policy.allows(source, name) {
+            if source == HeaderSource::Auth && !sensitive {
+                return Err(validation(
+                    format!("request_headers.{name}"),
+                    ValidationReason::ProtectedHeader,
+                    "authentication headers must be sensitive",
+                ));
+            }
+            if source != HeaderSource::Auth && sensitive {
+                return Err(validation(
+                    format!("request_headers.{name}"),
+                    ValidationReason::ProtectedHeader,
+                    "ordinary header layers cannot carry sensitive values",
+                ));
+            }
             Ok(())
         } else {
             Err(validation(
@@ -335,7 +452,7 @@ impl HeaderPipeline {
         }
     }
 
-    fn validate_bearer_compatibility(headers: &HeaderMap) -> Result<(), LlmError> {
+    fn validate_compatibility(&self, headers: &HeaderMap) -> Result<(), LlmError> {
         if headers.get(http::header::CONTENT_TYPE)
             != Some(&HeaderValue::from_static("application/json"))
         {
@@ -345,15 +462,25 @@ impl HeaderPipeline {
                 "protocol must set application/json",
             ));
         }
-        if !headers.contains_key(http::header::AUTHORIZATION) {
+        if !self.policy.auth_headers.is_empty()
+            && !self
+                .policy
+                .auth_headers
+                .iter()
+                .any(|name| headers.contains_key(name))
+        {
             return Err(validation(
-                "request_headers.authorization",
+                "request_headers.auth",
                 ValidationReason::ProtectedHeader,
-                "auth layer must set authorization",
+                "auth layer must set a registered authentication header",
             ));
         }
         Ok(())
     }
+}
+
+fn ordinary_header(name: &HeaderName) -> bool {
+    name.as_str().starts_with("x-") || name.as_str() == "idempotency-key"
 }
 
 fn validation(

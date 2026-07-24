@@ -7,6 +7,7 @@ use crate::domain::{
     AssistantEvent, ContentIndex, ToolArguments, ToolCall, ToolCallId, ToolName, WireToolIndex,
 };
 use crate::error::LlmError;
+use crate::provider::ToolArgumentsCompat;
 use crate::provider::call_policy::ResponseLimits;
 
 pub(super) struct ToolCallAccumulator {
@@ -52,6 +53,7 @@ impl ToolCallAccumulator {
         wire_index: WireToolIndex,
         new_content_index: Option<ContentIndex>,
         delta: &ToolCallDeltaWire,
+        compat: ToolArgumentsCompat,
     ) -> Result<Vec<AssistantEvent>, LlmError> {
         let parsed_id = delta.id.as_deref().map(parse_tool_call_id).transpose()?;
         let mut events = Vec::new();
@@ -104,7 +106,7 @@ impl ToolCallAccumulator {
             });
         }
 
-        self.append_fragments(wire_index, delta, &mut events)?;
+        self.append_fragments(wire_index, delta, compat, &mut events)?;
         Ok(events)
     }
 
@@ -125,6 +127,7 @@ impl ToolCallAccumulator {
         &mut self,
         wire_index: WireToolIndex,
         delta: &ToolCallDeltaWire,
+        compat: ToolArgumentsCompat,
         events: &mut Vec<AssistantEvent>,
     ) -> Result<(), LlmError> {
         let pending = self
@@ -145,8 +148,11 @@ impl ToolCallAccumulator {
             .function
             .as_ref()
             .and_then(|function| function.arguments.as_ref())
-            .filter(|arguments| !arguments.is_empty())
-            .cloned();
+            .map(|arguments| {
+                super::super::compat::response::normalize_tool_arguments(arguments, compat)
+            })
+            .transpose()?
+            .filter(|arguments| !arguments.is_empty());
 
         if let Some(delta) = &name_delta {
             if pending.name_buffer.len().saturating_add(delta.len()) > ToolName::MAX_BYTES {

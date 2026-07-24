@@ -1,8 +1,8 @@
 # Provider Compatibility Fixture Provenance
 
-This directory is the Phase 3 intake contract for provider compatibility fixtures. P2.5 uses only synthetic, in-process contract cases; it does not claim conformance for OpenRouter, DeepSeek, Z.AI, or any other provider that has no implemented profile.
+This directory is the Phase 3 intake contract for provider compatibility fixtures. P2.5 originally used only synthetic, in-process contract cases. P3-012 now adds implemented Experimental profiles and synthetic offline fixtures for OpenRouter, DeepSeek, Z.AI standard, and Z.AI coding. These fixtures validate local contracts; they are not controlled online captures and do not by themselves establish provider conformance.
 
-Every future fixture file must be accompanied by a manifest entry containing all fields below:
+Every fixture file must be accompanied by a manifest entry containing all fields below:
 
 ```text
 id:
@@ -29,4 +29,4 @@ Provenance rules:
 - Never store API keys, Authorization values, complete prompts/outputs, tool arguments, image URLs or payloads, or provider request IDs.
 - A provider field change requires a contract review and a new `contract_version` decision before updating expected output.
 
-P2.5 intentionally contains no fixture files in this directory. The README is the reusable intake specification, not a conformance result.
+Current provider directories contain synthetic contract, SSE, error, and wire fixtures registered in `tests/fixtures/manifest.toml`. Protected online smoke reports remain external evidence and must not be represented by editing these synthetic files.

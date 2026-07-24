@@ -15,6 +15,7 @@ use crate::protocol::{
     ExpectedContentType, PreparedCall, ProtocolOperation, ResponseMeta, ResponsePlan,
 };
 use crate::provider::ProviderRuntime;
+use crate::provider::runtime::HeaderAttemptContext;
 use crate::transport::{
     ByteStream, HttpRequest, LimitedBody, RequestLifecycle, Transport, TransportContext,
     lifecycle_preflight, read_body_limited,
@@ -132,12 +133,21 @@ impl AttemptExecutor {
         };
         emit(&context, LifecycleEventKind::EndpointResolved);
 
-        let resolved = runtime.resolve_headers_with_protocol_operations(
-            call.request.protocol_headers,
-            Vec::new(),
-            &call.execution.request_headers,
-            Some(&call.facts),
-        )?;
+        let resolved = runtime
+            .resolve_headers_for_attempt(
+                call.request.protocol_headers,
+                Vec::new(),
+                &call.execution.request_headers,
+                HeaderAttemptContext {
+                    endpoint: &endpoint,
+                    facts: &call.facts,
+                    lifecycle: &context.lifecycle,
+                    model_id: &call.target.domain_model,
+                    local_request_id: &context.local_request_id,
+                    attempt_number: context.attempt_number,
+                },
+            )
+            .await?;
         let (headers, trace) = resolved.into_parts();
         emit(
             &context,
