@@ -3,7 +3,10 @@ use super::protocol;
 use crate::domain::{TokenCount, Usage, UsageDetails};
 use crate::error::LlmError;
 
-pub(super) fn parse_usage_details(wire: &UsageWire) -> Result<Option<UsageDetails>, LlmError> {
+pub(super) fn parse_usage_details(
+    wire: &UsageWire,
+    drop_inconsistent_reasoning: bool,
+) -> Result<Option<UsageDetails>, LlmError> {
     let input = optional_token_count(wire.prompt_tokens, "usage.prompt_tokens")?;
     let output = optional_token_count(wire.completion_tokens, "usage.completion_tokens")?;
     let total = optional_token_count(wire.total_tokens, "usage.total_tokens")?;
@@ -19,12 +22,20 @@ pub(super) fn parse_usage_details(wire: &UsageWire) -> Result<Option<UsageDetail
             .and_then(|details| details.cache_write_tokens),
         "usage.prompt_tokens_details.cache_write_tokens",
     )?;
-    let reasoning = optional_token_count(
+    let mut reasoning = optional_token_count(
         wire.completion_tokens_details
             .as_ref()
             .and_then(|details| details.reasoning_tokens),
         "usage.completion_tokens_details.reasoning_tokens",
     )?;
+    if drop_inconsistent_reasoning
+        && matches!(
+            (output, reasoning),
+            (TokenCount::Known(output), TokenCount::Known(reasoning)) if reasoning > output
+        )
+    {
+        reasoning = TokenCount::Unknown;
+    }
 
     let details = UsageDetails::new(input, output, total, cached_input, cache_write, reasoning);
     details

@@ -2,6 +2,6 @@ data: {"id":"fixture","model":"nvidia/nemotron-3-ultra-550b-a55b:free","choices"
 
 data: {"id":"fixture","model":"nvidia/nemotron-3-ultra-550b-a55b:free","choices":[{"index":0,"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}]}
 
-data: {"id":"fixture","model":"nvidia/nemotron-3-ultra-550b-a55b:free","choices":[{"index":0,"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+data: {"id":"fixture","model":"nvidia/nemotron-3-ultra-550b-a55b:free","choices":[{"index":0,"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":2}}}
 
 data: [DONE]

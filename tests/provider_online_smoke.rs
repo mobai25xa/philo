@@ -56,9 +56,18 @@ async fn protected_provider_conformance_smoke() {
             descriptor.provider
         );
     }
+    if descriptor.generation_id_expected {
+        assert!(
+            message.generation_id().is_some(),
+            "generation_id expected for provider={} but was None",
+            descriptor.provider
+        );
+    }
     if descriptor.usage_expected {
         assert!(message.usage().is_some());
     }
+    let request_id_present = message.provider_request_id().is_some();
+    let generation_id_present = message.generation_id().is_some();
     let report = plan.into_report(
         &descriptor,
         std::env::var_os("GITHUB_RUN_ID").is_some(),
@@ -76,9 +85,11 @@ async fn protected_provider_conformance_smoke() {
         ],
     );
     println!(
-        "provider_conformance_status=passed provider={} candidate_sha={} case=text_stream request_id_present=true report={}",
+        "provider_conformance_status=passed provider={} candidate_sha={} case=text_stream request_id_present={} generation_id_present={} report={}",
         descriptor.provider,
         candidate_sha,
+        request_id_present,
+        generation_id_present,
         report.to_json()
     );
 }

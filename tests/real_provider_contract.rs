@@ -53,7 +53,7 @@ fn presets_freeze_exact_product_endpoint_catalog_and_experimental_support() {
         (
             "zai",
             "zai-coding-plan",
-            "glm-5",
+            "glm-4.7-flash",
             "https://api.z.ai/api/coding/paas/v4/chat/completions",
         ),
     ];
@@ -207,7 +207,7 @@ async fn reviewed_third_party_models_use_max_tokens_without_driver_forks() {
                 .build()
                 .unwrap(),
             "zai",
-            "glm-5",
+            "glm-4.7-flash",
         ),
     ];
     for (runtime, provider, model) in cases {
@@ -226,6 +226,37 @@ async fn reviewed_third_party_models_use_max_tokens_without_driver_forks() {
         assert_eq!(body["max_tokens"], 16);
         assert!(body.get("max_completion_tokens").is_none());
     }
+}
+
+#[tokio::test]
+async fn openrouter_profile_normalizes_one_identical_terminal_replay() {
+    let runtime = OpenRouterProfile::from_api_key(CANARY)
+        .unwrap()
+        .build()
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    let response = MockResponse::new(
+        StatusCode::OK,
+        headers,
+        vec![MockBodyItem::chunk(Bytes::from_static(include_bytes!(
+            "fixtures/provider-compat/openrouter/text.sse"
+        )))],
+    );
+    let transport = MockTransport::scripted([MockExchange::response(response)]);
+    let request = GenerateRequest::new(
+        ModelRef::new("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free").unwrap(),
+        vec![Message::user("fixed offline prompt")],
+    );
+    let message = LlmClient::new(runtime, transport)
+        .complete(request)
+        .await
+        .unwrap();
+    assert_eq!(message.finish_reason(), &philo::FinishReason::Stop);
+    assert!(message.usage().is_some());
 }
 
 fn success() -> MockResponse {

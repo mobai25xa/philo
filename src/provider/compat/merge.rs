@@ -108,6 +108,13 @@ impl CompatPatch {
         self
     }
 
+    /// Sets streamed usage handling.
+    #[must_use]
+    pub const fn with_usage(mut self, value: UsageCompat) -> Self {
+        self.response_usage = Some(value);
+        self
+    }
+
     /// Reports whether the patch contains no policy leaf.
     #[must_use]
     pub fn is_empty(&self) -> bool {

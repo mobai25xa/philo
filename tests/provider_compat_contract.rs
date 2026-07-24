@@ -14,7 +14,7 @@ use philo::{
 };
 use philo::{
     CompatField, CompatPatch, FinishReasonCompat, MaxOutputTokensWireFormat, PolicySource,
-    ToolArgumentsCompat, resolve_compat,
+    TokenCount, ToolArgumentsCompat, UsageCompat, resolve_compat,
 };
 use philo::{OfficialOpenAiProfile, ProviderRuntime};
 use serde_json::json;
@@ -231,7 +231,7 @@ async fn finish_compat_accepts_one_identical_payload_free_repeat_with_usage() {
 
 data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
-data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{"content":"","reasoning_details":[]},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+data: {"id":"dup-finish","model":"gpt-duplicate-finish","choices":[{"index":0,"delta":{"content":"","reasoning_details":[]},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":2}}}
 
 data: [DONE]
 
@@ -243,6 +243,37 @@ data: [DONE]
         .unwrap();
     assert_eq!(message.finish_reason(), &philo::FinishReason::Stop);
     assert!(message.usage().is_some());
+    assert_eq!(
+        message.usage_details().unwrap().reasoning_tokens(),
+        TokenCount::Unknown
+    );
+}
+
+#[tokio::test]
+async fn strict_usage_compat_rejects_reasoning_larger_than_output() {
+    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+        .unwrap()
+        .build()
+        .unwrap();
+    let mock = MockTransport::scripted([MockExchange::response(sse_response(
+        br#"data: {"id":"strict-usage","model":"gpt-test","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":2}}}
+
+data: [DONE]
+
+"#,
+    ))]);
+    let error = philo::LlmClient::new(runtime, mock)
+        .complete(GenerateRequest::new(
+            ModelRef::new("test-only", "gpt-test").unwrap(),
+            vec![Message::user("strict usage")],
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("reasoning tokens exceed output tokens")
+    );
 }
 
 #[tokio::test]
@@ -321,7 +352,8 @@ fn duplicate_finish_runtime() -> ProviderRuntime {
         .with_model_compat(
             ModelId::new("gpt-duplicate-finish").unwrap(),
             CompatPatch::from_source(PolicySource::ModelProfile)
-                .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate),
+                .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate)
+                .with_usage(UsageCompat::OpenAiDropInconsistentReasoning),
         )
         .build()
         .unwrap()

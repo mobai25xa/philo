@@ -8,8 +8,8 @@ use crate::error::{
     LlmError, StructuredOutputError, StructuredOutputFailure, UnknownFinishReason,
     UnsupportedResponseSemantics,
 };
-use crate::provider::FinishReasonCompat;
 use crate::provider::call_policy::ResponseLimits;
+use crate::provider::{FinishReasonCompat, UsageCompat};
 
 pub(super) struct StructuredTerminal {
     response_format: ResponseFormat,
@@ -96,6 +96,7 @@ impl PreparedChunk {
         observed_finish: Option<&FinishReason>,
         duplicate_finish_seen: bool,
         finish_compat: FinishReasonCompat,
+        usage_compat: UsageCompat,
     ) -> Result<Self, LlmError> {
         if chunk.choices.len() > 1 {
             return Err(UnsupportedResponseSemantics::new("multiple choices").into());
@@ -117,7 +118,12 @@ impl PreparedChunk {
         let usage = chunk
             .usage
             .as_ref()
-            .map(parse_usage_details)
+            .map(|usage| {
+                parse_usage_details(
+                    usage,
+                    matches!(usage_compat, UsageCompat::OpenAiDropInconsistentReasoning),
+                )
+            })
             .transpose()?
             .flatten();
         Ok(Self {

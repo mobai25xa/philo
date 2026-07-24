@@ -158,7 +158,7 @@ zai_profile!(
     "zai-coding-plan",
     "https://api.z.ai/api/coding/paas/v4",
     CredentialAudience::ZaiCoding,
-    "glm-5",
-    "Z.AI GLM-5",
+    "glm-4.7-flash",
+    "Z.AI GLM-4.7-Flash",
     "p3-001-zai-coding-official-docs"
 );

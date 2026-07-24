@@ -21,28 +21,30 @@ as `Supported`.
 
 `OfflineContractVerified` proves the local SDK contract.
 `RealProviderVerified` proves protected behavior for an exact provider model.
-The four third-party products below currently have only offline evidence.
+Local worktree online runs are recorded as `online_status=Pass`, but without Hosted
+CI exact-SHA evidence the four third-party products remain `Experimental`.
 
 ## Exact product/model matrix
 
 <!-- BEGIN GENERATED SUPPORT MATRIX -->
 | Provider | Product | Exact model | Profile | Catalog | Effective | Evidence | Online | Expires |
 |---|---|---|---|---|---|---|---|---|
-| openrouter | openrouter-chat | nvidia/nemotron-3-ultra-550b-a55b:free | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
-| deepseek | deepseek-chat-openai | deepseek-v4-flash | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
-| zai | zai-standard-api | glm-4.7-flash | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
-| zai | zai-coding-plan | glm-5 | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified | Pending | 2026-10-23 |
+| openrouter | openrouter-chat | nvidia/nemotron-3-ultra-550b-a55b:free | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified,RealProviderVerified | Pass | 2026-10-23 |
+| deepseek | deepseek-chat-openai | deepseek-v4-flash | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified,RealProviderVerified | Pass | 2026-10-23 |
+| zai | zai-standard-api | glm-4.7-flash | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified,RealProviderVerified | Pass | 2026-10-23 |
+| zai | zai-coding-plan | glm-4.7-flash | 3.0.0-experimental | Experimental | Experimental | OfflineContractVerified,RealProviderVerified | Pass | 2026-10-23 |
 <!-- END GENERATED SUPPORT MATRIX -->
 
 ## Capability summary
 
-- `text_stream` and `usage_and_request_id` are `Experimental` with offline evidence.
+- `text_stream` and `usage_and_request_id` are `Experimental` with offline plus local online evidence.
 - `single_tool` and `thinking_and_replay` remain `Unknown`.
 - Real targets currently prove Bearer auth only. API-key Header, multi-header,
   and dynamic-token shapes have offline contract evidence only.
+- Hosted CI SHA / run URL remain empty until Gate F freezes a clean candidate.
 - See [`provider-limitations.md`](./provider-limitations.md) for reachable exact-product limitations.
 
 An entry may become `Supported` only when its exact Catalog key, profile,
 compat and contract versions match; required offline cases pass; a protected
-online report records the same exact model and candidate SHA; evidence is
+hosted online report records the same exact model and candidate SHA; evidence is
 current; and independent review has zero blocking findings.

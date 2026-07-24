@@ -158,6 +158,7 @@ impl ChatStateMachine {
             self.finish_reason.as_ref(),
             self.duplicate_finish_seen,
             self.response_compat.finish_reason,
+            self.response_compat.usage,
         )?;
         self.observe_identity(chunk.id.as_deref(), chunk.model.as_deref())?;
 

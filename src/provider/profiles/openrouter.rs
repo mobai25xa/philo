@@ -11,7 +11,7 @@ use crate::error::{LlmError, ValidationError, ValidationReason};
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
 use super::super::compat::{
     FinishReasonCompat, MaxOutputTokensWireFormat, OpenRouterRoutingContract,
-    OpenRouterRoutingPatch,
+    OpenRouterRoutingPatch, UsageCompat,
 };
 use super::super::endpoint::CredentialAudience;
 use super::super::headers::{DynamicHeaderPolicy, HeaderOperation};
@@ -185,7 +185,8 @@ impl OpenRouterProfile {
             .map_or_else(Vec::new, OpenRouterAttribution::operations);
         let compat = provider_patch()
             .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens)
-            .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate);
+            .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate)
+            .with_usage(UsageCompat::OpenAiDropInconsistentReasoning);
         build_compatible_profile(CompatibleProfileParts {
             provider: "openrouter",
             product: "openrouter-chat",

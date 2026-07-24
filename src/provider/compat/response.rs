@@ -27,6 +27,12 @@ pub enum ToolArgumentsCompat {
 pub enum UsageCompat {
     /// `OpenAI` prompt/completion/total token semantics.
     OpenAi,
+    /// Preserve `OpenAI` core counters but discard an invalid reasoning subset.
+    ///
+    /// This applies only when a gateway reports `reasoning_tokens` greater
+    /// than `completion_tokens`. Negative values and inconsistent core totals
+    /// remain protocol errors.
+    OpenAiDropInconsistentReasoning,
 }
 
 /// In-stream provider error handling.

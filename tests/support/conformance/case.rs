@@ -152,6 +152,7 @@ pub struct ConformanceCase {
     pub online: BTreeMap<OnlineCase, OnlineRequirement>,
     pub fixture_manifest: &'static str,
     pub request_id_expected: bool,
+    pub generation_id_expected: bool,
     pub usage_expected: bool,
     pub source_kind: &'static str,
     pub reviewed_at: &'static str,
@@ -209,6 +210,7 @@ fn official() -> ConformanceCase {
         online,
         fixture_manifest: "provider-compat/official-openai/manifest.toml",
         request_id_expected: true,
+        generation_id_expected: true,
         usage_expected: true,
         source_kind: "synthetic-plus-protected-online",
         reviewed_at: "2026-07-24",
@@ -228,6 +230,7 @@ fn third_party(
     fixture_manifest: &'static str,
     expected_headers: &'static [(&'static str, &'static str)],
     request_id_expected: bool,
+    generation_id_expected: bool,
 ) -> ConformanceCase {
     let mut capabilities = BTreeMap::new();
     let mut online = BTreeMap::new();
@@ -270,6 +273,7 @@ fn third_party(
         online,
         fixture_manifest,
         request_id_expected,
+        generation_id_expected,
         usage_expected: true,
         source_kind: "official-doc-plus-synthetic-offline",
         reviewed_at: "2026-07-23",
@@ -292,6 +296,7 @@ fn openrouter() -> ConformanceCase {
             ("x-openrouter-title", "philo conformance"),
             ("x-openrouter-categories", "sdk,conformance"),
         ],
+        false,
         true,
     )
 }
@@ -308,6 +313,7 @@ fn deepseek() -> ConformanceCase {
         "provider-compat/deepseek/manifest.toml",
         &[],
         true,
+        true,
     )
 }
 
@@ -323,6 +329,7 @@ fn zai_standard() -> ConformanceCase {
         "provider-compat/zai-standard/manifest.toml",
         &[("accept-language", "en-US")],
         false,
+        true,
     )
 }
 
@@ -332,12 +339,13 @@ fn zai_coding() -> ConformanceCase {
         "zai-coding",
         "zai",
         "zai-coding-plan",
-        "glm-5",
+        "glm-4.7-flash",
         ConformanceProfile::ZaiCoding,
         "https://api.z.ai/api/coding/paas/v4/chat/completions",
         "provider-compat/zai-coding/manifest.toml",
         &[("accept-language", "en-US")],
         false,
+        true,
     )
 }
 
@@ -374,6 +382,7 @@ fn test_only() -> ConformanceCase {
         online,
         fixture_manifest: "provider-compat/test-only/manifest.toml",
         request_id_expected: false,
+        generation_id_expected: false,
         usage_expected: true,
         source_kind: "synthetic",
         reviewed_at: "2026-07-24",
