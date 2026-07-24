@@ -156,6 +156,7 @@ impl OfficialOpenAiProfile {
             catalog: self.catalog,
             provider_compat: self.provider_compat,
             model_compat: self.model_compat,
+            openrouter_routing: None,
             dialect: ProtocolDialect::OpenAiChatCompletions,
             transport: ProviderTransportOptions::secure_defaults(),
             resource_limits: self.resource_limits,

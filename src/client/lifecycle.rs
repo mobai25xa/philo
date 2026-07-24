@@ -21,7 +21,7 @@ use crate::observability::{
     LifecycleObserver,
 };
 use crate::protocol::{ProtocolDispatch, ResponseSession};
-use crate::provider::ProviderRuntime;
+use crate::provider::{ProviderRequestOptions, ProviderRuntime};
 use crate::transport::{CancellationToken, RequestLifecycle, ReqwestTransport, Transport};
 
 type EventStream = Pin<Box<dyn Stream<Item = Result<AssistantEvent, LlmError>> + Send + 'static>>;
@@ -31,6 +31,7 @@ type EventStream = Pin<Box<dyn Stream<Item = Result<AssistantEvent, LlmError>> +
 pub struct RequestControl {
     cancellation: CancellationToken,
     trace_id: Option<TraceId>,
+    provider_options: ProviderRequestOptions,
 }
 
 impl RequestControl {
@@ -62,6 +63,19 @@ impl RequestControl {
     #[must_use]
     pub fn trace_id(&self) -> Option<&TraceId> {
         self.trace_id.as_ref()
+    }
+
+    /// Attaches typed provider-scoped request options without changing the domain request.
+    #[must_use]
+    pub fn with_provider_options(mut self, options: ProviderRequestOptions) -> Self {
+        self.provider_options = options;
+        self
+    }
+
+    /// Returns typed provider-scoped request options.
+    #[must_use]
+    pub fn provider_options(&self) -> &ProviderRequestOptions {
+        &self.provider_options
     }
 }
 
@@ -392,7 +406,15 @@ impl LlmClient {
         let lifecycle = request_lifecycle(request, control.cancellation.clone())?;
         lifecycle_preflight(&lifecycle)?;
 
-        let plan = CallPlanner::plan(&self.runtime, request)?;
+        let plan = if control.provider_options().is_empty() {
+            CallPlanner::plan(&self.runtime, request)?
+        } else {
+            CallPlanner::plan_with_provider_options(
+                &self.runtime,
+                request,
+                control.provider_options(),
+            )?
+        };
         emit(observation, LifecycleEventKind::ValidationCompleted);
 
         let driver = ProtocolDispatch::for_kind(plan.policy.target.protocol_kind);

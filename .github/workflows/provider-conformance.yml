@@ -1,0 +1,110 @@
+name: Provider Conformance
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+    inputs:
+      subject_commit:
+        description: Full reviewed 40-character candidate SHA
+        required: true
+        type: string
+      provider:
+        description: Allowlisted provider descriptor ID
+        required: true
+        type: choice
+        options:
+          - official-openai
+          - openrouter
+          - deepseek
+          - zai-standard
+          - zai-coding
+      model:
+        description: Exact reviewed model identifier
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-conformance-${{ github.event_name == 'workflow_dispatch' && inputs.subject_commit || github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  offline:
+    name: Offline provider contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --test provider_conformance
+
+  online:
+    name: Protected provider smoke
+    if: github.event_name == 'workflow_dispatch'
+    needs: offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: provider-conformance
+    env:
+      PHILO_PROVIDER_ONLINE_ENABLED: "true"
+      PHILO_PROVIDER: ${{ inputs.provider }}
+      PHILO_PROVIDER_MODEL: ${{ inputs.model }}
+      PHILO_PROVIDER_CANDIDATE_SHA: ${{ inputs.subject_commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.subject_commit }}
+      - name: Verify allowlisted inputs and exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PHILO_PROVIDER_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PHILO_PROVIDER" =~ ^(official-openai|openrouter|deepseek|zai-standard|zai-coding)$ ]]
+          [[ "$PHILO_PROVIDER_MODEL" =~ ^[A-Za-z0-9._/-]+$ ]]
+          test "$(git rev-parse HEAD)" = "$PHILO_PROVIDER_CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run Official OpenAI protected suite
+        if: inputs.provider == 'official-openai'
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.OPENAI_API_KEY }}
+        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+      - name: Run OpenRouter protected suite
+        if: inputs.provider == 'openrouter'
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.OPENROUTER_API_KEY }}
+        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+      - name: Run DeepSeek protected suite
+        if: inputs.provider == 'deepseek'
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+      - name: Run Z.AI Standard protected suite
+        if: inputs.provider == 'zai-standard'
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.ZAI_API_KEY }}
+        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+      - name: Run Z.AI Coding protected suite
+        if: inputs.provider == 'zai-coding'
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.ZAI_CODING_API_KEY }}
+        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+      - name: Record value-free run identity
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Provider conformance"
+            echo ""
+            echo "- Candidate SHA: \`$PHILO_PROVIDER_CANDIDATE_SHA\`"
+            echo "- Provider: \`$PHILO_PROVIDER\`"
+            echo "- Model: \`$PHILO_PROVIDER_MODEL\`"
+            echo "- Prompt, output, credentials, header values, request-id values, and response bodies: not recorded"
+            echo "- Result: \`${{ job.status }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

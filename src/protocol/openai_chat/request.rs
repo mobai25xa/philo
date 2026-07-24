@@ -8,8 +8,10 @@ use crate::domain::{
 };
 use crate::error::{LlmError, ProtocolError, ValidationError, ValidationReason};
 use crate::execution::contract::ResolvedCallPlan;
-use crate::provider::{ProviderCapabilities, RequestCompat};
+use crate::provider::compat::ResolvedProviderRouting;
+use crate::provider::{ModelBodyWireFormat, ProviderCapabilities, RequestCompat};
 
+use super::compat::routing::ProviderRoutingWire;
 use super::structured_wire::ResponseFormatWire;
 use super::tool_wire::{encode_parallel_tool_calls, encode_tool_choice, encode_tools};
 use super::wire::{
@@ -21,7 +23,10 @@ use super::wire::{
 pub(super) fn encode_planned_request(plan: &ResolvedCallPlan) -> Result<Bytes, LlmError> {
     let planned = &plan.planned;
     encode_request_parts(RequestEncodingContext {
-        model: plan.policy.target.wire_model.as_str(),
+        model: match plan.policy.compat.profile.request().model_body {
+            ModelBodyWireFormat::Include => Some(plan.policy.target.wire_model.as_str()),
+            ModelBodyWireFormat::Omit => None,
+        },
         domain_messages: &planned.messages,
         options: &planned.options,
         capabilities: &plan.policy.capabilities,
@@ -29,12 +34,13 @@ pub(super) fn encode_planned_request(plan: &ResolvedCallPlan) -> Result<Bytes, L
         tool_result_name: plan.policy.compat.profile.history().tool_result_name,
         default_max_output_tokens: plan.policy.limits.model.default_max_output_tokens,
         max_body_bytes: plan.policy.limits.request.max_body_bytes,
+        provider_routing: plan.policy.provider_routing.as_ref(),
     })
 }
 
 #[derive(Clone, Copy)]
 struct RequestEncodingContext<'a> {
-    model: &'a str,
+    model: Option<&'a str>,
     domain_messages: &'a [Message],
     options: &'a GenerationOptions,
     capabilities: &'a ProviderCapabilities,
@@ -42,6 +48,7 @@ struct RequestEncodingContext<'a> {
     tool_result_name: ToolResultNamePolicy,
     default_max_output_tokens: Option<u32>,
     max_body_bytes: usize,
+    provider_routing: Option<&'a ResolvedProviderRouting>,
 }
 
 fn encode_request_parts(context: RequestEncodingContext<'_>) -> Result<Bytes, LlmError> {
@@ -54,6 +61,7 @@ fn encode_request_parts(context: RequestEncodingContext<'_>) -> Result<Bytes, Ll
         tool_result_name,
         default_max_output_tokens,
         max_body_bytes,
+        provider_routing,
     } = context;
     let mut messages = Vec::with_capacity(domain_messages.len());
     for (index, message) in domain_messages.iter().enumerate() {
@@ -80,6 +88,7 @@ fn encode_request_parts(context: RequestEncodingContext<'_>) -> Result<Bytes, Ll
         encode_reasoning_effort(options.reasoning()),
         compat.max_output_tokens,
         matches!(compat.stream_usage, StreamUsagePolicy::IncludeUsage),
+        provider_routing.map(ProviderRoutingWire::from),
     );
     let body = serde_json::to_vec(&wire).map_err(|_| {
         LlmError::from(ProtocolError::new(

@@ -1,0 +1,6 @@
+data: {"id":"fixture","model":"glm-5","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}
+
+data: {"id":"fixture","model":"glm-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+
+data: [DONE]
+

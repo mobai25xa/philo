@@ -5,7 +5,7 @@ use crate::domain::{
     validate_request_shape,
 };
 use crate::error::LlmError;
-use crate::provider::ProviderRuntime;
+use crate::provider::{ProviderRequestOptions, ProviderRuntime};
 
 use super::contract::{
     CallExecutionIntent, NormalizationReport, PlanProvenance, PlannedRequest, ResolvedCallPlan,
@@ -21,7 +21,15 @@ impl CallPlanner {
         runtime: &ProviderRuntime,
         request: &GenerateRequest,
     ) -> Result<ResolvedCallPlan, LlmError> {
-        let policy = runtime.plan_policy_for(request)?;
+        Self::plan_with_provider_options(runtime, request, &ProviderRequestOptions::new())
+    }
+
+    pub(crate) fn plan_with_provider_options(
+        runtime: &ProviderRuntime,
+        request: &GenerateRequest,
+        provider_options: &ProviderRequestOptions,
+    ) -> Result<ResolvedCallPlan, LlmError> {
+        let policy = runtime.plan_policy_for_with_options(request, provider_options)?;
         let (capability_source, model_override_applied) =
             runtime.policy_provenance_for(request.model().model());
         let capabilities = policy.capabilities.generation_options();

@@ -10,9 +10,10 @@ use philo::transport::mock::{MockExchange, MockResponse, MockTransport};
 use philo::{
     ApiKey, ApiKeyHeaderAuth, AuthContext, AuthProvider, BearerAuth, BearerCredential,
     CredentialError, CredentialFailure, CredentialFuture, CredentialIdentity, DynamicAuth,
-    DynamicCredential, DynamicCredentialContext, DynamicCredentialSource, GenerateRequest,
-    HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource, LlmClient, LlmError, Message,
-    ModelRef, MultiHeaderAuth, NoAuth, OfficialOpenAiProfile, RequestControl, TenantId,
+    DynamicCredential, DynamicCredentialCache, DynamicCredentialContext, DynamicCredentialSource,
+    GenerateRequest, HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource, LlmClient,
+    LlmError, Message, ModelRef, MultiHeaderAuth, NoAuth, OfficialOpenAiProfile, RequestControl,
+    TenantId,
 };
 use tokio::time::Instant;
 
@@ -183,6 +184,81 @@ async fn same_dynamic_cache_key_refreshes_once_under_concurrency() {
         })
     );
     assert!(!format!("{client:?}").contains(SECRET));
+}
+
+#[derive(Debug)]
+struct PartitionSource {
+    calls: Arc<AtomicUsize>,
+    secret: &'static str,
+}
+
+impl DynamicCredentialSource for PartitionSource {
+    fn acquire(&self, _context: DynamicCredentialContext) -> CredentialFuture {
+        let calls = Arc::clone(&self.calls);
+        let secret = self.secret;
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            DynamicCredential::bearer(
+                ApiKey::new(secret).unwrap(),
+                Instant::now() + Duration::from_mins(1),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn shared_cache_isolates_tenant_and_credential_identity() {
+    const SECRET_A: &str = "tenant-a-credential-canary";
+    const SECRET_B: &str = "tenant-b-credential-canary";
+    let cache = DynamicCredentialCache::new();
+    let calls_a = Arc::new(AtomicUsize::new(0));
+    let calls_b = Arc::new(AtomicUsize::new(0));
+    let make_auth = |tenant: &str, identity: &str, secret, calls: Arc<AtomicUsize>| {
+        DynamicAuth::new(
+            Arc::new(PartitionSource { calls, secret }),
+            test_audience(),
+            TenantId::new(tenant).unwrap(),
+            CredentialIdentity::new(identity).unwrap(),
+        )
+        .with_cache(cache.clone())
+    };
+    let runtime_a = TestOnlyProfile::localhost(ENDPOINT, "unused")
+        .unwrap()
+        .with_auth_provider(make_auth(
+            "tenant-a",
+            "workload",
+            SECRET_A,
+            Arc::clone(&calls_a),
+        ))
+        .build()
+        .unwrap();
+    let runtime_b = TestOnlyProfile::localhost(ENDPOINT, "unused")
+        .unwrap()
+        .with_auth_provider(make_auth(
+            "tenant-b",
+            "workload",
+            SECRET_B,
+            Arc::clone(&calls_b),
+        ))
+        .build()
+        .unwrap();
+    let transport_a = MockTransport::scripted([response()]);
+    let transport_b = MockTransport::scripted([response()]);
+    let client_a = LlmClient::new(runtime_a, transport_a.clone());
+    let client_b = LlmClient::new(runtime_b, transport_b.clone());
+    let (result_a, result_b) = tokio::join!(client_a.stream(request()), client_b.stream(request()));
+    assert!(result_a.is_ok());
+    assert!(result_b.is_ok());
+    assert_eq!(calls_a.load(Ordering::SeqCst), 1);
+    assert_eq!(calls_b.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        transport_a.captured_requests()[0].headers()[header::AUTHORIZATION],
+        format!("Bearer {SECRET_A}")
+    );
+    assert_eq!(
+        transport_b.captured_requests()[0].headers()[header::AUTHORIZATION],
+        format!("Bearer {SECRET_B}")
+    );
 }
 
 #[tokio::test]

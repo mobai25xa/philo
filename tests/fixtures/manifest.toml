@@ -1003,3 +1003,160 @@ expected = "error"
 expected_error = "invalid_document"
 contract_version = "1.0"
 notes = "P3-002 deny-unknown-fields contract"
+
+[[fixture]]
+id = "p3-routing-openrouter-synthetic-request"
+path = "provider-compat/openrouter/routing-request.json"
+purpose = "Freeze the closed typed gateway routing wire shape without claiming live conformance"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-009 synthetic fixture; official revalidation and live support remain P3-012"
+
+[[fixture]]
+id = "p3-openrouter-contract"
+path = "provider-compat/openrouter/contract.json"
+purpose = "OpenRouter minimal, routing-rich, and reasoning-history reviewed shapes"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-012 offline contract only; not a controlled capture"
+
+[[fixture]]
+id = "p3-openrouter-text-stream"
+path = "provider-compat/openrouter/text.sse"
+purpose = "OpenRouter text, usage, native finish, and terminal stream shape"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-012 synthetic stream"
+
+[[fixture]]
+id = "p3-openrouter-errors"
+path = "provider-compat/openrouter/errors.json"
+purpose = "OpenRouter HTTP and inline error distinction"
+source = "synthetic"
+expected = "error"
+expected_error = "provider_error"
+contract_version = "1.0.0"
+notes = "P3-012 negative shape"
+
+[[fixture]]
+id = "p3-openrouter-wire"
+path = "provider-compat/openrouter/wire.json"
+purpose = "OpenRouter endpoint, audience, auth, and attribution header golden"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Header names only; no credential values"
+
+[[fixture]]
+id = "p3-deepseek-contract"
+path = "provider-compat/deepseek/contract.json"
+purpose = "DeepSeek minimal, bounded option, and thinking-history reviewed shapes"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-012 offline contract only; not a controlled capture"
+
+[[fixture]]
+id = "p3-deepseek-text-stream"
+path = "provider-compat/deepseek/text.sse"
+purpose = "DeepSeek keep-alive, text, cache usage, finish, and terminal stream shape"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-012 synthetic stream"
+
+[[fixture]]
+id = "p3-deepseek-errors"
+path = "provider-compat/deepseek/errors.json"
+purpose = "DeepSeek HTTP classes and abnormal finish shape"
+source = "synthetic"
+expected = "error"
+expected_error = "provider_error"
+contract_version = "1.0.0"
+notes = "P3-012 negative shape"
+
+[[fixture]]
+id = "p3-deepseek-wire"
+path = "provider-compat/deepseek/wire.json"
+purpose = "DeepSeek endpoint, audience, auth, and header golden"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Header names only; no credential values"
+
+[[fixture]]
+id = "p3-zai-standard-contract"
+path = "provider-compat/zai-standard/contract.json"
+purpose = "Z.AI Standard minimal, option, and thinking-history reviewed shapes"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-012 offline contract only; not a controlled capture"
+
+[[fixture]]
+id = "p3-zai-standard-text-stream"
+path = "provider-compat/zai-standard/text.sse"
+purpose = "Z.AI Standard text, cache usage, finish, and terminal stream shape"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-012 synthetic stream"
+
+[[fixture]]
+id = "p3-zai-standard-errors"
+path = "provider-compat/zai-standard/errors.json"
+purpose = "Z.AI business error and abnormal finish shapes"
+source = "synthetic"
+expected = "error"
+expected_error = "provider_error"
+contract_version = "1.0.0"
+notes = "P3-012 negative shape"
+
+[[fixture]]
+id = "p3-zai-standard-wire"
+path = "provider-compat/zai-standard/wire.json"
+purpose = "Z.AI Standard endpoint, audience, auth, and language header golden"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Header names only; no credential values"
+
+[[fixture]]
+id = "p3-zai-coding-contract"
+path = "provider-compat/zai-coding/contract.json"
+purpose = "Z.AI Coding minimal, option, and preserved-thinking reviewed shapes"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-012 offline contract only; not a controlled capture"
+
+[[fixture]]
+id = "p3-zai-coding-text-stream"
+path = "provider-compat/zai-coding/text.sse"
+purpose = "Z.AI Coding text, usage, finish, and terminal stream shape"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P3-012 synthetic stream"
+
+[[fixture]]
+id = "p3-zai-coding-errors"
+path = "provider-compat/zai-coding/errors.json"
+purpose = "Z.AI Coding product mismatch and audience failure shapes"
+source = "synthetic"
+expected = "error"
+expected_error = "provider_error"
+contract_version = "1.0.0"
+notes = "P3-012 negative shape"
+
+[[fixture]]
+id = "p3-zai-coding-wire"
+path = "provider-compat/zai-coding/wire.json"
+purpose = "Z.AI Coding endpoint, isolated audience, auth, and language header golden"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "Header names only; no credential values"

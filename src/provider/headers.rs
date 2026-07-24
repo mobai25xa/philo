@@ -117,6 +117,12 @@ impl HeaderOperation {
     pub fn remove(name: HeaderName) -> Self {
         Self::Remove { name }
     }
+
+    pub(crate) fn name(&self) -> &HeaderName {
+        match self {
+            Self::Set { name, .. } | Self::Remove { name } => name,
+        }
+    }
 }
 
 /// Operations contributed by one priority layer.
@@ -244,6 +250,7 @@ impl fmt::Debug for ResolvedHeaders {
 #[derive(Clone, Debug)]
 pub struct HeaderPolicy {
     auth_headers: HashSet<HeaderName>,
+    provider_headers: HashSet<HeaderName>,
 }
 
 impl HeaderPolicy {
@@ -259,6 +266,19 @@ impl HeaderPolicy {
     {
         Self {
             auth_headers: headers.into_iter().collect(),
+            provider_headers: HashSet::new(),
+        }
+    }
+
+    /// Creates a policy with exact Auth and Provider-owned header registrations.
+    pub fn with_registered_headers<A, P>(auth_headers: A, provider_headers: P) -> Self
+    where
+        A: IntoIterator<Item = HeaderName>,
+        P: IntoIterator<Item = HeaderName>,
+    {
+        Self {
+            auth_headers: auth_headers.into_iter().collect(),
+            provider_headers: provider_headers.into_iter().collect(),
         }
     }
 
@@ -283,6 +303,7 @@ impl HeaderPolicy {
                 | "set-cookie"
                 | "user-agent"
         ) || self.is_auth_header(name)
+            || self.provider_headers.contains(name)
     }
 
     fn allows(&self, source: HeaderSource, name: &HeaderName) -> bool {
@@ -298,10 +319,12 @@ impl HeaderPolicy {
             _ => match source {
                 HeaderSource::Transport | HeaderSource::Auth => false,
                 HeaderSource::Protocol => true,
-                HeaderSource::Provider
-                | HeaderSource::Model
-                | HeaderSource::DynamicPolicy
-                | HeaderSource::Request => ordinary_header(name),
+                HeaderSource::Provider => {
+                    self.provider_headers.contains(name) || ordinary_header(name)
+                }
+                HeaderSource::Model | HeaderSource::DynamicPolicy | HeaderSource::Request => {
+                    ordinary_header(name)
+                }
                 HeaderSource::ClientIdentity => name.as_str().starts_with("x-"),
             },
         }
@@ -333,6 +356,17 @@ impl HeaderPipeline {
     {
         Self {
             policy: HeaderPolicy::with_auth_headers(headers),
+        }
+    }
+
+    /// Creates a pipeline with exact Auth and Provider-owned header registrations.
+    pub fn with_registered_headers<A, P>(auth_headers: A, provider_headers: P) -> Self
+    where
+        A: IntoIterator<Item = HeaderName>,
+        P: IntoIterator<Item = HeaderName>,
+    {
+        Self {
+            policy: HeaderPolicy::with_registered_headers(auth_headers, provider_headers),
         }
     }
 

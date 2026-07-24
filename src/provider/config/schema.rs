@@ -167,6 +167,13 @@ pub struct ProviderConfigDocument {
 impl ProviderConfigDocument {
     /// Parses a JSON document while rejecting unknown fields.
     pub fn from_json(input: &str) -> Result<Self, ProviderConfigError> {
+        if input.len() > 64 * 1024 {
+            return Err(ProviderConfigError::new(
+                "document",
+                ProviderConfigFailure::InvalidDocument,
+                "provider configuration document exceeds 64 KiB",
+            ));
+        }
         serde_json::from_str(input).map_err(|_| {
             ProviderConfigError::new(
                 "document",

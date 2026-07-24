@@ -10,7 +10,7 @@ use crate::domain::{
 
 use super::{
     CompatField, CompatProfile, FinishReasonCompat, InlineErrorCompat, MaxOutputTokensWireFormat,
-    ToolArgumentsCompat, UsageCompat,
+    ModelBodyWireFormat, ToolArgumentsCompat, UsageCompat,
 };
 
 /// Sparse typed overrides applied at one precedence layer.
@@ -20,6 +20,8 @@ pub struct CompatPatch {
     pub source: Option<PolicySource>,
     /// Per-leaf sources retained after patches are combined.
     pub provenance: BTreeMap<CompatField, PolicySource>,
+    /// Request model field presence.
+    pub request_model_body: Option<ModelBodyWireFormat>,
     /// Maximum output token request field.
     pub request_max_output_tokens: Option<MaxOutputTokensWireFormat>,
     /// Request tool-choice format.
@@ -59,6 +61,7 @@ impl CompatPatch {
         Self {
             source: Some(source),
             provenance: BTreeMap::new(),
+            request_model_body: None,
             request_max_output_tokens: None,
             request_tool_choice: None,
             request_thinking: None,
@@ -75,6 +78,13 @@ impl CompatPatch {
             history_tool_result_name: None,
             history_tool_call_id: None,
         }
+    }
+
+    /// Sets whether the request body carries the resolved wire model.
+    #[must_use]
+    pub const fn with_model_body(mut self, value: ModelBodyWireFormat) -> Self {
+        self.request_model_body = Some(value);
+        self
     }
 
     /// Sets maximum output token wire format.
@@ -94,7 +104,8 @@ impl CompatPatch {
     /// Reports whether the patch contains no policy leaf.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.request_max_output_tokens.is_none()
+        self.request_model_body.is_none()
+            && self.request_max_output_tokens.is_none()
             && self.request_tool_choice.is_none()
             && self.request_thinking.is_none()
             && self.request_image.is_none()
@@ -121,6 +132,7 @@ impl CompatPatch {
                 }
             };
         }
+        overlay!(request_model_body, CompatField::RequestModelBody);
         overlay!(
             request_max_output_tokens,
             CompatField::RequestMaxOutputTokens
@@ -161,6 +173,11 @@ impl CompatPatch {
                 }
             };
         }
+        apply!(
+            request.model_body,
+            self.request_model_body,
+            CompatField::RequestModelBody
+        );
         apply!(
             request.max_output_tokens,
             self.request_max_output_tokens,

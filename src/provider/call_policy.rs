@@ -12,7 +12,9 @@ use crate::error::{ValidationError, ValidationReason};
 use crate::transport::SseConfig;
 
 use super::ProviderCapabilities;
+use super::catalog::{DeploymentId, ProductId, ProviderModelId};
 use super::compat::CompatProfile;
+use super::compat::ResolvedProviderRouting;
 
 /// Provider and protocol policy resolved before request preparation.
 #[derive(Clone)]
@@ -23,6 +25,7 @@ pub(crate) struct CallPolicySnapshot {
     pub(crate) history: HistoryPolicy,
     pub(crate) limits: ResolvedLimits,
     pub(crate) response_format: ResponseFormat,
+    pub(crate) provider_routing: Option<ResolvedProviderRouting>,
 }
 
 impl fmt::Debug for CallPolicySnapshot {
@@ -38,6 +41,7 @@ impl fmt::Debug for CallPolicySnapshot {
                 "response_format",
                 &response_format_name(&self.response_format),
             )
+            .field("has_provider_routing", &self.provider_routing.is_some())
             .finish()
     }
 }
@@ -46,9 +50,12 @@ impl fmt::Debug for CallPolicySnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedTarget {
     pub(crate) provider_id: ProviderId,
+    pub(crate) product_id: ProductId,
     pub(crate) protocol_id: ProtocolId,
     pub(crate) protocol_kind: ProtocolKind,
     pub(crate) domain_model: ModelId,
+    pub(crate) provider_model: ProviderModelId,
+    pub(crate) deployment_id: Option<DeploymentId>,
     pub(crate) wire_model: ModelId,
 }
 
@@ -183,7 +190,7 @@ mod tests {
         DialectPolicy, HistoryPolicy, ModelId, ProtocolId, ProviderId, ResourceLimits,
         ResponseFormat, StructuredSchema, ToolSchema,
     };
-    use crate::provider::ProviderCapabilities;
+    use crate::provider::{ProductId, ProviderCapabilities, ProviderModelId};
     use crate::transport::SseConfig;
 
     const CANARY: &str = "schema-canary-secret";
@@ -216,9 +223,12 @@ mod tests {
         let policy = CallPolicySnapshot {
             target: ResolvedTarget {
                 provider_id: ProviderId::new("official-openai").unwrap(),
+                product_id: ProductId::new("chat-completions").unwrap(),
                 protocol_id: ProtocolId::new("openai-chat").unwrap(),
                 protocol_kind: super::ProtocolKind::OpenAiChatCompletions,
                 domain_model: ModelId::new("gpt-test").unwrap(),
+                provider_model: ProviderModelId::new("gpt-test").unwrap(),
+                deployment_id: None,
                 wire_model: ModelId::new("gpt-test").unwrap(),
             },
             capabilities: ProviderCapabilities::official_openai(),
@@ -236,6 +246,7 @@ mod tests {
             )
             .unwrap(),
             response_format,
+            provider_routing: None,
         };
         let debug = format!("{policy:?}");
         assert!(debug.contains("json_schema"));

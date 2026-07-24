@@ -47,11 +47,11 @@ pub(super) fn validate_snapshot(
         },
     )?;
     let limit = required(snapshot.error_limit_field(), "max_http_error_body_bytes")?;
-    if *limit == 0 {
+    if *limit == 0 || *limit > 1024 * 1024 {
         return invalid(
             snapshot.error_limit_field().source_id(),
             "max_http_error_body_bytes",
-            "HTTP error body limit must be positive",
+            "HTTP error body limit must be between 1 byte and 1 MiB",
         );
     }
     if let Some(endpoint) = snapshot.endpoint_field().value() {
@@ -149,8 +149,22 @@ fn compile_endpoint(spec: &EndpointSpec) -> Result<EndpointConfig, LlmError> {
         EndpointSpec::BaseAndPath {
             base_url,
             endpoint_path,
-        } => EndpointConfig::base_and_path(base_url, endpoint_path.clone()),
-        EndpointSpec::Absolute { url } => EndpointConfig::absolute(url),
+        } => {
+            if base_url.len() > 2048 || endpoint_path.len() > 1024 {
+                return Err(LlmError::Configuration(
+                    "endpoint configuration exceeds bounded lengths".to_owned(),
+                ));
+            }
+            EndpointConfig::base_and_path(base_url, endpoint_path.clone())
+        }
+        EndpointSpec::Absolute { url } => {
+            if url.len() > 3072 {
+                return Err(LlmError::Configuration(
+                    "endpoint configuration exceeds bounded lengths".to_owned(),
+                ));
+            }
+            EndpointConfig::absolute(url)
+        }
     }
 }
 

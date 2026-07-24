@@ -139,6 +139,7 @@ impl AttemptExecutor {
                 Vec::new(),
                 &call.execution.request_headers,
                 HeaderAttemptContext {
+                    endpoint: &endpoint,
                     facts: &call.facts,
                     lifecycle: &context.lifecycle,
                     model_id: &call.target.domain_model,

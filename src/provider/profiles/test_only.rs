@@ -12,7 +12,7 @@ use super::super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::super::catalog::{ModelCatalog, ProductId};
-use super::super::compat::CompatPatch;
+use super::super::compat::{CompatPatch, OpenRouterRoutingContract};
 use super::super::endpoint::{CredentialAudience, EndpointConfig, resolve_test_only};
 use super::super::headers::DynamicHeaderPolicy;
 use super::super::profile::{ProviderProfile, ProviderProfileParts};
@@ -51,6 +51,7 @@ impl TestOnlyProfile {
                     crate::domain::PolicySource::ProviderProfile,
                 ),
                 model_compat: BTreeMap::new(),
+                openrouter_routing: None,
                 dialect: ProtocolDialect::OpenAiChatCompletions,
                 transport: ProviderTransportOptions::secure_defaults(),
                 resource_limits: ResourceLimits::official(),
@@ -87,6 +88,14 @@ impl TestOnlyProfile {
         self
     }
 
+    /// Replaces the endpoint configuration while retaining the exact loopback audience.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_endpoint_config(mut self, endpoint: EndpointConfig) -> Self {
+        self.profile.endpoint = endpoint;
+        self
+    }
+
     /// Replaces the exact-model catalog for an offline test runtime.
     #[must_use]
     pub fn with_catalog(mut self, catalog: ModelCatalog) -> Self {
@@ -105,6 +114,13 @@ impl TestOnlyProfile {
     #[must_use]
     pub fn with_model_compat(mut self, model: crate::domain::ModelId, compat: CompatPatch) -> Self {
         self.profile.model_compat.insert(model, compat);
+        self
+    }
+
+    /// Enables the provider-scoped `OpenRouter` routing contract for offline adapter tests.
+    #[must_use]
+    pub fn with_openrouter_routing(mut self, contract: OpenRouterRoutingContract) -> Self {
+        self.profile.openrouter_routing = Some(contract);
         self
     }
 

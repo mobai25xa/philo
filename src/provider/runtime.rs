@@ -21,9 +21,14 @@ use super::call_policy::{
 use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
-use super::catalog::{ModelCatalog, ModelEntry, ModelKey, ProductId};
-use super::compat::{CompatPatch, resolve_compat, validate_compat};
-use super::endpoint::{ResolvedEndpoint, resolve_official, resolve_test_only};
+use super::catalog::{ModelCatalog, ModelEntry, ModelKey, ProductId, ProviderModelId};
+use super::compat::{
+    CompatPatch, OpenRouterRoutingContract, ProviderRequestOptions, resolve_compat, validate_compat,
+};
+use super::endpoint::{
+    EndpointConfig, EndpointMode, EndpointValues, ResolvedEndpoint, ResolvedModelMapping,
+    resolve_official, resolve_official_for, resolve_test_only, resolve_test_only_for,
+};
 use super::headers::{
     DynamicHeaderContext, DynamicHeaderPolicy, DynamicResponseFormat, HeaderLayer, HeaderOperation,
     HeaderPipeline, HeaderSource, ResolvedHeaders,
@@ -38,6 +43,8 @@ pub struct ProviderRuntime {
     protocol_id: ProtocolId,
     protocol_kind: ProtocolKind,
     endpoint: ResolvedEndpoint,
+    endpoint_config: EndpointConfig,
+    endpoint_mode: EndpointMode,
     auth: Arc<dyn AuthProvider>,
     client_identity: ClientIdentity,
     provider_headers: Arc<[HeaderOperation]>,
@@ -48,6 +55,7 @@ pub struct ProviderRuntime {
     catalog: ModelCatalog,
     provider_compat: CompatPatch,
     model_compat: BTreeMap<ModelId, CompatPatch>,
+    openrouter_routing: Option<OpenRouterRoutingContract>,
     dialect: ProtocolDialect,
     transport: ProviderTransportOptions,
     resource_limits: crate::domain::ResourceLimits,
@@ -57,6 +65,7 @@ pub struct ProviderRuntime {
 }
 
 pub(crate) struct HeaderAttemptContext<'a> {
+    pub(crate) endpoint: &'a ResolvedEndpoint,
     pub(crate) facts: &'a RequestFacts,
     pub(crate) lifecycle: &'a RequestLifecycle,
     pub(crate) model_id: &'a ModelId,
@@ -98,14 +107,37 @@ impl ProviderRuntime {
                 ));
             }
         };
-        let endpoint = if profile.test_only {
+        let endpoint_mode = if profile.test_only {
+            EndpointMode::TestOnly
+        } else {
+            EndpointMode::Official
+        };
+        let endpoint = if profile.endpoint.requires_mapping() {
+            let first = profile.catalog.entries().next().ok_or_else(|| {
+                LlmError::Configuration(
+                    "endpoint template variables require an exact catalog entry".to_owned(),
+                )
+            })?;
+            resolve_entry_endpoint(&profile.endpoint, endpoint_mode, first)?
+        } else if profile.test_only {
             resolve_test_only(&profile.endpoint)?
         } else {
             resolve_official(&profile.endpoint)?
         };
         profile.audience.validate(&endpoint)?;
         profile.auth.validate_endpoint(&endpoint)?;
+        for entry in profile.catalog.entries() {
+            let mapped = resolve_entry_endpoint(&profile.endpoint, endpoint_mode, entry)?;
+            profile.audience.validate(&mapped)?;
+            profile.auth.validate_endpoint(&mapped)?;
+        }
         let auth_headers = profile.auth.protected_headers();
+        let provider_header_names = profile
+            .provider_headers
+            .iter()
+            .map(HeaderOperation::name)
+            .cloned()
+            .collect::<Vec<_>>();
         let auth = profile.auth;
         Ok(Self {
             provider_id: profile.provider_id,
@@ -113,6 +145,8 @@ impl ProviderRuntime {
             protocol_id: profile.protocol_id,
             protocol_kind,
             endpoint,
+            endpoint_config: profile.endpoint,
+            endpoint_mode,
             auth,
             client_identity: profile.client_identity,
             provider_headers: profile.provider_headers.into(),
@@ -123,12 +157,13 @@ impl ProviderRuntime {
             catalog: profile.catalog,
             provider_compat: profile.provider_compat,
             model_compat: profile.model_compat,
+            openrouter_routing: profile.openrouter_routing,
             dialect: profile.dialect,
             transport: profile.transport,
             resource_limits: profile.resource_limits,
             sse: profile.sse,
             max_http_error_body_bytes: profile.max_http_error_body_bytes,
-            pipeline: HeaderPipeline::with_auth_headers(auth_headers),
+            pipeline: HeaderPipeline::with_registered_headers(auth_headers, provider_header_names),
         })
     }
 
@@ -199,9 +234,10 @@ impl ProviderRuntime {
     }
 
     /// Compiles the immutable, target-aware policy used for one logical call.
-    pub(crate) fn plan_policy_for(
+    pub(crate) fn plan_policy_for_with_options(
         &self,
         request: &GenerateRequest,
+        provider_options: &ProviderRequestOptions,
     ) -> Result<CallPolicySnapshot, LlmError> {
         if request.model().provider() != &self.provider_id {
             return Err(crate::error::ValidationError::new(
@@ -238,13 +274,35 @@ impl ProviderRuntime {
         let mut history = HistoryPolicy::official_openai();
         history.max_messages = limits.request.max_messages;
         history.max_total_text_bytes = limits.request.max_text_bytes;
+        let request_routing = provider_options.openrouter_routing();
+        let openrouter_routing = match (&self.openrouter_routing, request_routing) {
+            (Some(contract), request) => {
+                let resolved = contract.resolve(request)?;
+                (!resolved.is_empty()).then_some(resolved)
+            }
+            (None, Some(_)) => {
+                return Err(crate::error::ValidationError::new(
+                    "provider_options.openrouter_routing",
+                    crate::error::ValidationReason::CapabilityUnsupported,
+                    "selected profile does not declare OpenRouter routing support",
+                )
+                .into());
+            }
+            (None, None) => None,
+        };
 
         Ok(CallPolicySnapshot {
             target: ResolvedTarget {
                 provider_id: self.provider_id.clone(),
+                product_id: self.product_id.clone(),
                 protocol_id: self.protocol_id.clone(),
                 protocol_kind: self.protocol_kind,
                 domain_model: request.model().model().clone(),
+                provider_model: entry.map_or_else(
+                    || ProviderModelId::new(request.model().model().as_str()),
+                    |entry| Ok(entry.provider_model_id.clone()),
+                )?,
+                deployment_id: entry.and_then(|entry| entry.deployment_id.clone()),
                 wire_model: entry
                     .map(|entry| ModelId::new(entry.wire_model_value.as_str()))
                     .transpose()?
@@ -258,6 +316,7 @@ impl ProviderRuntime {
             history,
             limits,
             response_format: request.options().response_format().clone(),
+            provider_routing: openrouter_routing,
         })
     }
 
@@ -366,7 +425,7 @@ impl ProviderRuntime {
         let auth = self
             .auth
             .resolve(AuthContext::for_attempt(
-                &self.endpoint,
+                attempt.endpoint,
                 &self.provider_id,
                 &self.product_id,
                 attempt.lifecycle,
@@ -430,7 +489,33 @@ impl ProviderRuntime {
                 "prepared call target does not match provider runtime".to_owned(),
             ));
         }
-        Ok(self.endpoint.clone())
+        if target.product_id != self.product_id {
+            return Err(LlmError::Configuration(
+                "prepared call product does not match provider runtime".to_owned(),
+            ));
+        }
+        let values = EndpointValues::new(
+            &target.product_id,
+            &target.provider_model,
+            target.deployment_id.as_ref(),
+        );
+        match self.endpoint_mode {
+            EndpointMode::Official => resolve_official_for(&self.endpoint_config, values),
+            EndpointMode::TestOnly => resolve_test_only_for(&self.endpoint_config, values),
+        }
+    }
+}
+
+fn resolve_entry_endpoint(
+    config: &EndpointConfig,
+    mode: EndpointMode,
+    entry: &ModelEntry,
+) -> Result<ResolvedEndpoint, LlmError> {
+    let mapping = ResolvedModelMapping::from_entry(entry);
+    let values = mapping.endpoint_values();
+    match mode {
+        EndpointMode::Official => resolve_official_for(config, values),
+        EndpointMode::TestOnly => resolve_test_only_for(config, values),
     }
 }
 

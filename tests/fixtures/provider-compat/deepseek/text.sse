@@ -1,0 +1,8 @@
+: keep-alive
+
+data: {"id":"fixture","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}
+
+data: {"id":"fixture","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":1}}
+
+data: [DONE]
+

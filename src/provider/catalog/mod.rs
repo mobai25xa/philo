@@ -6,6 +6,8 @@ mod merge;
 mod source;
 mod validate;
 
+/// Application-facing stable model identifier used by catalog keys.
+pub use crate::domain::ModelId as DomainModelId;
 pub use entry::{
     CatalogCapabilities, CatalogDefaults, ModelEntry, ModelKey, ModelLimits, SupportStatus,
 };

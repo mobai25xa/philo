@@ -132,6 +132,8 @@ pub enum ValidationReason {
     Empty,
     /// Input has leading or trailing whitespace.
     BoundaryWhitespace,
+    /// Two typed inputs cannot be merged without weakening or ambiguity.
+    Conflict,
     /// Model reference has no provider.
     MissingProvider,
     /// Request model provider does not match the configured client runtime.

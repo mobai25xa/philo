@@ -345,6 +345,7 @@ fn production_default_limit_lookups_have_an_explicit_file_allowlist() {
         "src/domain/request.rs".to_owned(),
         "src/domain/schema/budget.rs".to_owned(),
         "src/domain/tools.rs".to_owned(),
+        "src/provider/profiles/common.rs".to_owned(),
         "src/provider/profiles/official_openai.rs".to_owned(),
         "src/provider/profiles/test_only.rs".to_owned(),
     ]);
@@ -414,6 +415,12 @@ fn catalog_and_typed_compat_have_single_owners_and_no_provider_brand_branches() 
 
     for directory in ["src/provider/catalog", "src/provider/compat"] {
         for (file, text) in production_sources_under(directory) {
+            if matches!(
+                file.as_str(),
+                "src/provider/compat/mod.rs" | "src/provider/compat/routing.rs"
+            ) {
+                continue;
+            }
             for forbidden in [
                 "official-openai",
                 "test-only",
@@ -432,6 +439,59 @@ fn catalog_and_typed_compat_have_single_owners_and_no_provider_brand_branches() 
     let driver = production_source("src/protocol/openai_chat/driver.rs");
     assert!(!driver.contains("MaxOutputTokensWireFormat"));
     assert!(!driver.contains("ToolArgumentsCompat"));
+}
+
+#[test]
+fn routing_detection_and_conformance_keep_bounded_owners() {
+    for path in [
+        "src/provider/compat/routing.rs",
+        "src/protocol/openai_chat/compat/routing.rs",
+        "src/provider/detection.rs",
+        "tests/provider_routing_contract.rs",
+        "tests/provider_detection_contract.rs",
+        "tests/provider_conformance.rs",
+        "tests/support/conformance/case.rs",
+        "tests/support/conformance/offline.rs",
+        "tests/support/conformance/online.rs",
+        "tests/support/conformance/report.rs",
+        "tests/support/conformance/redaction.rs",
+    ] {
+        assert_production_file(path);
+    }
+
+    for (file, text) in production_sources_under("src/domain") {
+        for forbidden in [
+            "OpenRouterRouting",
+            "ProviderRequestOptions",
+            "EndpointDetector",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "provider-scoped routing/detection leaked into domain {file}: {forbidden}"
+            );
+        }
+    }
+
+    let wire = production_source("src/protocol/openai_chat/compat/routing.rs");
+    assert!(!wire.contains("BTreeMap<String"));
+    assert!(!wire.contains("serde(flatten)"));
+    assert!(!wire.contains("extra_body"));
+
+    let detection = production_source("src/provider/detection.rs");
+    for forbidden in [
+        "reqwest",
+        "Transport",
+        "SecretResolver",
+        "std::net::ToSocketAddrs",
+    ] {
+        assert!(
+            !detection.contains(forbidden),
+            "endpoint detection gained I/O/secret authority: {forbidden}"
+        );
+    }
+    let factory = production_source("src/provider/factory.rs");
+    assert!(factory.contains("ProviderSelector"));
+    assert!(factory.contains("EndpointDetector::detect_with_policy"));
 }
 
 #[test]
@@ -808,4 +868,46 @@ fn auth_and_header_policy_have_bounded_owners_before_transport() {
         headers < transport,
         "headers/auth must resolve before transport I/O"
     );
+}
+
+#[test]
+fn endpoint_mapping_has_one_resolver_and_typed_pre_transport_owners() {
+    for path in [
+        "src/provider/endpoint/mod.rs",
+        "src/provider/endpoint/config.rs",
+        "src/provider/endpoint/template.rs",
+        "src/provider/endpoint/mapping.rs",
+        "src/provider/endpoint/origin.rs",
+        "src/provider/endpoint/audience.rs",
+        "src/provider/endpoint/policy.rs",
+        "tests/endpoint_mapping_contract.rs",
+    ] {
+        assert_production_file(path);
+    }
+    assert!(
+        !crate_root().join("src/provider/endpoint.rs").exists(),
+        "legacy endpoint resolver remains"
+    );
+
+    for directory in ["src/protocol", "src/transport"] {
+        for (file, text) in production_sources_under(directory) {
+            for forbidden in ["EndpointTemplate", "DeploymentId", "query_pairs_mut"] {
+                assert!(
+                    !text.contains(forbidden),
+                    "endpoint mapping ownership leaked into {file}: {forbidden}"
+                );
+            }
+        }
+    }
+
+    let executor = production_source("src/execution/executor.rs");
+    let endpoint = executor.find("resolve_target_endpoint").unwrap();
+    let headers = executor.find("resolve_headers_for_attempt").unwrap();
+    let transport = executor.find("self.transport.execute").unwrap();
+    assert!(endpoint < headers && headers < transport);
+
+    let request = production_source("src/protocol/openai_chat/request.rs");
+    assert!(request.contains("ModelBodyWireFormat::Include"));
+    assert!(request.contains("ModelBodyWireFormat::Omit"));
+    assert!(!request.contains("provider_id.as_str()"));
 }

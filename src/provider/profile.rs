@@ -14,7 +14,7 @@ use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::catalog::{ModelCatalog, ProductId};
-use super::compat::CompatPatch;
+use super::compat::{CompatPatch, OpenRouterRoutingContract};
 use super::endpoint::{CredentialAudience, EndpointConfig, resolve_official, resolve_test_only};
 use super::headers::{DynamicHeaderPolicy, HeaderOperation};
 
@@ -36,6 +36,7 @@ pub struct ProviderProfile {
     pub(super) catalog: ModelCatalog,
     pub(super) provider_compat: CompatPatch,
     pub(super) model_compat: BTreeMap<ModelId, CompatPatch>,
+    pub(super) openrouter_routing: Option<OpenRouterRoutingContract>,
     pub(super) dialect: ProtocolDialect,
     pub(super) transport: ProviderTransportOptions,
     pub(super) resource_limits: ResourceLimits,
@@ -61,6 +62,7 @@ pub(super) struct ProviderProfileParts {
     pub(super) catalog: ModelCatalog,
     pub(super) provider_compat: CompatPatch,
     pub(super) model_compat: BTreeMap<ModelId, CompatPatch>,
+    pub(super) openrouter_routing: Option<OpenRouterRoutingContract>,
     pub(super) dialect: ProtocolDialect,
     pub(super) transport: ProviderTransportOptions,
     pub(super) resource_limits: ResourceLimits,
@@ -118,6 +120,7 @@ impl ProviderProfile {
             catalog: parts.catalog,
             provider_compat: parts.provider_compat,
             model_compat: parts.model_compat,
+            openrouter_routing: parts.openrouter_routing,
             dialect: parts.dialect,
             transport: parts.transport,
             resource_limits: parts.resource_limits,
@@ -212,6 +215,7 @@ mod tests {
             catalog: ModelCatalog::default(),
             provider_compat: CompatPatch::from_source(crate::domain::PolicySource::ProviderProfile),
             model_compat: BTreeMap::new(),
+            openrouter_routing: None,
             dialect: ProtocolDialect::OpenAiChatCompletions,
             transport: ProviderTransportOptions::secure_defaults(),
             resource_limits: ResourceLimits::official(),

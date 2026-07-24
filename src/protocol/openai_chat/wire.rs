@@ -7,12 +7,14 @@ use serde_json::Value;
 use crate::domain::{ImageDetail, MessageRole};
 use crate::provider::MaxOutputTokensWireFormat;
 
+use super::compat::routing::ProviderRoutingWire;
 use super::structured_wire::ResponseFormatWire;
 use super::tool_wire::{ToolChoiceWire, ToolWire};
 
 #[derive(Serialize)]
 pub(super) struct ChatCompletionRequestWire<'a> {
-    model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
     messages: Vec<MessageWire<'a>>,
     stream: bool,
     stream_options: StreamOptionsWire,
@@ -33,12 +35,14 @@ pub(super) struct ChatCompletionRequestWire<'a> {
     response_format: Option<ResponseFormatWire<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<ReasoningEffortWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<ProviderRoutingWire<'a>>,
 }
 
 impl<'a> ChatCompletionRequestWire<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        model: &'a str,
+        model: Option<&'a str>,
         messages: Vec<MessageWire<'a>>,
         temperature: Option<f64>,
         max_completion_tokens: Option<u32>,
@@ -49,6 +53,7 @@ impl<'a> ChatCompletionRequestWire<'a> {
         reasoning_effort: Option<ReasoningEffortWire>,
         max_output_tokens_format: MaxOutputTokensWireFormat,
         include_usage: bool,
+        provider: Option<ProviderRoutingWire<'a>>,
     ) -> Self {
         let (max_completion_tokens, max_tokens) = super::compat::request::output_token_fields(
             max_completion_tokens,
@@ -68,6 +73,7 @@ impl<'a> ChatCompletionRequestWire<'a> {
             parallel_tool_calls,
             response_format,
             reasoning_effort,
+            provider,
         }
     }
 }

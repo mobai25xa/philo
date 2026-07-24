@@ -1,0 +1,1 @@
+{"endpoint":"https://openrouter.ai/api/v1/chat/completions","auth":"bearer-header","headers":["Content-Type","Authorization","HTTP-Referer","X-OpenRouter-Title","X-OpenRouter-Categories"],"credential_audience":"openrouter-api","source":"synthetic"}

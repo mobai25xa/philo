@@ -3,16 +3,19 @@
 
 use std::fmt;
 use std::io;
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::{StreamExt as _, stream};
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::redirect::Policy;
 use thiserror::Error;
 
 use crate::error::{ErrorStage, LlmError, RetriableHint, TimeoutError, TransportError};
-use crate::provider::{Origin, RedirectPolicy};
+use crate::provider::{EndpointNetworkPolicy, Origin, RedirectPolicy};
 
 use super::{
     ByteStream, HttpRequest, HttpResponse, RequestLifecycle, Transport, TransportFuture,
@@ -25,6 +28,35 @@ const MAX_REDIRECTS: usize = 5;
 #[error("reqwest transport failure: {kind}")]
 struct SafeReqwestSource {
     kind: &'static str,
+}
+
+#[derive(Debug, Error)]
+#[error("secure DNS resolution failure")]
+struct SafeDnsSource;
+
+#[derive(Clone, Copy, Debug)]
+struct SecureDnsResolver;
+
+impl Resolve for SecureDnsResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().to_owned();
+        Box::pin(async move {
+            let addresses = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|_| Box::new(SafeDnsSource) as Box<dyn std::error::Error + Send + Sync>)?
+                .collect::<Vec<SocketAddr>>();
+            let policy = if host.eq_ignore_ascii_case("localhost") {
+                EndpointNetworkPolicy::test_loopback()
+            } else {
+                EndpointNetworkPolicy::public_https()
+            };
+            policy
+                .validate_resolved_addresses(addresses.iter().map(SocketAddr::ip))
+                .map_err(|_| Box::new(SafeDnsSource) as Box<dyn std::error::Error + Send + Sync>)?;
+            let addresses: Addrs = Box::new(addresses.into_iter());
+            Ok(addresses)
+        })
+    }
 }
 
 /// Shared production HTTP transport. Public methods expose no `reqwest` types.
@@ -78,7 +110,9 @@ impl Transport for ReqwestTransport {
 }
 
 fn build_client(redirect: Policy) -> Result<reqwest::Client, LlmError> {
-    let builder = reqwest::Client::builder().redirect(redirect);
+    let builder = reqwest::Client::builder()
+        .redirect(redirect)
+        .dns_resolver(Arc::new(SecureDnsResolver));
     #[cfg(feature = "rustls-tls")]
     let builder = builder.use_rustls_tls();
     builder.build().map_err(|_| {
@@ -101,8 +135,19 @@ fn same_origin_policy() -> Policy {
         let Some(initial) = attempt.previous().first() else {
             return attempt.error(io::Error::other("redirect has no initial URL"));
         };
-        match (Origin::from_url(initial), Origin::from_url(attempt.url())) {
-            (Ok(initial), Ok(next)) if initial == next => attempt.follow(),
+        let next_url = attempt.url();
+        let safe_shape = next_url.username().is_empty()
+            && next_url.password().is_none()
+            && next_url.query().is_none()
+            && next_url.fragment().is_none();
+        match (Origin::from_url(initial), Origin::from_url(next_url)) {
+            (Ok(initial), Ok(next))
+                if safe_shape
+                    && initial == next
+                    && !(initial.scheme() == "https" && next.scheme() != "https") =>
+            {
+                attempt.follow()
+            }
             _ => attempt.error(io::Error::other("cross-origin redirect rejected")),
         }
     })

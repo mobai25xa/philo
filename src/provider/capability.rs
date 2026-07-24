@@ -83,6 +83,27 @@ impl ProviderCapabilities {
         }
     }
 
+    /// Conservative OpenAI-compatible base used by reviewed third-party presets.
+    pub(super) fn openai_compatible() -> Self {
+        Self {
+            developer_role: CapabilityStatus::Unknown,
+            temperature: CapabilityStatus::Supported,
+            max_completion_tokens: CapabilityStatus::Supported,
+            streaming: CapabilityStatus::Supported,
+            streaming_usage: CapabilityStatus::Supported,
+            function_tools: CapabilityStatus::Unknown,
+            tool_choice_required: CapabilityStatus::Unknown,
+            tool_choice_specific: CapabilityStatus::Unknown,
+            parallel_tool_calls: CapabilityStatus::Unknown,
+            strict_tools: CapabilityStatus::Unknown,
+            vision_input: CapabilityStatus::Unknown,
+            image_detail_original: CapabilityStatus::Unknown,
+            response_format_json_object: CapabilityStatus::Unknown,
+            response_format_json_schema: CapabilityStatus::Unknown,
+            reasoning_efforts: ReasoningEffortSupport::Unknown,
+        }
+    }
+
     pub(super) fn validate(&self) -> Result<(), LlmError> {
         if matches!(
             self.streaming,

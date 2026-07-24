@@ -1,0 +1,9 @@
+{
+  "only": ["alpha", "beta"],
+  "ignore": ["blocked"],
+  "order": ["beta", "alpha"],
+  "allow_fallbacks": false,
+  "data_collection": "deny",
+  "zdr": true,
+  "sort": "latency"
+}

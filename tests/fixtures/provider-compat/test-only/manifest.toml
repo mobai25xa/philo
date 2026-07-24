@@ -1,0 +1,11 @@
+schema_version = 1
+provider = "test-only"
+product = "chat-completions"
+profile_version = "3.0.0-test-only"
+catalog_version = "synthetic-default"
+compat_version = "openai-chat-default-v1"
+source = "synthetic"
+reviewed_at = "2026-07-24"
+evidence_expires_at = "2027-07-24"
+synthetic_conformance_claim = false
+notes = "Offline-only negative and shared-pipeline proof; never presented as real provider conformance."

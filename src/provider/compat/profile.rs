@@ -9,6 +9,8 @@ use super::{HistoryCompat, RequestCompat, ResponseCompat};
 /// Stable names for compatibility leaves.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CompatField {
+    /// Request model field presence.
+    RequestModelBody,
     /// Maximum output token request field.
     RequestMaxOutputTokens,
     /// Request tool choice.
@@ -123,7 +125,8 @@ impl CompatProfile {
 }
 
 impl CompatField {
-    pub(super) const ALL: [Self; 15] = [
+    pub(super) const ALL: [Self; 16] = [
+        Self::RequestModelBody,
         Self::RequestMaxOutputTokens,
         Self::RequestToolChoice,
         Self::RequestThinking,
