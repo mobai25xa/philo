@@ -87,7 +87,7 @@ fn openrouter_request() -> GenerateRequest {
         )
         .with_metadata(metadata);
     GenerateRequest::new(
-        ModelRef::new("openrouter", "openai/gpt-4o-mini").unwrap(),
+        ModelRef::new("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free").unwrap(),
         vec![Message::user(PROMPT_CANARY)],
     )
     .with_options(options)
@@ -114,9 +114,18 @@ fn diagnostics_explain_final_sources_without_values() {
 
     assert_eq!(diagnostics.provider_id().as_str(), "openrouter");
     assert_eq!(diagnostics.product_id().as_str(), "openrouter-chat");
-    assert_eq!(diagnostics.domain_model().as_str(), "openai/gpt-4o-mini");
-    assert_eq!(diagnostics.provider_model().as_str(), "openai/gpt-4o-mini");
-    assert_eq!(diagnostics.wire_model().as_str(), "openai/gpt-4o-mini");
+    assert_eq!(
+        diagnostics.domain_model().as_str(),
+        "nvidia/nemotron-3-ultra-550b-a55b:free"
+    );
+    assert_eq!(
+        diagnostics.provider_model().as_str(),
+        "nvidia/nemotron-3-ultra-550b-a55b:free"
+    );
+    assert_eq!(
+        diagnostics.wire_model().as_str(),
+        "nvidia/nemotron-3-ultra-550b-a55b:free"
+    );
     assert_eq!(diagnostics.endpoint().origin().host(), "openrouter.ai");
     assert_eq!(
         diagnostics.endpoint().path_shape(),
@@ -137,6 +146,11 @@ fn diagnostics_explain_final_sources_without_values() {
     );
     assert_eq!(diagnostics.typed_extensions(), &["openrouter-routing"]);
     assert_eq!(diagnostics.compat().len(), 16);
+    assert!(diagnostics.compat().iter().any(|entry| {
+        entry.field() == philo::CompatField::ResponseFinishReason
+            && entry.value() == "AllowOneIdenticalDuplicate"
+            && entry.source() == PolicySource::ProviderProfile
+    }));
     assert!(
         diagnostics
             .compat()
@@ -257,13 +271,17 @@ fn structured_matrix_matches_catalog_conformance_and_evidence_policy() {
         assert_eq!(entry.contract_version, "provider-fixture-v1");
         assert_eq!(entry.catalog_status, "Experimental");
         assert_eq!(entry.effective_status, "Experimental");
-        assert_eq!(entry.evidence_levels, ["OfflineContractVerified"]);
+        assert_eq!(
+            entry.evidence_levels,
+            ["OfflineContractVerified", "RealProviderVerified"]
+        );
         assert_eq!(entry.offline_evidence_id, "p3-012-real-providers");
         assert_eq!(entry.fixture_manifest, descriptor.fixture_manifest);
         assert_eq!(entry.reviewed_at, descriptor.reviewed_at);
         assert_eq!(entry.expires_at, descriptor.evidence_expires_at);
         assert!(entry.limitations.iter().all(|item| !item.is_empty()));
-        assert_eq!(entry.online_status, "Pending");
+        assert_eq!(entry.online_status, "Pass");
+        // Hosted CI SHA/run URL remain empty until Gate F freezes a clean candidate.
         assert!(entry.candidate_sha.is_empty());
         assert!(entry.run_url.is_empty());
 
@@ -284,7 +302,11 @@ fn structured_matrix_matches_catalog_conformance_and_evidence_policy() {
             if cell.status == "Unknown" {
                 assert_eq!(cell.evidence_id, "none");
             } else {
-                assert!(cell.evidence_id.starts_with("offline:"));
+                assert!(
+                    cell.evidence_id.starts_with("offline:")
+                        || cell.evidence_id.starts_with("online:"),
+                    "capability evidence must be offline: or online: for {key}"
+                );
             }
         }
     }

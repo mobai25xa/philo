@@ -7,7 +7,7 @@ use philo::{GenerateRequest, Message, ModelRef, OpenRouterProfile, ProviderReque
 fn main() -> Result<(), Box<dyn Error>> {
     let runtime = OpenRouterProfile::from_api_key("resolved-by-the-application")?.build()?;
     let request = GenerateRequest::new(
-        ModelRef::new("openrouter", "openai/gpt-4o-mini")?,
+        ModelRef::new("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free")?,
         vec![Message::user("This text is never retained by diagnostics.")],
     );
     let diagnostics =

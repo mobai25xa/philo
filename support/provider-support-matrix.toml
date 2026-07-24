@@ -6,32 +6,32 @@ evidence_level_vocabulary = ["OfflineContractVerified", "RealProviderVerified"]
 [[entries]]
 provider_id = "openrouter"
 product_id = "openrouter-chat"
-exact_model = "openai/gpt-4o-mini"
+exact_model = "nvidia/nemotron-3-ultra-550b-a55b:free"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
 catalog_version = "p3-001-reviewed-2026-07-23"
 compat_version = "openai-chat-compatible-v1"
 catalog_status = "Experimental"
 effective_status = "Experimental"
-evidence_levels = ["OfflineContractVerified"]
+evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
 offline_evidence_id = "p3-012-real-providers"
 fixture_manifest = "provider-compat/openrouter/manifest.toml"
 candidate_sha = ""
 run_url = ""
-online_status = "Pending"
+online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
-limitations = ["online-pending", "optional-capabilities-unknown", "cost-native-finish-reasoning-not-public"]
+limitations = ["hosted-ci-pending", "optional-capabilities-unknown", "cost-native-finish-reasoning-not-public", "local-online-not-hosted"]
 
 [[entries.capabilities]]
 case = "text_stream"
 status = "Experimental"
-evidence_id = "offline:openrouter-chat"
+evidence_id = "online:openrouter-chat"
 
 [[entries.capabilities]]
 case = "usage_and_request_id"
 status = "Experimental"
-evidence_id = "offline:openrouter-chat"
+evidence_id = "online:openrouter-chat"
 
 [[entries.capabilities]]
 case = "single_tool"
@@ -53,25 +53,25 @@ catalog_version = "p3-001-reviewed-2026-07-23"
 compat_version = "openai-chat-compatible-v1"
 catalog_status = "Experimental"
 effective_status = "Experimental"
-evidence_levels = ["OfflineContractVerified"]
+evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
 offline_evidence_id = "p3-012-real-providers"
 fixture_manifest = "provider-compat/deepseek/manifest.toml"
 candidate_sha = ""
 run_url = ""
-online_status = "Pending"
+online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
-limitations = ["online-pending", "optional-capabilities-unknown", "thinking-replay-not-enabled", "strict-beta-excluded"]
+limitations = ["hosted-ci-pending", "optional-capabilities-unknown", "thinking-replay-not-enabled", "strict-beta-excluded", "local-online-not-hosted"]
 
 [[entries.capabilities]]
 case = "text_stream"
 status = "Experimental"
-evidence_id = "offline:deepseek-chat-openai"
+evidence_id = "online:deepseek-chat-openai"
 
 [[entries.capabilities]]
 case = "usage_and_request_id"
 status = "Experimental"
-evidence_id = "offline:deepseek-chat-openai"
+evidence_id = "online:deepseek-chat-openai"
 
 [[entries.capabilities]]
 case = "single_tool"
@@ -86,32 +86,32 @@ evidence_id = "none"
 [[entries]]
 provider_id = "zai"
 product_id = "zai-standard-api"
-exact_model = "glm-5"
+exact_model = "glm-4.7-flash"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
 catalog_version = "p3-001-reviewed-2026-07-23"
 compat_version = "openai-chat-compatible-v1"
 catalog_status = "Experimental"
 effective_status = "Experimental"
-evidence_levels = ["OfflineContractVerified"]
+evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
 offline_evidence_id = "p3-012-real-providers"
 fixture_manifest = "provider-compat/zai-standard/manifest.toml"
 candidate_sha = ""
 run_url = ""
-online_status = "Pending"
+online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
-limitations = ["online-pending", "optional-capabilities-unknown", "thinking-tool-stream-not-enabled"]
+limitations = ["hosted-ci-pending", "optional-capabilities-unknown", "thinking-tool-stream-not-enabled", "local-online-not-hosted"]
 
 [[entries.capabilities]]
 case = "text_stream"
 status = "Experimental"
-evidence_id = "offline:zai-standard-api"
+evidence_id = "online:zai-standard-api"
 
 [[entries.capabilities]]
 case = "usage_and_request_id"
 status = "Experimental"
-evidence_id = "offline:zai-standard-api"
+evidence_id = "online:zai-standard-api"
 
 [[entries.capabilities]]
 case = "single_tool"
@@ -126,32 +126,32 @@ evidence_id = "none"
 [[entries]]
 provider_id = "zai"
 product_id = "zai-coding-plan"
-exact_model = "glm-5"
+exact_model = "glm-4.7-flash"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
 catalog_version = "p3-001-reviewed-2026-07-23"
 compat_version = "openai-chat-compatible-v1"
 catalog_status = "Experimental"
 effective_status = "Experimental"
-evidence_levels = ["OfflineContractVerified"]
+evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
 offline_evidence_id = "p3-012-real-providers"
 fixture_manifest = "provider-compat/zai-coding/manifest.toml"
 candidate_sha = ""
 run_url = ""
-online_status = "Pending"
+online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
-limitations = ["online-pending", "optional-capabilities-unknown", "coding-key-product-scoped", "thinking-tool-stream-not-enabled"]
+limitations = ["hosted-ci-pending", "optional-capabilities-unknown", "coding-key-product-scoped", "thinking-tool-stream-not-enabled", "local-online-not-hosted"]
 
 [[entries.capabilities]]
 case = "text_stream"
 status = "Experimental"
-evidence_id = "offline:zai-coding-plan"
+evidence_id = "online:zai-coding-plan"
 
 [[entries.capabilities]]
 case = "usage_and_request_id"
 status = "Experimental"
-evidence_id = "offline:zai-coding-plan"
+evidence_id = "online:zai-coding-plan"
 
 [[entries.capabilities]]
 case = "single_tool"

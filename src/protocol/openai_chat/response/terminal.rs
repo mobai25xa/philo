@@ -9,6 +9,7 @@ use crate::error::{
     UnsupportedResponseSemantics,
 };
 use crate::provider::call_policy::ResponseLimits;
+use crate::provider::{FinishReasonCompat, UsageCompat};
 
 pub(super) struct StructuredTerminal {
     response_format: ResponseFormat,
@@ -85,13 +86,17 @@ impl StructuredTerminal {
 
 pub(super) struct PreparedChunk {
     pub(super) finish_reason: Option<FinishReason>,
+    pub(super) duplicate_finish: bool,
     pub(super) usage: Option<UsageDetails>,
 }
 
 impl PreparedChunk {
     pub(super) fn validate(
         chunk: &ChatCompletionChunkWire,
-        finish_already_seen: bool,
+        observed_finish: Option<&FinishReason>,
+        duplicate_finish_seen: bool,
+        finish_compat: FinishReasonCompat,
+        usage_compat: UsageCompat,
     ) -> Result<Self, LlmError> {
         if chunk.choices.len() > 1 {
             return Err(UnsupportedResponseSemantics::new("multiple choices").into());
@@ -100,35 +105,61 @@ impl PreparedChunk {
             return Err(protocol("chunk has neither a choice nor usage"));
         }
 
-        let finish_reason = if let Some(choice) = chunk.choices.first() {
-            Self::validate_choice(choice, finish_already_seen)?
+        let (finish_reason, duplicate_finish) = if let Some(choice) = chunk.choices.first() {
+            Self::validate_choice(
+                choice,
+                observed_finish,
+                duplicate_finish_seen,
+                finish_compat,
+            )?
         } else {
-            None
+            (None, false)
         };
         let usage = chunk
             .usage
             .as_ref()
-            .map(parse_usage_details)
+            .map(|usage| {
+                parse_usage_details(
+                    usage,
+                    matches!(usage_compat, UsageCompat::OpenAiDropInconsistentReasoning),
+                )
+            })
             .transpose()?
             .flatten();
         Ok(Self {
             finish_reason,
+            duplicate_finish,
             usage,
         })
     }
 
     fn validate_choice(
         choice: &ChoiceWire,
-        finish_already_seen: bool,
-    ) -> Result<Option<FinishReason>, LlmError> {
+        observed_finish: Option<&FinishReason>,
+        duplicate_finish_seen: bool,
+        finish_compat: FinishReasonCompat,
+    ) -> Result<(Option<FinishReason>, bool), LlmError> {
         if choice.index != 0 {
             return Err(UnsupportedResponseSemantics::new("nonzero choice index").into());
         }
-        if finish_already_seen {
-            if choice.finish_reason.is_some() {
+        if let Some(observed_finish) = observed_finish {
+            let Some(raw_finish) = choice.finish_reason.as_deref() else {
+                return Err(protocol("choice data received after finish reason"));
+            };
+            if matches!(finish_compat, FinishReasonCompat::StrictOpenAi) {
                 return Err(protocol("duplicate finish reason"));
             }
-            return Err(protocol("choice data received after finish reason"));
+            if duplicate_finish_seen {
+                return Err(protocol("multiple duplicate finish reasons"));
+            }
+            let repeated_finish = parse_finish_reason(raw_finish)?;
+            if &repeated_finish != observed_finish {
+                return Err(protocol("conflicting duplicate finish reason"));
+            }
+            if !choice.delta.as_ref().is_none_or(delta_is_empty) {
+                return Err(protocol("choice data received after finish reason"));
+            }
+            return Ok((None, true));
         }
         if let Some(delta) = &choice.delta {
             if delta.function_call.is_some() {
@@ -142,11 +173,36 @@ impl PreparedChunk {
                 return Err(UnsupportedResponseSemantics::new("delta.role").into());
             }
         }
-        choice
+        let finish_reason = choice
             .finish_reason
             .as_deref()
             .map(parse_finish_reason)
-            .transpose()
+            .transpose()?;
+        Ok((finish_reason, false))
+    }
+}
+
+fn delta_is_empty(delta: &super::super::wire::DeltaWire) -> bool {
+    delta.role.as_deref().is_none_or(|role| role == "assistant")
+        && delta.content.as_deref().is_none_or(str::is_empty)
+        && delta.refusal.as_deref().is_none_or(str::is_empty)
+        && delta.tool_calls.as_ref().is_none_or(Vec::is_empty)
+        && delta.function_call.is_none()
+        && delta.extra.iter().all(|(name, value)| {
+            matches!(
+                name.as_str(),
+                "reasoning" | "reasoning_content" | "reasoning_details"
+            ) && empty_extension_value(value)
+        })
+}
+
+fn empty_extension_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::String(value) => value.is_empty(),
+        serde_json::Value::Array(value) => value.is_empty(),
+        serde_json::Value::Object(value) => value.is_empty(),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => false,
     }
 }
 

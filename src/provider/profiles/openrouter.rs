@@ -9,7 +9,10 @@ use url::Url;
 use crate::error::{LlmError, ValidationError, ValidationReason};
 
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
-use super::super::compat::{OpenRouterRoutingContract, OpenRouterRoutingPatch};
+use super::super::compat::{
+    FinishReasonCompat, MaxOutputTokensWireFormat, OpenRouterRoutingContract,
+    OpenRouterRoutingPatch, UsageCompat,
+};
 use super::super::endpoint::CredentialAudience;
 use super::super::headers::{DynamicHeaderPolicy, HeaderOperation};
 use super::super::profile::ProviderProfile;
@@ -180,6 +183,10 @@ impl OpenRouterProfile {
             .attribution
             .as_ref()
             .map_or_else(Vec::new, OpenRouterAttribution::operations);
+        let compat = provider_patch()
+            .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens)
+            .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate)
+            .with_usage(UsageCompat::OpenAiDropInconsistentReasoning);
         build_compatible_profile(CompatibleProfileParts {
             provider: "openrouter",
             product: "openrouter-chat",
@@ -190,10 +197,10 @@ impl OpenRouterProfile {
             client_identity: self.client_identity,
             provider_headers,
             dynamic_header_policy: self.dynamic_header_policy,
-            exact_model: "openai/gpt-4o-mini",
-            display_name: "OpenRouter openai/gpt-4o-mini",
+            exact_model: "nvidia/nemotron-3-ultra-550b-a55b:free",
+            display_name: "OpenRouter NVIDIA Nemotron 3 Ultra 550B A55B (free)",
             catalog_source: "p3-001-openrouter-official-docs",
-            provider_compat: provider_patch(),
+            provider_compat: compat,
             openrouter_routing: self.routing,
         })
     }

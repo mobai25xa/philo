@@ -1,10 +1,16 @@
 //! Typed response-side compatibility strategies.
 
-/// Accepted finish-reason vocabulary.
+/// Streamed finish-reason handling.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FinishReasonCompat {
     /// Fail closed on values outside the `OpenAI` Chat vocabulary.
     StrictOpenAi,
+    /// Accept one payload-free repeat of the already observed finish reason.
+    ///
+    /// A different reason, another repeat, or any late delta remains a
+    /// protocol error. This is intended for reviewed gateway terminal chunks
+    /// that repeat the normalized finish reason while attaching final usage.
+    AllowOneIdenticalDuplicate,
 }
 
 /// Accepted streamed tool-argument representation.
@@ -21,6 +27,12 @@ pub enum ToolArgumentsCompat {
 pub enum UsageCompat {
     /// `OpenAI` prompt/completion/total token semantics.
     OpenAi,
+    /// Preserve `OpenAI` core counters but discard an invalid reasoning subset.
+    ///
+    /// This applies only when a gateway reports `reasoning_tokens` greater
+    /// than `completion_tokens`. Negative values and inconsistent core totals
+    /// remain protocol errors.
+    OpenAiDropInconsistentReasoning,
 }
 
 /// In-stream provider error handling.

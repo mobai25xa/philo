@@ -1,9 +1,9 @@
 {
   "provider": "openrouter",
   "product": "openrouter-chat",
-  "model": "openai/gpt-4o-mini",
-  "minimal_request": {"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"fixture"}],"stream":true},
-  "capability_request": {"provider":{"order":["OpenAI"],"allow_fallbacks":false},"stream_options":{"include_usage":true}},
+  "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "minimal_request": {"model":"nvidia/nemotron-3-ultra-550b-a55b:free","messages":[{"role":"user","content":"fixture"}],"stream":true},
+  "capability_request": {"max_tokens":16,"provider":{"order":["NVIDIA"],"allow_fallbacks":false},"stream_options":{"include_usage":true}},
   "history_replay": {"status":"unknown_until_online","reasoning_details_preserved":true},
   "source":"synthetic"
 }

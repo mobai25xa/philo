@@ -56,9 +56,18 @@ async fn protected_provider_conformance_smoke() {
             descriptor.provider
         );
     }
+    if descriptor.generation_id_expected {
+        assert!(
+            message.generation_id().is_some(),
+            "generation_id expected for provider={} but was None",
+            descriptor.provider
+        );
+    }
     if descriptor.usage_expected {
         assert!(message.usage().is_some());
     }
+    let request_id_present = message.provider_request_id().is_some();
+    let generation_id_present = message.generation_id().is_some();
     let report = plan.into_report(
         &descriptor,
         std::env::var_os("GITHUB_RUN_ID").is_some(),
@@ -76,9 +85,11 @@ async fn protected_provider_conformance_smoke() {
         ],
     );
     println!(
-        "provider_conformance_status=passed provider={} candidate_sha={} case=text_stream request_id_present=true report={}",
+        "provider_conformance_status=passed provider={} candidate_sha={} case=text_stream request_id_present={} generation_id_present={} report={}",
         descriptor.provider,
         candidate_sha,
+        request_id_present,
+        generation_id_present,
         report.to_json()
     );
 }
@@ -86,14 +97,31 @@ async fn protected_provider_conformance_smoke() {
 fn safe_model(name: &str) -> String {
     let value = std::env::var(name).unwrap_or_else(|_| panic!("{name} is required"));
     assert!(
-        !value.is_empty()
-            && value.len() <= 128
-            && value.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/')
-            }),
+        valid_model_identifier(&value),
         "{name} must be a bounded exact model identifier"
     );
     value
+}
+
+fn valid_model_identifier(value: &str) -> bool {
+    if value.is_empty() || value.len() > 128 {
+        return false;
+    }
+    let mut parts = value.split(':');
+    let Some(base) = parts.next() else {
+        return false;
+    };
+    let suffix = parts.next();
+    if parts.next().is_some() || base.is_empty() || suffix.is_some_and(str::is_empty) {
+        return false;
+    }
+    base.bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
+        && suffix.is_none_or(|suffix| {
+            suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
 }
 
 fn safe_identifier(name: &str) -> String {
@@ -116,4 +144,14 @@ fn safe_sha(name: &str) -> String {
         "{name} must be an exact 40-character SHA"
     );
     value.to_ascii_lowercase()
+}
+
+#[test]
+fn exact_model_identifier_accepts_openrouter_variant_and_zai_model() {
+    assert!(valid_model_identifier(
+        "nvidia/nemotron-3-ultra-550b-a55b:free"
+    ));
+    assert!(valid_model_identifier("glm-4.7-flash"));
+    assert!(!valid_model_identifier("model:"));
+    assert!(!valid_model_identifier("model:free:extra"));
 }
