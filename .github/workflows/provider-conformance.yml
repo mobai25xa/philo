@@ -107,4 +107,5 @@ jobs:
             echo "- Model: \`$PHILO_PROVIDER_MODEL\`"
             echo "- Prompt, output, credentials, header values, request-id values, and response bodies: not recorded"
             echo "- Result: \`${{ job.status }}\`"
+            echo "- Run URL: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> "$GITHUB_STEP_SUMMARY"
