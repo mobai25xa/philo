@@ -175,8 +175,16 @@ async fn concurrent_provider_runtimes_do_not_cross_talk_headers_or_credentials()
 }
 
 #[tokio::test]
-async fn deepseek_and_zai_use_legacy_max_tokens_without_driver_forks() {
+async fn reviewed_third_party_models_use_max_tokens_without_driver_forks() {
     let cases = [
+        (
+            OpenRouterProfile::from_api_key(CANARY)
+                .unwrap()
+                .build()
+                .unwrap(),
+            "openrouter",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
+        ),
         (
             DeepSeekProfile::from_api_key(CANARY)
                 .unwrap()
