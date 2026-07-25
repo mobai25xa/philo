@@ -302,7 +302,10 @@ fn structured_matrix_matches_catalog_conformance_and_evidence_policy() {
                 "{key} run_url must be a hosted Actions URL"
             );
             assert!(
-                entry.limitations.iter().any(|item| item == "hosted-protected-online"),
+                entry
+                    .limitations
+                    .iter()
+                    .any(|item| item == "hosted-protected-online"),
                 "{key} must record hosted-protected-online limitation tag"
             );
         } else {
