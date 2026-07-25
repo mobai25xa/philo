@@ -281,9 +281,37 @@ fn structured_matrix_matches_catalog_conformance_and_evidence_policy() {
         assert_eq!(entry.expires_at, descriptor.evidence_expires_at);
         assert!(entry.limitations.iter().all(|item| !item.is_empty()));
         assert_eq!(entry.online_status, "Pass");
-        // Hosted CI SHA/run URL remain empty until Gate F freezes a clean candidate.
-        assert!(entry.candidate_sha.is_empty());
-        assert!(entry.run_url.is_empty());
+        // Hosted entries bind a frozen 40-char candidate SHA and Actions run URL.
+        // Non-hosted exact products may keep both empty while remaining Experimental.
+        let hosted = !entry.candidate_sha.is_empty() || !entry.run_url.is_empty();
+        if hosted {
+            assert_eq!(
+                entry.candidate_sha.len(),
+                40,
+                "{key} candidate_sha must be exact 40-char SHA"
+            );
+            assert!(
+                entry
+                    .candidate_sha
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+                "{key} candidate_sha must be hex"
+            );
+            assert!(
+                entry.run_url.starts_with("https://github.com/"),
+                "{key} run_url must be a hosted Actions URL"
+            );
+            assert!(
+                entry
+                    .limitations
+                    .iter()
+                    .any(|item| item == "hosted-protected-online"),
+                "{key} must record hosted-protected-online limitation tag"
+            );
+        } else {
+            assert!(entry.candidate_sha.is_empty(), "{key} empty SHA expected");
+            assert!(entry.run_url.is_empty(), "{key} empty run_url expected");
+        }
 
         let runtime = descriptor.profile.build("matrix-contract-credential");
         let model = philo::ModelId::new(entry.exact_model.clone()).unwrap();
@@ -304,8 +332,9 @@ fn structured_matrix_matches_catalog_conformance_and_evidence_policy() {
             } else {
                 assert!(
                     cell.evidence_id.starts_with("offline:")
-                        || cell.evidence_id.starts_with("online:"),
-                    "capability evidence must be offline: or online: for {key}"
+                        || cell.evidence_id.starts_with("online:")
+                        || cell.evidence_id.starts_with("hosted:"),
+                    "capability evidence must be offline:/online:/hosted: for {key}"
                 );
             }
         }
