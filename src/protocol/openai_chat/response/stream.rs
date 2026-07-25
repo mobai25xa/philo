@@ -62,10 +62,12 @@ pub(crate) fn decode_openai_chat_stream_with_policy(
     limits: ResponseLimits,
     compat: ResponseCompat,
 ) -> OpenAiChatEventStream {
+    let max_events_per_poll = sse.max_events_per_poll();
     OpenAiChatEventStream {
         source: SseDecoder::with_config(body, sse),
         machine: ChatStateMachine::new_with_format(context, response_format, limits, compat),
         pending: VecDeque::new(),
+        max_events_per_poll,
         terminal: false,
     }
 }
@@ -75,6 +77,7 @@ pub(crate) struct OpenAiChatEventStream {
     source: SseDecoder,
     machine: ChatStateMachine,
     pending: VecDeque<Result<AssistantEvent, LlmError>>,
+    max_events_per_poll: usize,
     terminal: bool,
 }
 
@@ -84,6 +87,7 @@ impl fmt::Debug for OpenAiChatEventStream {
             .debug_struct("OpenAiChatEventStream")
             .field("machine", &self.machine)
             .field("pending_events", &self.pending.len())
+            .field("max_events_per_poll", &self.max_events_per_poll)
             .field("terminal", &self.terminal)
             .finish_non_exhaustive()
     }
@@ -101,10 +105,16 @@ impl Stream for OpenAiChatEventStream {
             return Poll::Ready(None);
         }
 
+        let mut events_processed = 0;
         loop {
+            if events_processed >= stream.max_events_per_poll {
+                context.waker().wake_by_ref();
+                return Poll::Pending;
+            }
             match Pin::new(&mut stream.source).poll_next(context) {
                 Poll::Ready(Some(Ok(event))) => match stream.machine.accept(&event) {
                     Ok(events) => {
+                        events_processed += 1;
                         stream.pending.extend(events.into_iter().map(Ok));
                         if let Some(item) = stream.pending.pop_front() {
                             return Poll::Ready(Some(item));

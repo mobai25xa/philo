@@ -586,6 +586,7 @@ dependencies = [
  "futures-util",
  "http",
  "proptest",
+ "rand 0.9.5",
  "reqwest",
  "rustls",
  "secrecy",

@@ -1,0 +1,58 @@
+schema = "philo/phase4-resource-budgets"
+version = 1
+benchmark_fixture = "benches/phase4_sdk.rs"
+benchmark_seed = 0
+
+[response_headers]
+max_fields = 128
+max_value_bytes = 16384
+max_total_bytes = 65536
+enforced_by = "src/execution/executor.rs"
+
+[sse]
+max_event_bytes = 1048576
+max_line_bytes = 65536
+max_fields_per_event = 128
+max_chunk_bytes = 262144
+max_bytes_per_poll = 65536
+max_chunks_per_poll = 16
+max_events_per_poll = 32
+enforced_by = "src/transport/sse.rs"
+
+[retry]
+max_attempts = 8
+default_attempts = 1
+default_max_total_wait_millis = 60000
+hard_max_configured_wait_millis = 3600000
+enforced_by = "src/execution/reliability"
+
+[network]
+max_redirects = 5
+max_no_proxy_entries = 64
+max_custom_roots = 8
+max_idle_connections_per_host = 64
+enforced_by = "src/transport/network.rs and src/transport/reqwest.rs"
+
+[benchmark_thresholds]
+warning_relative_regression_percent = 25
+blocking_relative_regression_percent = 50
+hook_enabled_overhead_warning_percent = 20
+hook_enabled_overhead_blocking_percent = 50
+require_matching_rust_os_arch_profile_features = true
+
+[quick_soak]
+default_iterations = 1000
+capture_drain_interval = 256
+max_retained_captures = 255
+require_no_unconsumed_exchange = true
+require_expected_drop_cleanup = true
+
+[release_soak]
+default_iterations = 100000
+resource_sample_interval = 256
+linux_max_rss_growth_kib = 65536
+linux_max_thread_growth = 4
+linux_max_file_descriptor_growth = 8
+linux_max_socket_growth = 4
+require_resource_metrics = true
+enforced_by = "benches/phase4_client_soak.rs and .github/workflows/phase4-reliability.yml"

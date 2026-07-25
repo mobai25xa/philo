@@ -27,6 +27,8 @@ impl ResponseSession {
                     response.meta.provider_request_id,
                     status_retriable(response.meta.status),
                 )
+                .with_retry_after(response.meta.retry_after)
+                .with_rate_limit(response.meta.rate_limit)
                 .into())
             }
         }
@@ -102,6 +104,14 @@ mod tests {
                 provider_request_id: None,
                 status: StatusCode::OK,
                 header_names: Vec::new(),
+                retry_after: None,
+                rate_limit: crate::provider::observe_rate_limit(
+                    StatusCode::OK,
+                    &http::HeaderMap::new(),
+                    &crate::provider::RateLimitPolicy::standard_only(),
+                    crate::provider::RateLimitValue::Unknown,
+                    std::time::SystemTime::now(),
+                ),
             },
             outcome: AttemptResponseBody::Success(body),
         }

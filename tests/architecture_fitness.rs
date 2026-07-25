@@ -102,12 +102,19 @@ fn lifecycle_uses_only_the_new_pipeline_and_old_facades_are_absent() {
     for required in [
         "CallPlanner::plan",
         "ProtocolDispatch::for_kind",
-        "AttemptExecutor::new",
-        "ResponseSession::open",
+        "RequestRunner::new",
     ] {
         assert!(
             lifecycle.contains(required),
             "missing lifecycle stage: {required}"
+        );
+    }
+
+    let runner = production_source("src/execution/request_runner.rs");
+    for required in ["AttemptExecutor::new", "ResponseSession::open"] {
+        assert!(
+            runner.contains(required),
+            "missing request runner stage: {required}"
         );
     }
     for forbidden in [

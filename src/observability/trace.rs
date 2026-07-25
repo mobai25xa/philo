@@ -1,3 +1,4 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,8 +6,9 @@ use crate::domain::{
     FinishReason, GenerationId, LocalRequestId, ModelId, ProtocolId, ProviderId, ProviderRequestId,
     TraceId,
 };
-use crate::error::{AuthFailureKind, ErrorStage, LlmError};
+use crate::error::{AuthFailureKind, ErrorStage, LlmError, RetryReason, TimeoutStage};
 use crate::provider::HeaderTraceEntry;
+use crate::provider::{IdempotencyCapability, IdempotencyKeySource};
 
 /// Stable, low-cardinality failure category for lifecycle diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +38,64 @@ pub enum LifecycleErrorCategory {
     Timeout,
     /// Caller cancellation.
     Cancelled,
+}
+
+/// SDK-generated identifier for one provider HTTP attempt.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AttemptId(String);
+
+impl AttemptId {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Returns the opaque attempt identifier.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Typed identity for one one-based provider attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttemptIdentity {
+    id: AttemptId,
+    number: u32,
+}
+
+/// Stable reason why the retry boundary did not authorize another attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RetryStopReason {
+    /// The failed attempt was not classified as retryable.
+    NonRetryable,
+    /// A domain event had already crossed the public delivery boundary.
+    DeliveryBoundaryClosed,
+    /// The configured attempt limit had been reached.
+    AttemptsExhausted,
+    /// The overall deadline could not fit the wait and minimum next-attempt budget.
+    DeadlineInsufficient,
+    /// Replaying this logical request was not considered safe.
+    ReplayUnsafe,
+}
+
+impl AttemptIdentity {
+    pub(crate) fn new(id: AttemptId, number: u32) -> Self {
+        debug_assert!(number > 0);
+        Self { id, number }
+    }
+
+    /// Returns the SDK-generated attempt ID.
+    #[must_use]
+    pub fn id(&self) -> &AttemptId {
+        &self.id
+    }
+
+    /// Returns the one-based attempt number.
+    #[must_use]
+    pub const fn number(&self) -> u32 {
+        self.number
+    }
 }
 
 impl LifecycleErrorCategory {
@@ -133,6 +193,25 @@ pub enum LifecycleEventKind {
     RequestStarted,
     /// Domain and capability validation completed.
     ValidationCompleted,
+    /// Logical request idempotency was resolved without exposing the key value.
+    IdempotencyPrepared {
+        /// Reviewed provider capability.
+        capability: IdempotencyCapability,
+        /// Whether this logical request carries a key.
+        present: bool,
+        /// Caller or SDK source when a key is present.
+        source: Option<IdempotencyKeySource>,
+    },
+    /// A fresh provider attempt began.
+    AttemptStarted {
+        /// Typed identity unique within the logical request.
+        attempt: AttemptIdentity,
+    },
+    /// Dynamic credential and protected header resolution completed.
+    CredentialResolved {
+        /// Attempt whose credential/header snapshot was resolved.
+        attempt: AttemptIdentity,
+    },
     /// The immutable endpoint was selected.
     EndpointResolved,
     /// Header and authentication layers resolved successfully.
@@ -149,6 +228,62 @@ pub enum LifecycleEventKind {
         /// Provider response-header identifier, when valid.
         provider_request_id: Option<ProviderRequestId>,
     },
+    /// Typed rate-limit response metadata was observed without retaining raw header values.
+    RateLimitObserved {
+        /// Whether this attempt received HTTP 429.
+        status_is_rate_limited: bool,
+        /// Whether a valid standard or typed provider retry delay was present.
+        retry_after_valid: bool,
+        /// Whether any typed provider quota/reset field was present.
+        provider_fields_present: bool,
+    },
+    /// One attempt failed before logical request completion.
+    AttemptFailed {
+        /// Identity of the failed attempt.
+        attempt: AttemptIdentity,
+        /// Stable value-free error category.
+        category: LifecycleErrorCategory,
+    },
+    /// One attempt ended in a precisely classified timeout.
+    AttemptTimedOut {
+        /// Identity of the timed-out attempt.
+        attempt: AttemptIdentity,
+        /// Precise lifecycle stage whose budget elapsed.
+        stage: TimeoutStage,
+        /// Whether the overall deadline shortened the stage timeout.
+        overall_limited: bool,
+    },
+    /// The retry policy made a value-free decision for a failed attempt.
+    RetryDecided {
+        /// Identity of the failed attempt.
+        attempt: AttemptIdentity,
+        /// Retry reason when another attempt was authorized.
+        reason: Option<RetryReason>,
+        /// Stable stop reason when another attempt was not authorized.
+        stop_reason: Option<RetryStopReason>,
+    },
+    /// The runner authorized a new attempt without changing provider route.
+    RetryScheduled {
+        /// Identity of the failed attempt.
+        previous_attempt: AttemptIdentity,
+        /// One-based number of the next attempt.
+        next_attempt_number: u32,
+        /// Stable low-cardinality decision reason.
+        reason: RetryReason,
+        /// Effective bounded wait before the next attempt.
+        delay: Duration,
+        /// Whether a valid server delay contributed to the effective wait.
+        server_delay_applied: bool,
+        /// Whether a valid server delay was reduced to the configured safety cap.
+        server_delay_capped: bool,
+    },
+    /// A retryable failure could not open another attempt within the active bounds.
+    RetryExhausted {
+        /// Identity of the final failed attempt.
+        attempt: AttemptIdentity,
+        /// Stable reason that closed the retry path.
+        reason: RetryStopReason,
+    },
     /// The first parsed domain event became available.
     FirstSseEvent {
         /// Provider response-header identifier, when available.
@@ -156,6 +291,8 @@ pub enum LifecycleEventKind {
         /// Generation body identifier, when available.
         generation_id: Option<GenerationId>,
     },
+    /// The first parsed domain event crossed the public delivery boundary.
+    FirstDomainEventDelivered,
     /// A supported finish reason was observed.
     FinishSeen {
         /// Normalized supported reason.
@@ -174,17 +311,17 @@ pub enum LifecycleEventKind {
     RequestFailed {
         /// Stable error classification.
         category: LifecycleErrorCategory,
-        /// Whether at least one non-empty text delta was returned.
+        /// Whether at least one domain event was returned to the caller.
         partial_output: bool,
     },
     /// The caller cancelled or dropped the request.
     RequestCancelled {
-        /// Whether at least one non-empty text delta was returned.
+        /// Whether at least one domain event was returned to the caller.
         partial_output: bool,
     },
     /// The overall deadline elapsed.
     RequestTimedOut {
-        /// Whether at least one non-empty text delta was returned.
+        /// Whether at least one domain event was returned to the caller.
         partial_output: bool,
     },
 }
@@ -236,4 +373,8 @@ impl LifecycleEvent {
 pub trait LifecycleObserver: Send + Sync {
     /// Records one lifecycle transition.
     fn record(&self, event: &LifecycleEvent);
+}
+
+pub(crate) fn record_safely(observer: &dyn LifecycleObserver, event: &LifecycleEvent) {
+    let _ = catch_unwind(AssertUnwindSafe(|| observer.record(event)));
 }

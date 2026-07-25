@@ -17,6 +17,7 @@ use super::super::endpoint::{CredentialAudience, EndpointConfig};
 use super::super::headers::DynamicHeaderPolicy;
 use super::super::profile::{ProviderProfile, ProviderProfileParts};
 use super::super::runtime::ProviderRuntime;
+use super::super::{IdempotencyPolicy, RateLimitPolicy};
 
 /// Stable phase-one official `OpenAI` profile constructor.
 #[derive(Clone, Debug)]
@@ -162,6 +163,8 @@ impl OfficialOpenAiProfile {
             resource_limits: self.resource_limits,
             sse: self.sse,
             max_http_error_body_bytes: self.max_http_error_body_bytes,
+            rate_limit: RateLimitPolicy::standard_only(),
+            idempotency: IdempotencyPolicy::unknown(),
             test_only: false,
         })
     }

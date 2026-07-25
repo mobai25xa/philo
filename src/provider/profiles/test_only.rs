@@ -17,6 +17,7 @@ use super::super::endpoint::{CredentialAudience, EndpointConfig, resolve_test_on
 use super::super::headers::DynamicHeaderPolicy;
 use super::super::profile::{ProviderProfile, ProviderProfileParts};
 use super::super::runtime::ProviderRuntime;
+use super::super::{IdempotencyPolicy, RateLimitPolicy};
 
 /// Explicit localhost-only profile for offline tests.
 #[doc(hidden)]
@@ -57,6 +58,8 @@ impl TestOnlyProfile {
                 resource_limits: ResourceLimits::official(),
                 sse: SseConfig::default(),
                 max_http_error_body_bytes: 16 * 1024,
+                rate_limit: RateLimitPolicy::standard_only(),
+                idempotency: IdempotencyPolicy::standard_header(),
                 test_only: true,
             })?,
         })
@@ -147,6 +150,20 @@ impl TestOnlyProfile {
         }
         self.profile.max_http_error_body_bytes = limit;
         Ok(self)
+    }
+
+    /// Replaces typed response rate-limit declarations for offline tests.
+    #[must_use]
+    pub fn with_rate_limit_policy(mut self, policy: RateLimitPolicy) -> Self {
+        self.profile.rate_limit = policy;
+        self
+    }
+
+    /// Replaces request-idempotency capability for offline tests.
+    #[must_use]
+    pub fn with_idempotency_policy(mut self, policy: IdempotencyPolicy) -> Self {
+        self.profile.idempotency = policy;
+        self
     }
 
     /// Builds the test runtime.

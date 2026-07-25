@@ -17,6 +17,7 @@ use super::catalog::{ModelCatalog, ProductId};
 use super::compat::{CompatPatch, OpenRouterRoutingContract};
 use super::endpoint::{CredentialAudience, EndpointConfig, resolve_official, resolve_test_only};
 use super::headers::{DynamicHeaderPolicy, HeaderOperation};
+use super::{IdempotencyPolicy, RateLimitPolicy};
 
 /// Declarative provider configuration validated into a [`super::runtime::ProviderRuntime`].
 #[derive(Clone)]
@@ -42,6 +43,8 @@ pub struct ProviderProfile {
     pub(super) resource_limits: ResourceLimits,
     pub(super) sse: SseConfig,
     pub(super) max_http_error_body_bytes: usize,
+    pub(super) rate_limit: RateLimitPolicy,
+    pub(super) idempotency: IdempotencyPolicy,
     pub(super) test_only: bool,
 }
 
@@ -68,6 +71,8 @@ pub(super) struct ProviderProfileParts {
     pub(super) resource_limits: ResourceLimits,
     pub(super) sse: SseConfig,
     pub(super) max_http_error_body_bytes: usize,
+    pub(super) rate_limit: RateLimitPolicy,
+    pub(super) idempotency: IdempotencyPolicy,
     pub(super) test_only: bool,
 }
 
@@ -126,6 +131,8 @@ impl ProviderProfile {
             resource_limits: parts.resource_limits,
             sse: parts.sse,
             max_http_error_body_bytes: parts.max_http_error_body_bytes,
+            rate_limit: parts.rate_limit,
+            idempotency: parts.idempotency,
             test_only: parts.test_only,
         })
     }
@@ -163,6 +170,20 @@ impl ProviderProfile {
     /// Returns transport options.
     pub fn transport_options(&self) -> ProviderTransportOptions {
         self.transport
+    }
+
+    /// Replaces typed provider response rate-limit header declarations.
+    #[must_use]
+    pub fn with_rate_limit_policy(mut self, policy: RateLimitPolicy) -> Self {
+        self.rate_limit = policy;
+        self
+    }
+
+    /// Replaces the provider's reviewed request-idempotency capability.
+    #[must_use]
+    pub fn with_idempotency_policy(mut self, policy: IdempotencyPolicy) -> Self {
+        self.idempotency = policy;
+        self
     }
 }
 
@@ -221,6 +242,8 @@ mod tests {
             resource_limits: ResourceLimits::official(),
             sse: SseConfig::default(),
             max_http_error_body_bytes,
+            rate_limit: RateLimitPolicy::standard_only(),
+            idempotency: IdempotencyPolicy::unknown(),
             test_only: false,
         }
     }

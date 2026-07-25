@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures_core::Stream;
+use futures_util::task::noop_waker_ref;
 use futures_util::{StreamExt as _, stream};
 use philo::{
     ByteStream, ErrorStage, LlmError, RetriableHint, SseConfig, SseDecoder, SseError, SseEvent,
@@ -263,4 +264,39 @@ async fn slow_consumer_does_not_poll_past_buffered_event() {
     assert_eq!(polls.load(Ordering::SeqCst), 1);
     assert_eq!(decoder.next().await.unwrap().unwrap().data(), "three");
     assert_eq!(polls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn one_poll_has_a_bounded_upstream_chunk_budget() {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let body: ByteStream = Box::pin(CountingStream {
+        chunks: (0..100)
+            .map(|_| Ok(Bytes::from_static(b": keepalive\n")))
+            .collect(),
+        polls: Arc::clone(&polls),
+    });
+    let config = SseConfig::default().with_poll_budget(1024, 3, 3).unwrap();
+    let mut decoder = Box::pin(SseDecoder::with_config(body, config));
+    let mut context = Context::from_waker(noop_waker_ref());
+
+    assert!(matches!(
+        decoder.as_mut().poll_next(&mut context),
+        Poll::Pending
+    ));
+    assert_eq!(polls.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn oversized_upstream_chunk_fails_without_retaining_it() {
+    let config = SseConfig::default().with_max_chunk_bytes(4).unwrap();
+    let results = decode_chunks(vec![Bytes::from_static(b"12345")], config).await;
+    assert!(matches!(
+        results.as_slice(),
+        [Err(SseError::LimitExceeded {
+            resource: SseLimit::ChunkBytes,
+            limit: 4,
+            observed: 5,
+            ..
+        })]
+    ));
 }

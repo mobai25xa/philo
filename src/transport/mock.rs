@@ -3,13 +3,14 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::stream;
 use http::{HeaderMap, Method, StatusCode};
+use tokio::sync::Notify;
 use tokio::time::sleep;
 
 use crate::domain::LocalRequestId;
@@ -25,6 +26,47 @@ use super::{
 pub struct MockBodyItem {
     delay: Duration,
     item: Result<Bytes, LlmError>,
+    gate: Option<MockGate>,
+}
+
+/// Deterministic one-way gate for fault and race tests.
+#[derive(Clone, Default)]
+pub struct MockGate {
+    inner: Arc<MockGateInner>,
+}
+
+#[derive(Default)]
+struct MockGateInner {
+    open: AtomicBool,
+    notify: Notify,
+}
+
+impl MockGate {
+    /// Creates a closed gate.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Opens the gate permanently and wakes all current waiters.
+    pub fn open(&self) {
+        self.inner.open.store(true, Ordering::Release);
+        self.inner.notify.notify_waiters();
+    }
+
+    /// Returns whether the gate has been opened.
+    pub fn is_open(&self) -> bool {
+        self.inner.open.load(Ordering::Acquire)
+    }
+
+    async fn wait(&self) {
+        while !self.is_open() {
+            let notified = self.inner.notify.notified();
+            if self.is_open() {
+                break;
+            }
+            notified.await;
+        }
+    }
 }
 
 impl MockBodyItem {
@@ -33,6 +75,7 @@ impl MockBodyItem {
         Self {
             delay: Duration::ZERO,
             item: Ok(bytes.into()),
+            gate: None,
         }
     }
 
@@ -41,6 +84,7 @@ impl MockBodyItem {
         Self {
             delay,
             item: Ok(bytes.into()),
+            gate: None,
         }
     }
 
@@ -49,6 +93,7 @@ impl MockBodyItem {
         Self {
             delay: Duration::ZERO,
             item: Err(error),
+            gate: None,
         }
     }
 
@@ -57,7 +102,15 @@ impl MockBodyItem {
         Self {
             delay,
             item: Err(error),
+            gate: None,
         }
+    }
+
+    /// Blocks this body item at a deterministic gate before applying its delay.
+    #[must_use]
+    pub fn behind_gate(mut self, gate: MockGate) -> Self {
+        self.gate = Some(gate);
+        self
     }
 }
 
@@ -205,6 +258,7 @@ struct MockInner {
     captured: Mutex<Vec<CapturedRequest>>,
     early_body_drops: AtomicUsize,
     body_cancellations: AtomicUsize,
+    body_polls: AtomicUsize,
 }
 
 /// Concurrent scripted transport with request capture and lifecycle observation.
@@ -234,6 +288,11 @@ impl MockTransport {
         lock(&self.inner.captured).clone()
     }
 
+    /// Drains captured request fixtures so long-running harnesses retain bounded memory.
+    pub fn drain_captured_requests(&self) -> Vec<CapturedRequest> {
+        lock(&self.inner.captured).drain(..).collect()
+    }
+
     /// Returns the number of unconsumed exchanges.
     pub fn remaining_expectations(&self) -> usize {
         lock(&self.inner.exchanges).len()
@@ -257,6 +316,11 @@ impl MockTransport {
     pub fn body_cancellation_count(&self) -> usize {
         self.inner.body_cancellations.load(Ordering::SeqCst)
     }
+
+    /// Returns the number of scripted body items requested by consumers.
+    pub fn body_poll_count(&self) -> usize {
+        self.inner.body_polls.load(Ordering::SeqCst)
+    }
 }
 
 impl fmt::Debug for MockTransport {
@@ -266,6 +330,7 @@ impl fmt::Debug for MockTransport {
             .field("remaining_expectations", &self.remaining_expectations())
             .field("early_body_drops", &self.early_body_drop_count())
             .field("body_cancellations", &self.body_cancellation_count())
+            .field("body_polls", &self.body_poll_count())
             .finish()
     }
 }
@@ -346,13 +411,21 @@ fn mock_body_stream(
             state.guard.complete();
             return None;
         };
-        match await_with_lifecycle(&state.lifecycle, sleep(item.delay)).await {
+        state.guard.inner.body_polls.fetch_add(1, Ordering::SeqCst);
+        let MockBodyItem { delay, item, gate } = item;
+        let readiness = async move {
+            if let Some(gate) = gate {
+                gate.wait().await;
+            }
+            sleep(delay).await;
+        };
+        match await_with_lifecycle(&state.lifecycle, readiness).await {
             Ok(()) => {
-                if item.item.is_err() {
+                if item.is_err() {
                     state.terminated = true;
                     state.guard.complete();
                 }
-                Some((item.item, state))
+                Some((item, state))
             }
             Err(error) => {
                 state.terminated = true;
