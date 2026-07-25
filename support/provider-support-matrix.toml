@@ -16,22 +16,22 @@ effective_status = "Experimental"
 evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
 offline_evidence_id = "p3-012-real-providers"
 fixture_manifest = "provider-compat/openrouter/manifest.toml"
-candidate_sha = ""
-run_url = ""
+candidate_sha = "1f54a42176d3f1deaf1eb1bde2681e22a63662b4"
+run_url = "https://github.com/mobai25xa/philo/actions/runs/30106489910"
 online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
-limitations = ["hosted-ci-pending", "optional-capabilities-unknown", "cost-native-finish-reasoning-not-public", "local-online-not-hosted"]
+limitations = ["hosted-protected-online", "optional-capabilities-unknown", "cost-native-finish-reasoning-not-public", "not-supported-until-full-gate"]
 
 [[entries.capabilities]]
 case = "text_stream"
 status = "Experimental"
-evidence_id = "online:openrouter-chat"
+evidence_id = "hosted:openrouter-chat"
 
 [[entries.capabilities]]
 case = "usage_and_request_id"
 status = "Experimental"
-evidence_id = "online:openrouter-chat"
+evidence_id = "hosted:openrouter-chat"
 
 [[entries.capabilities]]
 case = "single_tool"
@@ -96,22 +96,22 @@ effective_status = "Experimental"
 evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
 offline_evidence_id = "p3-012-real-providers"
 fixture_manifest = "provider-compat/zai-standard/manifest.toml"
-candidate_sha = ""
-run_url = ""
+candidate_sha = "1f54a42176d3f1deaf1eb1bde2681e22a63662b4"
+run_url = "https://github.com/mobai25xa/philo/actions/runs/30106679021"
 online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
-limitations = ["hosted-ci-pending", "optional-capabilities-unknown", "thinking-tool-stream-not-enabled", "local-online-not-hosted"]
+limitations = ["hosted-protected-online", "optional-capabilities-unknown", "thinking-tool-stream-not-enabled", "not-supported-until-full-gate"]
 
 [[entries.capabilities]]
 case = "text_stream"
 status = "Experimental"
-evidence_id = "online:zai-standard-api"
+evidence_id = "hosted:zai-standard-api"
 
 [[entries.capabilities]]
 case = "usage_and_request_id"
 status = "Experimental"
-evidence_id = "online:zai-standard-api"
+evidence_id = "hosted:zai-standard-api"
 
 [[entries.capabilities]]
 case = "single_tool"
@@ -136,22 +136,22 @@ effective_status = "Experimental"
 evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
 offline_evidence_id = "p3-012-real-providers"
 fixture_manifest = "provider-compat/zai-coding/manifest.toml"
-candidate_sha = ""
-run_url = ""
+candidate_sha = "1f54a42176d3f1deaf1eb1bde2681e22a63662b4"
+run_url = "https://github.com/mobai25xa/philo/actions/runs/30138294979"
 online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
-limitations = ["hosted-ci-pending", "optional-capabilities-unknown", "coding-key-product-scoped", "thinking-tool-stream-not-enabled", "local-online-not-hosted"]
+limitations = ["hosted-protected-online", "optional-capabilities-unknown", "coding-key-product-scoped", "thinking-tool-stream-not-enabled", "not-supported-until-full-gate"]
 
 [[entries.capabilities]]
 case = "text_stream"
 status = "Experimental"
-evidence_id = "online:zai-coding-plan"
+evidence_id = "hosted:zai-coding-plan"
 
 [[entries.capabilities]]
 case = "usage_and_request_id"
 status = "Experimental"
-evidence_id = "online:zai-coding-plan"
+evidence_id = "hosted:zai-coding-plan"
 
 [[entries.capabilities]]
 case = "single_tool"
