@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use http::{HeaderMap, header};
 use tokio::time::Instant;
@@ -9,17 +10,25 @@ use tokio::time::Instant;
 use crate::domain::{LocalRequestId, ProviderRequestId};
 use crate::error::{LlmError, ProtocolError, ValidationError, ValidationReason};
 use crate::observability::{
-    LifecycleEvent, LifecycleEventKind, LifecycleIdentity, LifecycleObserver,
+    AttemptIdentity, LifecycleEvent, LifecycleEventKind, LifecycleIdentity, LifecycleObserver,
 };
 use crate::protocol::{
     ExpectedContentType, PreparedCall, ProtocolOperation, ResponseMeta, ResponsePlan,
 };
-use crate::provider::ProviderRuntime;
 use crate::provider::runtime::HeaderAttemptContext;
+use crate::provider::{
+    ProviderRuntime, RateLimitHeaderKind, RateLimitValue, ResolvedIdempotency, observe_rate_limit,
+};
 use crate::transport::{
     ByteStream, HttpRequest, LimitedBody, RequestLifecycle, Transport, TransportContext,
-    lifecycle_preflight, read_body_limited,
+    await_with_stage, lifecycle_preflight, read_body_limited,
 };
+
+use super::reliability::{RetryAfterHeader, TimeoutPolicy, parse_retry_after};
+
+const MAX_RESPONSE_HEADER_FIELDS: usize = 128;
+const MAX_RESPONSE_HEADER_VALUE_BYTES: usize = 16 * 1024;
+const MAX_RESPONSE_HEADER_TOTAL_BYTES: usize = 64 * 1024;
 
 /// Value-free observation context retained for one logical call.
 #[derive(Clone)]
@@ -42,12 +51,11 @@ impl AttemptObservation {
         }
     }
 
-    fn emit(&self, kind: LifecycleEventKind) {
-        self.observer.record(&LifecycleEvent::new(
-            self.identity.clone(),
-            self.started.elapsed(),
-            kind,
-        ));
+    pub(crate) fn emit(&self, kind: LifecycleEventKind) {
+        crate::observability::trace::record_safely(
+            &*self.observer,
+            &LifecycleEvent::new(self.identity.clone(), self.started.elapsed(), kind),
+        );
     }
 }
 
@@ -64,9 +72,11 @@ impl fmt::Debug for AttemptObservation {
 #[derive(Clone, Debug)]
 pub(crate) struct AttemptContext {
     pub(crate) local_request_id: LocalRequestId,
-    pub(crate) attempt_number: u32,
+    pub(crate) attempt: AttemptIdentity,
     pub(crate) lifecycle: RequestLifecycle,
+    pub(crate) timeouts: TimeoutPolicy,
     pub(crate) observation: Option<AttemptObservation>,
+    pub(crate) idempotency: ResolvedIdempotency,
 }
 
 /// Owned response metadata, policy, and body outcome from one HTTP attempt.
@@ -113,13 +123,14 @@ impl AttemptExecutor {
         Self { transport }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) async fn execute(
         &self,
         runtime: &ProviderRuntime,
         call: PreparedCall,
         context: AttemptContext,
     ) -> Result<AttemptResponse, LlmError> {
-        if context.attempt_number == 0 {
+        if context.attempt.number() == 0 {
             return Err(ValidationError::new(
                 "attempt_number",
                 ValidationReason::Zero,
@@ -133,10 +144,16 @@ impl AttemptExecutor {
         };
         emit(&context, LifecycleEventKind::EndpointResolved);
 
-        let resolved = runtime
-            .resolve_headers_for_attempt(
+        let resolved = await_with_stage(
+            &context.lifecycle,
+            crate::error::TimeoutStage::Credential,
+            Some(context.timeouts.credential_timeout()),
+            Some(context.attempt.number()),
+            false,
+            runtime.resolve_headers_for_attempt(
                 call.request.protocol_headers,
                 Vec::new(),
+                context.idempotency.operation()?.into_iter().collect(),
                 &call.execution.request_headers,
                 HeaderAttemptContext {
                     endpoint: &endpoint,
@@ -144,10 +161,17 @@ impl AttemptExecutor {
                     lifecycle: &context.lifecycle,
                     model_id: &call.target.domain_model,
                     local_request_id: &context.local_request_id,
-                    attempt_number: context.attempt_number,
+                    attempt_number: context.attempt.number(),
                 },
-            )
-            .await?;
+            ),
+        )
+        .await??;
+        emit(
+            &context,
+            LifecycleEventKind::CredentialResolved {
+                attempt: context.attempt.clone(),
+            },
+        );
         let (headers, trace) = resolved.into_parts();
         emit(
             &context,
@@ -166,8 +190,17 @@ impl AttemptExecutor {
         .with_lifecycle(context.lifecycle.clone())
         .with_redirect_policy(runtime.transport_options().redirect_policy());
         emit(&context, LifecycleEventKind::TransportStarted);
-        let response = self.transport.execute(request).await?;
+        let response = await_with_stage(
+            &context.lifecycle,
+            crate::error::TimeoutStage::ResponseHeader,
+            Some(context.timeouts.response_header_timeout()),
+            Some(context.attempt.number()),
+            false,
+            self.transport.execute(request),
+        )
+        .await??;
         let (status, response_headers, body) = response.into_parts();
+        validate_response_header_limits(&response_headers)?;
         let provider_request_id = provider_request_id(&response_headers);
         emit(
             &context,
@@ -176,12 +209,16 @@ impl AttemptExecutor {
                 provider_request_id: provider_request_id.clone(),
             },
         );
+        let rate_limit = observed_rate_limit(status, &response_headers, runtime, &context);
+        let retry_after = rate_limit.retry_after_delay();
 
         let meta = ResponseMeta {
             local_request_id: context.local_request_id,
             provider_request_id,
             status,
             header_names: response_headers.keys().cloned().collect(),
+            retry_after,
+            rate_limit,
         };
         let outcome = if status.is_success() {
             validate_success_headers(&call.response, &response_headers)?;
@@ -197,6 +234,62 @@ impl AttemptExecutor {
             outcome,
         })
     }
+}
+
+fn observed_rate_limit(
+    status: http::StatusCode,
+    headers: &HeaderMap,
+    runtime: &ProviderRuntime,
+    context: &AttemptContext,
+) -> crate::provider::RateLimitObservation {
+    let now = SystemTime::now();
+    let mut declarations = vec![RetryAfterHeader::Standard];
+    declarations.extend(
+        runtime
+            .rate_limit_policy()
+            .headers()
+            .iter()
+            .filter_map(|spec| match spec.kind() {
+                RateLimitHeaderKind::RetryAfterSeconds => {
+                    Some(RetryAfterHeader::ProviderDeltaSeconds(spec.name().clone()))
+                }
+                RateLimitHeaderKind::RetryAtUnixSeconds => {
+                    Some(RetryAfterHeader::ProviderUnixSeconds(spec.name().clone()))
+                }
+                RateLimitHeaderKind::RemainingRequests
+                | RateLimitHeaderKind::RemainingUnits(_)
+                | RateLimitHeaderKind::ResetAfterSeconds
+                | RateLimitHeaderKind::ResetAtUnixSeconds => None,
+            }),
+    );
+    let retry = parse_retry_after(headers, &declarations, now);
+    let retry_after = match (retry.present, retry.valid, retry.delay) {
+        (false, _, _) => RateLimitValue::Unknown,
+        (true, true, Some(delay)) => RateLimitValue::Valid(delay),
+        (true, _, _) => RateLimitValue::Invalid,
+    };
+    let observation = observe_rate_limit(
+        status,
+        headers,
+        runtime.rate_limit_policy(),
+        retry_after,
+        now,
+    );
+    let provider_fields_present =
+        !matches!(observation.remaining_requests(), RateLimitValue::Unknown)
+            || !matches!(observation.remaining_units(), RateLimitValue::Unknown)
+            || !matches!(observation.reset(), RateLimitValue::Unknown);
+    if retry.present || provider_fields_present || observation.status_is_rate_limited() {
+        emit(
+            context,
+            LifecycleEventKind::RateLimitObserved {
+                status_is_rate_limited: observation.status_is_rate_limited(),
+                retry_after_valid: matches!(observation.retry_after(), RateLimitValue::Valid(_)),
+                provider_fields_present,
+            },
+        );
+    }
+    observation
 }
 
 impl fmt::Debug for AttemptExecutor {
@@ -219,6 +312,25 @@ fn provider_request_id(headers: &HeaderMap) -> Option<ProviderRequestId> {
         .get("x-request-id")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| ProviderRequestId::new(value).ok())
+}
+
+fn validate_response_header_limits(headers: &HeaderMap) -> Result<(), LlmError> {
+    let mut fields = 0_usize;
+    let mut total_bytes = 0_usize;
+    for (name, value) in headers {
+        fields = fields.saturating_add(1);
+        let value_bytes = value.as_bytes().len();
+        total_bytes = total_bytes
+            .saturating_add(name.as_str().len())
+            .saturating_add(value_bytes);
+        if fields > MAX_RESPONSE_HEADER_FIELDS
+            || value_bytes > MAX_RESPONSE_HEADER_VALUE_BYTES
+            || total_bytes > MAX_RESPONSE_HEADER_TOTAL_BYTES
+        {
+            return Err(ProtocolError::new("response header resource limit exceeded").into());
+        }
+    }
+    Ok(())
 }
 
 fn validate_success_headers(plan: &ResponsePlan, headers: &HeaderMap) -> Result<(), LlmError> {
@@ -251,6 +363,8 @@ mod tests {
 
     use crate::domain::{GenerateRequest, Message, ModelRef};
     use crate::execution::planner::CallPlanner;
+    use crate::execution::reliability::TimeoutPolicy;
+    use crate::observability::{AttemptId, AttemptIdentity};
     use crate::protocol::openai_chat::OpenAiChatDriver;
     use crate::protocol::{OpenAiChatResponsePlan, ProtocolResponsePlan};
     use crate::provider::TestOnlyProfile;
@@ -277,9 +391,17 @@ mod tests {
     fn context() -> AttemptContext {
         AttemptContext {
             local_request_id: crate::domain::LocalRequestId::new("attempt-local").unwrap(),
-            attempt_number: 1,
+            attempt: AttemptIdentity::new(AttemptId::new("attempt-1".to_owned()), 1),
             lifecycle: RequestLifecycle::new(CancellationToken::new()),
+            timeouts: TimeoutPolicy::default(),
             observation: None,
+            idempotency: crate::provider::ResolvedIdempotency::resolve(
+                &crate::provider::IdempotencyPolicy::standard_header(),
+                None,
+                false,
+                false,
+            )
+            .unwrap(),
         }
     }
 
@@ -381,20 +503,29 @@ mod tests {
         let prepared = OpenAiChatDriver.prepare(&plan).unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
         let executor = AttemptExecutor::new(std::sync::Arc::new(mock.clone()));
+        let local_request_id = crate::domain::LocalRequestId::new("logical-request").unwrap();
         for attempt_number in 1..=2 {
             executor
                 .execute(
                     &runtime,
                     prepared.clone(),
                     AttemptContext {
-                        local_request_id: crate::domain::LocalRequestId::new(format!(
-                            "attempt-{attempt_number}"
-                        ))
-                        .unwrap(),
-                        attempt_number,
+                        local_request_id: local_request_id.clone(),
+                        attempt: AttemptIdentity::new(
+                            AttemptId::new(format!("attempt-{attempt_number}")),
+                            attempt_number,
+                        ),
                         lifecycle: RequestLifecycle::new(CancellationToken::new())
                             .with_deadline(deadline),
+                        timeouts: TimeoutPolicy::default(),
                         observation: None,
+                        idempotency: crate::provider::ResolvedIdempotency::resolve(
+                            &crate::provider::IdempotencyPolicy::standard_header(),
+                            None,
+                            false,
+                            false,
+                        )
+                        .unwrap(),
                     },
                 )
                 .await
@@ -402,7 +533,7 @@ mod tests {
         }
         let captured = mock.captured_requests();
         assert_eq!(captured.len(), 2);
-        assert_ne!(
+        assert_eq!(
             captured[0].local_request_id(),
             captured[1].local_request_id()
         );

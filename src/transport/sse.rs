@@ -10,6 +10,11 @@ use futures_core::Stream;
 use super::ByteStream;
 use crate::error::{ErrorStage, LlmError, ProtocolError, ValidationError, ValidationReason};
 
+const DEFAULT_MAX_CHUNK_BYTES: usize = 256 * 1024;
+const DEFAULT_MAX_BYTES_PER_POLL: usize = 64 * 1024;
+const DEFAULT_MAX_CHUNKS_PER_POLL: usize = 16;
+const DEFAULT_MAX_EVENTS_PER_POLL: usize = 32;
+
 /// Resource limits applied while decoding one SSE event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(clippy::struct_field_names)]
@@ -17,6 +22,10 @@ pub struct SseConfig {
     max_event_bytes: usize,
     max_line_bytes: usize,
     max_fields_per_event: Option<usize>,
+    max_chunk_bytes: usize,
+    max_bytes_per_poll: usize,
+    max_chunks_per_poll: usize,
+    max_events_per_poll: usize,
 }
 
 impl SseConfig {
@@ -40,6 +49,10 @@ impl SseConfig {
             max_event_bytes,
             max_line_bytes,
             max_fields_per_event: Some(128),
+            max_chunk_bytes: DEFAULT_MAX_CHUNK_BYTES,
+            max_bytes_per_poll: DEFAULT_MAX_BYTES_PER_POLL,
+            max_chunks_per_poll: DEFAULT_MAX_CHUNKS_PER_POLL,
+            max_events_per_poll: DEFAULT_MAX_EVENTS_PER_POLL,
         })
     }
 
@@ -48,6 +61,29 @@ impl SseConfig {
     pub fn with_max_fields_per_event(mut self, limit: Option<usize>) -> Self {
         self.max_fields_per_event = limit;
         self
+    }
+
+    /// Sets the maximum retained upstream body chunk.
+    pub fn with_max_chunk_bytes(mut self, limit: usize) -> Result<Self, ValidationError> {
+        validate_positive_limit("max_chunk_bytes", limit)?;
+        self.max_chunk_bytes = limit;
+        Ok(self)
+    }
+
+    /// Sets cooperative byte, chunk, and decoded-event work budgets for one poll.
+    pub fn with_poll_budget(
+        mut self,
+        max_bytes: usize,
+        max_chunks: usize,
+        max_events: usize,
+    ) -> Result<Self, ValidationError> {
+        validate_positive_limit("max_bytes_per_poll", max_bytes)?;
+        validate_positive_limit("max_chunks_per_poll", max_chunks)?;
+        validate_positive_limit("max_events_per_poll", max_events)?;
+        self.max_bytes_per_poll = max_bytes;
+        self.max_chunks_per_poll = max_chunks;
+        self.max_events_per_poll = max_events;
+        Ok(self)
     }
 
     /// Returns the maximum raw bytes accepted for one event.
@@ -64,6 +100,37 @@ impl SseConfig {
     pub fn max_fields_per_event(self) -> Option<usize> {
         self.max_fields_per_event
     }
+
+    /// Returns the maximum retained upstream body chunk.
+    pub fn max_chunk_bytes(self) -> usize {
+        self.max_chunk_bytes
+    }
+
+    /// Returns the maximum bytes processed during one decoder poll.
+    pub fn max_bytes_per_poll(self) -> usize {
+        self.max_bytes_per_poll
+    }
+
+    /// Returns the maximum upstream chunks accepted during one decoder poll.
+    pub fn max_chunks_per_poll(self) -> usize {
+        self.max_chunks_per_poll
+    }
+
+    /// Returns the maximum SSE events consumed by one protocol-stream poll.
+    pub fn max_events_per_poll(self) -> usize {
+        self.max_events_per_poll
+    }
+}
+
+fn validate_positive_limit(field: &'static str, value: usize) -> Result<(), ValidationError> {
+    if value == 0 {
+        return Err(ValidationError::new(
+            field,
+            ValidationReason::Zero,
+            "stream work and buffer limits must be positive",
+        ));
+    }
+    Ok(())
 }
 
 impl Default for SseConfig {
@@ -72,6 +139,10 @@ impl Default for SseConfig {
             max_event_bytes: 1024 * 1024,
             max_line_bytes: 64 * 1024,
             max_fields_per_event: Some(128),
+            max_chunk_bytes: DEFAULT_MAX_CHUNK_BYTES,
+            max_bytes_per_poll: DEFAULT_MAX_BYTES_PER_POLL,
+            max_chunks_per_poll: DEFAULT_MAX_CHUNKS_PER_POLL,
+            max_events_per_poll: DEFAULT_MAX_EVENTS_PER_POLL,
         }
     }
 }
@@ -110,6 +181,8 @@ impl SseEvent {
 /// The resource whose configured SSE limit was exceeded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SseLimit {
+    /// Bytes retained from one upstream body chunk.
+    ChunkBytes,
     /// Raw bytes belonging to one event.
     EventBytes,
     /// Bytes belonging to one line.
@@ -401,11 +474,18 @@ impl Stream for SseDecoder {
             return Poll::Ready(None);
         }
 
+        let mut bytes_processed = 0;
+        let mut chunks_polled = 0;
         loop {
             if let Some(chunk) = decoder.chunk.as_ref() {
                 if decoder.chunk_offset < chunk.len() {
+                    if bytes_processed >= decoder.config.max_bytes_per_poll {
+                        context.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
                     let byte = chunk[decoder.chunk_offset];
                     decoder.chunk_offset += 1;
+                    bytes_processed += 1;
                     decoder.process_byte(byte);
                     if let Some(item) = decoder.pending.take() {
                         return Poll::Ready(Some(item));
@@ -419,9 +499,27 @@ impl Stream for SseDecoder {
                 decoder.chunk_offset = 0;
             }
 
+            if chunks_polled >= decoder.config.max_chunks_per_poll {
+                context.waker().wake_by_ref();
+                return Poll::Pending;
+            }
             match decoder.upstream.as_mut().poll_next(context) {
-                Poll::Ready(Some(Ok(chunk))) if chunk.is_empty() => {}
-                Poll::Ready(Some(Ok(chunk))) => decoder.chunk = Some(chunk),
+                Poll::Ready(Some(Ok(chunk))) if chunk.is_empty() => {
+                    chunks_polled += 1;
+                }
+                Poll::Ready(Some(Ok(chunk))) => {
+                    chunks_polled += 1;
+                    if chunk.len() > decoder.config.max_chunk_bytes {
+                        decoder.fail(SseError::LimitExceeded {
+                            resource: SseLimit::ChunkBytes,
+                            limit: decoder.config.max_chunk_bytes,
+                            observed: chunk.len(),
+                            line: decoder.line_number.saturating_add(1),
+                        });
+                        return Poll::Ready(decoder.pending.take());
+                    }
+                    decoder.chunk = Some(chunk);
+                }
                 Poll::Ready(Some(Err(error))) => {
                     decoder.fail(SseError::Upstream(error));
                     return Poll::Ready(decoder.pending.take());

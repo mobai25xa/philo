@@ -35,6 +35,7 @@ use super::headers::{
     HeaderPipeline, HeaderSource, ResolvedHeaders,
 };
 use super::profile::ProviderProfile;
+use super::{IdempotencyPolicy, RateLimitPolicy};
 
 /// Immutable, concurrency-safe provider runtime.
 #[derive(Clone)]
@@ -62,6 +63,8 @@ pub struct ProviderRuntime {
     resource_limits: crate::domain::ResourceLimits,
     sse: SseConfig,
     max_http_error_body_bytes: usize,
+    rate_limit: RateLimitPolicy,
+    idempotency: IdempotencyPolicy,
     pipeline: HeaderPipeline,
 }
 
@@ -133,12 +136,15 @@ impl ProviderRuntime {
             profile.auth.validate_endpoint(&mapped)?;
         }
         let auth_headers = profile.auth.protected_headers();
-        let provider_header_names = profile
+        let mut provider_header_names = profile
             .provider_headers
             .iter()
             .map(HeaderOperation::name)
             .cloned()
             .collect::<Vec<_>>();
+        if let Some(name) = profile.idempotency.header_name() {
+            provider_header_names.push(name.clone());
+        }
         let auth = profile.auth;
         Ok(Self {
             provider_id: profile.provider_id,
@@ -164,6 +170,8 @@ impl ProviderRuntime {
             resource_limits: profile.resource_limits,
             sse: profile.sse,
             max_http_error_body_bytes: profile.max_http_error_body_bytes,
+            rate_limit: profile.rate_limit,
+            idempotency: profile.idempotency,
             pipeline: HeaderPipeline::with_registered_headers(auth_headers, provider_header_names),
         })
     }
@@ -280,6 +288,18 @@ impl ProviderRuntime {
     /// Returns transport options.
     pub fn transport_options(&self) -> ProviderTransportOptions {
         self.transport
+    }
+
+    /// Returns typed provider response rate-limit declarations.
+    #[must_use]
+    pub const fn rate_limit_policy(&self) -> &RateLimitPolicy {
+        &self.rate_limit
+    }
+
+    /// Returns the reviewed provider request-idempotency policy.
+    #[must_use]
+    pub const fn idempotency_policy(&self) -> &IdempotencyPolicy {
+        &self.idempotency
     }
 
     /// Compiles the immutable, target-aware policy used for one logical call.
@@ -462,6 +482,7 @@ impl ProviderRuntime {
         &self,
         protocol: Vec<HeaderOperation>,
         model: Vec<HeaderOperation>,
+        request_identity: Vec<HeaderOperation>,
         request: &HeaderMap,
         attempt: HeaderAttemptContext<'_>,
     ) -> Result<ResolvedHeaders, LlmError> {
@@ -502,10 +523,12 @@ impl ProviderRuntime {
         } else {
             Vec::new()
         };
+        let mut provider_operations = self.provider_headers.to_vec();
+        provider_operations.extend(request_identity);
         let resolved = self.pipeline.resolve_without_auth_assumption(vec![
             HeaderLayer::new(HeaderSource::Transport, Vec::new()),
             HeaderLayer::new(HeaderSource::Protocol, protocol),
-            HeaderLayer::new(HeaderSource::Provider, self.provider_headers.to_vec()),
+            HeaderLayer::new(HeaderSource::Provider, provider_operations),
             HeaderLayer::new(
                 HeaderSource::ClientIdentity,
                 vec![self.client_identity.operation()?],

@@ -2,7 +2,7 @@
 
 `philo` is an experimental, streaming-first Rust SDK for LLM applications.
 
-The official OpenAI Chat Completions adapter implements the frozen phase-one text path and the phase-two official semantics for function tools, tool streams/results, history normalization, image inputs, reasoning effort/usage, structured output, and local cost estimation. Phase three adds experimental OpenRouter, DeepSeek, and Z.AI profiles plus versioned configuration, typed compatibility policy, deployment mapping, diagnostics, and offline conformance. Automatic retry and arbitrary request-body extensions remain out of scope.
+The official OpenAI Chat Completions adapter implements the frozen phase-one text path and the phase-two official semantics for function tools, tool streams/results, history normalization, image inputs, reasoning effort/usage, structured output, and local cost estimation. Phase three adds experimental OpenRouter, DeepSeek, and Z.AI profiles plus versioned configuration, typed compatibility policy, deployment mapping, diagnostics, and offline conformance. Phase four adds bounded deadlines, stage timeouts, opt-in same-provider retry, backpressure, typed rate/idempotency metadata, secure network policy, and value-free lifecycle hooks. Arbitrary request-body extensions remain out of scope.
 
 Behavior contracts:
 
@@ -25,7 +25,11 @@ The current implementation includes:
 - rustls-backed transport with fail-closed headers/auth/body limits.
 - experimental exact-product profiles for OpenRouter, DeepSeek, Z.AI standard,
   and Z.AI coding, all currently backed by offline contract evidence only;
-- value-free provider diagnostics and a five-state support vocabulary.
+- value-free provider diagnostics and a five-state support vocabulary;
+- one absolute deadline across attempts, layered timeouts, cancellable full-jitter
+  waits, and a permanent no-retry boundary after the first delivered event;
+- an optional `tracing` lifecycle adapter without an SDK-owned subscriber/exporter;
+- offline benchmark, fault-matrix, and per-client soak harnesses.
 
 Capabilities that are `Unknown` for an exact model id fail closed. The SDK never executes tools; applications validate, authorize, and run them.
 
@@ -58,12 +62,23 @@ Examples:
 - phase three: `provider_profiles.rs`, `provider_diagnostics.rs`,
   `provider_auth_shapes.rs`, `provider_config.rs`, `deployment_mapping.rs`,
   `provider_routing.rs`
+- phase four: `reliability_controls.rs`, `lifecycle_observer.rs`,
+  and `slow_consumer_drop.rs`; the offline soak lives in
+  `benches/phase4_client_soak.rs`
 
 Provider guides live in the workspace under `docs/philo/stage/guide/providers/`.
 The standalone repository keeps its checked support declaration in
 [`support/provider-support-matrix.md`](./support/provider-support-matrix.md),
 with [`provider-support-matrix.toml`](./support/provider-support-matrix.toml) as
 the machine-readable source of truth.
+
+Reliability guidance:
+
+- [`support/reliability-configuration.md`](./support/reliability-configuration.md)
+- [`support/reliability-troubleshooting.md`](./support/reliability-troubleshooting.md)
+- [`support/security-boundary.md`](./support/security-boundary.md)
+- [`support/phase4-migration.md`](./support/phase4-migration.md)
+- [`docs/phase-4/README.md`](./docs/phase-4/README.md)
 
 ## Build
 
@@ -110,7 +125,7 @@ See [`SECURITY.md`](./SECURITY.md) for reporting and handling expectations.
 ## Limitations
 
 The official adapter still does not support audio, prompt-cache controls,
-the Responses API, automatic retry, arbitrary
+the Responses API, cross-provider fallback, arbitrary
 `extra_body`, dangerous header overrides, or automatic tool execution. Visible
 thinking text and opaque reasoning signatures are not produced by Official Chat
 Completions in phase two; synthetic phase-three boundary fixtures only prove

@@ -151,8 +151,6 @@ impl ChatStateMachine {
         {
             return Err(Self::protocol("invalid chat completion chunk object"));
         }
-        self.record_unknown_fields(&chunk);
-
         let prepared = PreparedChunk::validate(
             &chunk,
             self.finish_reason.as_ref(),
@@ -160,6 +158,16 @@ impl ChatStateMachine {
             self.response_compat.finish_reason,
             self.response_compat.usage,
         )?;
+        if chunk.choices.iter().any(|choice| {
+            choice
+                .delta
+                .as_ref()
+                .and_then(|delta| delta.tool_calls.as_ref())
+                .is_some_and(|tool_calls| tool_calls.len() > self.limits.max_tool_calls)
+        }) {
+            return Err(Self::protocol("tool call array exceeds resource limit"));
+        }
+        self.record_unknown_fields(&chunk);
         self.observe_identity(chunk.id.as_deref(), chunk.model.as_deref())?;
 
         let mut events = Vec::new();
@@ -1560,6 +1568,30 @@ mod tests {
         assert!(debug.contains("unknown_field_count: 4"));
         assert!(!debug.contains("canary-value"));
         assert!(!debug.contains("private"));
+    }
+
+    #[test]
+    fn unknown_field_audit_is_bounded_across_long_streams() {
+        let mut machine = ChatStateMachine::new_with_format(
+            context(),
+            ResponseFormat::Text,
+            ResourceLimits::official().into(),
+            ResponseCompat::default(),
+        );
+        for index in 0..400 {
+            let mut chunk: ChatCompletionChunkWire = serde_json::from_value(serde_json::json!({
+                "id": "audit",
+                "model": "gpt",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": null}],
+            }))
+            .unwrap();
+            chunk
+                .extra
+                .insert(format!("future_{index}"), serde_json::Value::Bool(true));
+            machine.record_unknown_fields(&chunk);
+        }
+        assert_eq!(machine.unknown_fields.len(), 256);
+        assert!(machine.unknown_fields.contains("diagnostic.<truncated>"));
     }
 
     #[test]

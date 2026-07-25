@@ -29,10 +29,10 @@ jobs:
           actual="$(git rev-parse HEAD)"
           test "$actual" = "$PHILO_GATE_SUBJECT"
           {
-            echo "## Phase 2 hosted CI"
+            echo "## Hosted CI"
             echo ""
             echo "- Subject commit: \`$actual\`"
-            echo "- Contract: \`philo/openai-chat-p2 1.1.0\`"
+            echo "- Contract: \`philo/reliability-p4 1.0.0\`"
             echo "- Event: \`$GITHUB_EVENT_NAME\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: dtolnay/rust-toolchain@stable
@@ -112,8 +112,8 @@ jobs:
           manifest-path: Cargo.toml
           command: check
 
-  phase-2-gate:
-    name: Phase 2 hosted CI gate
+  hosted-ci-gate:
+    name: Hosted CI gate
     if: always()
     needs: [quality, platforms, msrv, features, dependencies]
     runs-on: ubuntu-latest
@@ -135,5 +135,5 @@ jobs:
             echo "## Hosted CI gate passed"
             echo ""
             echo "- Subject commit: \`$PHILO_GATE_SUBJECT\`"
-            echo "- Contract: \`philo/openai-chat-p2 1.1.0\`"
+            echo "- Contract: \`philo/reliability-p4 1.0.0\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -11,6 +11,9 @@ use crate::error::{
 use crate::provider::call_policy::ResponseLimits;
 use crate::provider::{FinishReasonCompat, UsageCompat};
 
+const MAX_RECORDED_UNKNOWN_FIELDS: usize = 256;
+const TRUNCATED_UNKNOWN_FIELDS: &str = "diagnostic.<truncated>";
+
 pub(super) struct StructuredTerminal {
     response_format: ResponseFormat,
     text_buffer: Option<String>,
@@ -234,6 +237,10 @@ pub(super) fn record_field_names<'a>(
     names: impl Iterator<Item = &'a String>,
 ) {
     for name in names {
+        if destination.len() >= MAX_RECORDED_UNKNOWN_FIELDS.saturating_sub(1) {
+            destination.insert(TRUNCATED_UNKNOWN_FIELDS.to_owned());
+            break;
+        }
         let safe = if name.len() <= 64
             && name
                 .bytes()

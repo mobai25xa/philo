@@ -11,18 +11,25 @@ use crate::domain::{
     AssistantEvent, AssistantMessage, GenerateRequest, LocalRequestId, RequestTimeout, TraceId,
     collect_assistant_message_for_format,
 };
-use crate::error::{
-    ErrorStage, LlmError, TimeoutError, TruncatedStreamError, ValidationError, ValidationReason,
-};
-use crate::execution::executor::{AttemptContext, AttemptExecutor, AttemptObservation};
+use crate::error::{LlmError, TruncatedStreamError, ValidationError, ValidationReason};
+use crate::execution::executor::AttemptObservation;
 use crate::execution::planner::CallPlanner;
+use crate::execution::reliability::{
+    RequestExecutionState, RetryPolicy, RetryWaitPolicy, TimeoutPolicy,
+};
+use crate::execution::request_runner::RequestRunner;
 use crate::observability::{
     LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind, LifecycleIdentity,
     LifecycleObserver,
 };
-use crate::protocol::{ProtocolDispatch, ResponseSession};
-use crate::provider::{ProviderRequestOptions, ProviderRuntime};
-use crate::transport::{CancellationToken, RequestLifecycle, ReqwestTransport, Transport};
+use crate::protocol::ProtocolDispatch;
+use crate::provider::{
+    IdempotencyKey, ProviderRequestOptions, ProviderRuntime, ResolvedIdempotency,
+};
+use crate::transport::{
+    CancellationToken, NetworkPolicy, RequestLifecycle, ReqwestTransport, Transport,
+    lifecycle_preflight,
+};
 
 type EventStream = Pin<Box<dyn Stream<Item = Result<AssistantEvent, LlmError>> + Send + 'static>>;
 
@@ -32,6 +39,11 @@ pub struct RequestControl {
     cancellation: CancellationToken,
     trace_id: Option<TraceId>,
     provider_options: ProviderRequestOptions,
+    timeout_policy: Option<TimeoutPolicy>,
+    retry_policy: Option<RetryPolicy>,
+    retry_wait_policy: Option<RetryWaitPolicy>,
+    idempotency_key: Option<IdempotencyKey>,
+    generate_idempotency_key: bool,
 }
 
 impl RequestControl {
@@ -77,6 +89,73 @@ impl RequestControl {
     pub fn provider_options(&self) -> &ProviderRequestOptions {
         &self.provider_options
     }
+
+    /// Requests stage timeouts that may only tighten the client policy.
+    #[must_use]
+    pub fn with_timeout_policy(mut self, policy: TimeoutPolicy) -> Self {
+        self.timeout_policy = Some(policy);
+        self
+    }
+
+    /// Returns the request timeout override, when configured.
+    #[must_use]
+    pub const fn timeout_policy(&self) -> Option<TimeoutPolicy> {
+        self.timeout_policy
+    }
+
+    /// Requests retry bounds that may only tighten the client policy.
+    #[must_use]
+    pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = Some(policy);
+        self
+    }
+
+    /// Returns the request retry override, when configured.
+    #[must_use]
+    pub const fn retry_policy(&self) -> Option<RetryPolicy> {
+        self.retry_policy
+    }
+
+    /// Requests retry-wait bounds that may only tighten the client policy.
+    #[must_use]
+    pub fn with_retry_wait_policy(mut self, policy: RetryWaitPolicy) -> Self {
+        self.retry_wait_policy = Some(policy);
+        self
+    }
+
+    /// Returns the request retry-wait override, when configured.
+    #[must_use]
+    pub const fn retry_wait_policy(&self) -> Option<RetryWaitPolicy> {
+        self.retry_wait_policy
+    }
+
+    /// Supplies a validated provider-request idempotency key for this logical request.
+    #[must_use]
+    pub fn with_idempotency_key(mut self, key: IdempotencyKey) -> Self {
+        self.idempotency_key = Some(key);
+        self.generate_idempotency_key = false;
+        self
+    }
+
+    /// Requests a fresh SDK-generated key without deriving it from request content.
+    #[must_use]
+    pub fn with_generated_idempotency_key(mut self) -> Self {
+        self.idempotency_key = None;
+        self.generate_idempotency_key = true;
+        self
+    }
+
+    /// Returns the caller-supplied opaque key, when present.
+    #[must_use]
+    pub const fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        self.idempotency_key.as_ref()
+    }
+
+    /// Returns whether SDK generation was explicitly requested.
+    #[must_use]
+    pub const fn generates_idempotency_key(&self) -> bool {
+        self.generate_idempotency_key
+    }
 }
 
 /// Streaming assistant events with cancellation-on-drop semantics.
@@ -85,6 +164,7 @@ pub struct AssistantStream {
     cancellation: CancellationToken,
     local_request_id: LocalRequestId,
     observation: Option<Observation>,
+    execution_state: Arc<RequestExecutionState>,
     lifecycle_state: StreamLifecycleState,
     completion_state: StreamCompletionState,
 }
@@ -108,12 +188,14 @@ impl AssistantStream {
         cancellation: CancellationToken,
         local_request_id: LocalRequestId,
         observation: Option<Observation>,
+        execution_state: Arc<RequestExecutionState>,
     ) -> Self {
         Self {
             inner,
             cancellation,
             local_request_id,
             observation,
+            execution_state,
             lifecycle_state: StreamLifecycleState::default(),
             completion_state: StreamCompletionState::default(),
         }
@@ -156,6 +238,10 @@ impl AssistantStream {
                 generation_id,
             },
         );
+        emit(
+            self.observation.as_ref(),
+            LifecycleEventKind::FirstDomainEventDelivered,
+        );
     }
 
     fn observe_error(&self, error: &LlmError) {
@@ -189,13 +275,12 @@ impl Stream for AssistantStream {
         }
         match stream.inner.as_mut().poll_next(context) {
             Poll::Ready(Some(Ok(event))) => {
+                stream.execution_state.mark_delivered();
                 stream.observe_first(&event);
                 stream.completion_state.event_count =
                     stream.completion_state.event_count.saturating_add(1);
+                stream.completion_state.partial_output = true;
                 match &event {
-                    AssistantEvent::TextDelta { delta, .. } if !delta.is_empty() => {
-                        stream.completion_state.partial_output = true;
-                    }
                     AssistantEvent::Usage(_) | AssistantEvent::DetailedUsage(_) => {
                         stream.completion_state.usage_known = true;
                     }
@@ -215,6 +300,7 @@ impl Stream for AssistantStream {
                             },
                         );
                         stream.lifecycle_state.terminal = true;
+                        stream.execution_state.mark_terminal();
                     }
                     _ => {}
                 }
@@ -222,11 +308,13 @@ impl Stream for AssistantStream {
             }
             Poll::Ready(Some(Err(error))) => {
                 stream.lifecycle_state.terminal = true;
+                stream.execution_state.mark_terminal();
                 stream.observe_error(&error);
                 Poll::Ready(Some(Err(error)))
             }
             Poll::Ready(None) => {
                 stream.lifecycle_state.terminal = true;
+                stream.execution_state.mark_terminal();
                 let error = LlmError::from(TruncatedStreamError);
                 stream.observe_error(&error);
                 Poll::Ready(Some(Err(error)))
@@ -238,7 +326,7 @@ impl Stream for AssistantStream {
 
 impl Drop for AssistantStream {
     fn drop(&mut self) {
-        if !self.lifecycle_state.terminal {
+        if !self.lifecycle_state.terminal && self.execution_state.mark_terminal() {
             self.cancellation.cancel();
             emit(
                 self.observation.as_ref(),
@@ -256,6 +344,9 @@ pub struct LlmClient {
     runtime: Arc<ProviderRuntime>,
     transport: Arc<dyn Transport>,
     observer: Option<Arc<dyn LifecycleObserver>>,
+    timeout_policy: TimeoutPolicy,
+    retry_policy: RetryPolicy,
+    retry_wait_policy: RetryWaitPolicy,
 }
 
 impl LlmClient {
@@ -268,6 +359,9 @@ impl LlmClient {
             runtime: Arc::new(runtime),
             transport: Arc::new(transport),
             observer: None,
+            timeout_policy: TimeoutPolicy::default(),
+            retry_policy: RetryPolicy::default(),
+            retry_wait_policy: RetryWaitPolicy::default(),
         }
     }
 
@@ -277,6 +371,9 @@ impl LlmClient {
             runtime,
             transport,
             observer: None,
+            timeout_policy: TimeoutPolicy::default(),
+            retry_policy: RetryPolicy::default(),
+            retry_wait_policy: RetryWaitPolicy::default(),
         }
     }
 
@@ -287,6 +384,18 @@ impl LlmClient {
     /// Returns a configuration error when the production HTTP client cannot be built.
     pub fn with_reqwest(runtime: ProviderRuntime) -> Result<Self, LlmError> {
         Ok(Self::new(runtime, ReqwestTransport::new()?))
+    }
+
+    /// Creates a client using a shared reqwest transport with an immutable network policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe configuration error when proxy or TLS material cannot be compiled.
+    pub fn with_reqwest_network_policy(
+        runtime: ProviderRuntime,
+        policy: NetworkPolicy,
+    ) -> Result<Self, LlmError> {
+        Ok(Self::new(runtime, ReqwestTransport::with_policy(policy)?))
     }
 
     /// Installs a synchronous, value-free lifecycle observer.
@@ -304,6 +413,45 @@ impl LlmClient {
     pub fn with_shared_observer(mut self, observer: Arc<dyn LifecycleObserver>) -> Self {
         self.observer = Some(observer);
         self
+    }
+
+    /// Configures immutable stage timeout bounds for subsequent calls.
+    #[must_use]
+    pub fn with_timeout_policy(mut self, policy: TimeoutPolicy) -> Self {
+        self.timeout_policy = policy;
+        self
+    }
+
+    /// Configures bounded retries for subsequent calls.
+    #[must_use]
+    pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = policy;
+        self
+    }
+
+    /// Configures bounded backoff and server-directed retry waits for subsequent calls.
+    #[must_use]
+    pub fn with_retry_wait_policy(mut self, policy: RetryWaitPolicy) -> Self {
+        self.retry_wait_policy = policy;
+        self
+    }
+
+    /// Returns the configured stage timeout policy.
+    #[must_use]
+    pub const fn timeout_policy(&self) -> TimeoutPolicy {
+        self.timeout_policy
+    }
+
+    /// Returns the configured retry policy.
+    #[must_use]
+    pub const fn retry_policy(&self) -> RetryPolicy {
+        self.retry_policy
+    }
+
+    /// Returns the configured retry-wait policy.
+    #[must_use]
+    pub const fn retry_wait_policy(&self) -> RetryWaitPolicy {
+        self.retry_wait_policy
     }
 
     /// Returns the immutable provider runtime.
@@ -336,6 +484,7 @@ impl LlmClient {
     ) -> Result<AssistantStream, LlmError> {
         let local_request_id = LocalRequestId::new(Uuid::new_v4().to_string())?;
         let observation = self.observation(&request, &control, local_request_id.clone());
+        let execution_state = Arc::new(RequestExecutionState::new());
         emit(observation.as_ref(), LifecycleEventKind::RequestStarted);
 
         let result = self
@@ -344,6 +493,7 @@ impl LlmClient {
                 &control,
                 local_request_id.clone(),
                 observation.as_ref(),
+                Arc::clone(&execution_state),
             )
             .await;
         match result {
@@ -352,8 +502,10 @@ impl LlmClient {
                 control.cancellation,
                 local_request_id,
                 observation,
+                execution_state,
             )),
             Err(error) => {
+                execution_state.mark_terminal();
                 emit_terminal_error(observation.as_ref(), &error, false);
                 Err(error)
             }
@@ -402,6 +554,7 @@ impl LlmClient {
         control: &RequestControl,
         local_request_id: LocalRequestId,
         observation: Option<&Observation>,
+        execution_state: Arc<RequestExecutionState>,
     ) -> Result<EventStream, LlmError> {
         let lifecycle = request_lifecycle(request, control.cancellation.clone())?;
         lifecycle_preflight(&lifecycle)?;
@@ -419,20 +572,40 @@ impl LlmClient {
 
         let driver = ProtocolDispatch::for_kind(plan.policy.target.protocol_kind);
         let prepared = driver.prepare(&plan)?;
-        let executor = AttemptExecutor::new(self.transport.clone());
-        let response = executor
-            .execute(
-                &self.runtime,
-                prepared,
-                AttemptContext {
-                    local_request_id,
-                    attempt_number: 1,
-                    lifecycle,
-                    observation: observation.map(Observation::attempt_observation),
-                },
-            )
-            .await?;
-        ResponseSession::open(response)
+        let timeout_policy = control
+            .timeout_policy()
+            .map_or(self.timeout_policy, |request| {
+                self.timeout_policy.tighten_with(request)
+            });
+        let retry_policy = control.retry_policy().map_or(self.retry_policy, |request| {
+            self.retry_policy.tighten_with(request)
+        });
+        let retry_wait_policy = control
+            .retry_wait_policy()
+            .map_or(self.retry_wait_policy, |request| {
+                self.retry_wait_policy.tighten_with(request)
+            });
+        let idempotency = ResolvedIdempotency::resolve(
+            self.runtime.idempotency_policy(),
+            control.idempotency_key(),
+            control.generates_idempotency_key(),
+            retry_policy.max_attempts() > 1,
+        )?;
+        RequestRunner::new(
+            Arc::clone(&self.runtime),
+            Arc::clone(&self.transport),
+            prepared,
+            local_request_id,
+            lifecycle,
+            timeout_policy,
+            retry_policy,
+            retry_wait_policy,
+            idempotency,
+            observation.map(Observation::attempt_observation),
+            execution_state,
+        )
+        .start()
+        .await
     }
 
     fn observation(
@@ -463,6 +636,9 @@ impl fmt::Debug for LlmClient {
             .field("runtime", &self.runtime)
             .field("transport", &"<shared transport>")
             .field("observer_enabled", &self.observer.is_some())
+            .field("timeout_policy", &self.timeout_policy)
+            .field("retry_policy", &self.retry_policy)
+            .field("retry_wait_policy", &self.retry_wait_policy)
             .finish()
     }
 }
@@ -481,11 +657,14 @@ impl Observation {
 
 fn emit(observation: Option<&Observation>, kind: LifecycleEventKind) {
     if let Some(observation) = observation {
-        observation.observer.record(&LifecycleEvent::new(
-            Arc::clone(&observation.identity),
-            observation.started.elapsed(),
-            kind,
-        ));
+        crate::observability::trace::record_safely(
+            &*observation.observer,
+            &LifecycleEvent::new(
+                Arc::clone(&observation.identity),
+                observation.started.elapsed(),
+                kind,
+            ),
+        );
     }
 }
 
@@ -523,17 +702,4 @@ fn request_lifecycle(
         Some(deadline) => lifecycle.with_deadline(deadline),
         None => lifecycle,
     })
-}
-
-fn lifecycle_preflight(lifecycle: &RequestLifecycle) -> Result<(), LlmError> {
-    if lifecycle.cancellation().is_cancelled() {
-        return Err(LlmError::Cancelled);
-    }
-    if lifecycle
-        .deadline()
-        .is_some_and(|deadline| deadline <= Instant::now())
-    {
-        return Err(TimeoutError::new(ErrorStage::Timeout).into());
-    }
-    Ok(())
 }

@@ -316,6 +316,7 @@ impl HeaderPolicy {
             "host" | "content-length" | "transfer-encoding" | "connection" | "cookie"
             | "set-cookie" => false,
             _ if self.is_auth_header(name) => source == HeaderSource::Auth,
+            _ if self.provider_headers.contains(name) => source == HeaderSource::Provider,
             _ => match source {
                 HeaderSource::Transport | HeaderSource::Auth => false,
                 HeaderSource::Protocol => true,
@@ -435,7 +436,9 @@ impl HeaderPipeline {
                     "authentication headers must be sensitive",
                 ));
             }
-            if source != HeaderSource::Auth && sensitive {
+            let provider_owned_sensitive =
+                source == HeaderSource::Provider && self.policy.provider_headers.contains(name);
+            if source != HeaderSource::Auth && sensitive && !provider_owned_sensitive {
                 return Err(validation(
                     format!("request_headers.{name}"),
                     ValidationReason::ProtectedHeader,

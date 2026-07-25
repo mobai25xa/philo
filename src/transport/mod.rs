@@ -4,6 +4,8 @@
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use futures_core::Stream;
@@ -12,14 +14,19 @@ use http::{HeaderMap, Method, StatusCode};
 use tokio::time::Instant;
 
 use crate::domain::LocalRequestId;
-use crate::error::{BodySummary, ErrorStage, LlmError, TimeoutError};
+use crate::error::{BodySummary, LlmError, TimeoutError, TimeoutStage};
 use crate::provider::{RedirectPolicy, ResolvedEndpoint};
 
 #[doc(hidden)]
 pub mod mock;
+mod network;
 mod reqwest;
 mod sse;
 
+pub use network::{
+    ConnectionPoolPolicy, DnsPolicy, ExplicitProxy, HttpVersionPolicy, IpPreference,
+    MinimumTlsVersion, NetworkPolicy, NoProxyList, ProxyCredentials, ProxyPolicy, TlsPolicy,
+};
 pub use reqwest::ReqwestTransport;
 pub use sse::{SseConfig, SseDecoder, SseError, SseEvent, SseLimit};
 
@@ -63,18 +70,39 @@ impl fmt::Debug for CancellationToken {
     }
 }
 
-/// Absolute deadline and cancellation state propagated without restarting a timeout.
-#[derive(Clone, Debug, Default)]
-pub struct RequestLifecycle {
+#[derive(Debug)]
+struct DeadlineBudget {
+    started: Instant,
     deadline: Option<Instant>,
+}
+
+impl DeadlineBudget {
+    fn new(deadline: Option<Instant>) -> Self {
+        Self {
+            started: Instant::now(),
+            deadline,
+        }
+    }
+}
+
+/// Shared absolute deadline and cancellation state that never restarts across attempts.
+#[derive(Clone, Debug)]
+pub struct RequestLifecycle {
+    budget: Arc<DeadlineBudget>,
     cancellation: CancellationToken,
+}
+
+impl Default for RequestLifecycle {
+    fn default() -> Self {
+        Self::new(CancellationToken::new())
+    }
 }
 
 impl RequestLifecycle {
     /// Creates lifecycle state without a deadline.
     pub fn new(cancellation: CancellationToken) -> Self {
         Self {
-            deadline: None,
+            budget: Arc::new(DeadlineBudget::new(None)),
             cancellation,
         }
     }
@@ -82,18 +110,31 @@ impl RequestLifecycle {
     /// Sets the absolute overall deadline.
     #[must_use]
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
-        self.deadline = Some(deadline);
+        self.budget = Arc::new(DeadlineBudget {
+            started: self.budget.started,
+            deadline: Some(deadline),
+        });
         self
     }
 
     /// Returns the absolute deadline, if one was configured.
     pub fn deadline(&self) -> Option<Instant> {
-        self.deadline
+        self.budget.deadline
     }
 
     /// Returns the shared cancellation handle.
     pub fn cancellation(&self) -> &CancellationToken {
         &self.cancellation
+    }
+
+    pub(crate) fn started_at(&self) -> Instant {
+        self.budget.started
+    }
+
+    pub(crate) fn remaining(&self, now: Instant) -> Option<Duration> {
+        self.budget
+            .deadline
+            .map(|deadline| deadline.saturating_duration_since(now))
     }
 }
 
@@ -340,10 +381,13 @@ pub(crate) fn lifecycle_preflight(lifecycle: &RequestLifecycle) -> Result<(), Ll
         return Err(LlmError::Cancelled);
     }
     if lifecycle
+        .budget
         .deadline
         .is_some_and(|deadline| deadline <= Instant::now())
     {
-        return Err(TimeoutError::new(ErrorStage::Timeout).into());
+        return Err(TimeoutError::new(TimeoutStage::Overall)
+            .with_context(true, lifecycle.started_at().elapsed(), None, None, false)
+            .into());
     }
     Ok(())
 }
@@ -355,13 +399,43 @@ pub(crate) async fn await_with_lifecycle<F, T>(
 where
     F: Future<Output = T>,
 {
+    await_with_stage(lifecycle, TimeoutStage::Overall, None, None, false, future).await
+}
+
+pub(crate) async fn await_with_stage<F, T>(
+    lifecycle: &RequestLifecycle,
+    stage: TimeoutStage,
+    stage_limit: Option<Duration>,
+    attempt_number: Option<u32>,
+    domain_event_delivered: bool,
+    future: F,
+) -> Result<T, LlmError>
+where
+    F: Future<Output = T>,
+{
     lifecycle_preflight(lifecycle)?;
-    if let Some(deadline) = lifecycle.deadline {
+    let now = Instant::now();
+    let stage_deadline = stage_limit.and_then(|limit| now.checked_add(limit));
+    let (effective_deadline, overall_limited) = match (lifecycle.deadline(), stage_deadline) {
+        (Some(overall), Some(stage)) if overall <= stage => (Some(overall), true),
+        (_, Some(stage)) => (Some(stage), false),
+        (Some(overall), None) => (Some(overall), true),
+        (None, None) => (None, false),
+    };
+    if let Some(deadline) = effective_deadline {
         tokio::select! {
             biased;
             () = lifecycle.cancellation.cancelled() => Err(LlmError::Cancelled),
             () = tokio::time::sleep_until(deadline) => {
-                Err(TimeoutError::new(ErrorStage::Timeout).into())
+                Err(TimeoutError::new(stage)
+                    .with_context(
+                        overall_limited,
+                        lifecycle.started_at().elapsed(),
+                        stage_limit,
+                        attempt_number,
+                        domain_event_delivered,
+                    )
+                    .into())
             }
             output = future => Ok(output),
         }
@@ -370,6 +444,66 @@ where
             biased;
             () = lifecycle.cancellation.cancelled() => Err(LlmError::Cancelled),
             output = future => Ok(output),
+        }
+    }
+}
+
+/// Waits for stream progress while allowing the active body stream to observe cancellation first.
+pub(crate) async fn await_stream_with_stage<F, T>(
+    lifecycle: &RequestLifecycle,
+    stage: TimeoutStage,
+    stage_limit: Duration,
+    attempt_number: u32,
+    domain_event_delivered: bool,
+    future: F,
+) -> Result<T, LlmError>
+where
+    F: Future<Output = T>,
+{
+    if lifecycle
+        .deadline()
+        .is_some_and(|deadline| deadline <= Instant::now())
+    {
+        return Err(TimeoutError::new(TimeoutStage::Overall)
+            .with_context(
+                true,
+                lifecycle.started_at().elapsed(),
+                Some(stage_limit),
+                Some(attempt_number),
+                domain_event_delivered,
+            )
+            .into());
+    }
+    let now = Instant::now();
+    let stage_deadline = now.checked_add(stage_limit);
+    let (effective_deadline, overall_limited) = match (lifecycle.deadline(), stage_deadline) {
+        (Some(overall), Some(stage)) if overall <= stage => (Some(overall), true),
+        (_, Some(stage)) => (Some(stage), false),
+        (Some(overall), None) => (Some(overall), true),
+        (None, None) => (None, false),
+    };
+    if let Some(deadline) = effective_deadline {
+        tokio::select! {
+            biased;
+            output = future => Ok(output),
+            () = lifecycle.cancellation.cancelled() => Err(LlmError::Cancelled),
+            () = tokio::time::sleep_until(deadline) => {
+                Err(TimeoutError::new(stage)
+                    .with_context(
+                        overall_limited,
+                        lifecycle.started_at().elapsed(),
+                        Some(stage_limit),
+                        Some(attempt_number),
+                        domain_event_delivered,
+                    )
+                    .into())
+            }
+        }
+    } else {
+        tokio::select! {
+            biased;
+            output = future => Ok(output),
+            () = lifecycle.cancellation.cancelled() => Err(LlmError::Cancelled),
         }
     }
 }

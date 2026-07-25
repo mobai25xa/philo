@@ -17,6 +17,7 @@ use super::super::compat::{CompatPatch, OpenRouterRoutingContract};
 use super::super::endpoint::{CredentialAudience, EndpointConfig};
 use super::super::headers::{DynamicHeaderPolicy, HeaderOperation};
 use super::super::profile::{ProviderProfile, ProviderProfileParts};
+use super::super::{IdempotencyPolicy, RateLimitPolicy};
 
 pub(super) struct CompatibleProfileParts {
     pub provider: &'static str,
@@ -73,6 +74,8 @@ pub(super) fn build_compatible_profile(
         resource_limits: ResourceLimits::official(),
         sse: SseConfig::default(),
         max_http_error_body_bytes: 16 * 1024,
+        rate_limit: RateLimitPolicy::standard_only(),
+        idempotency: IdempotencyPolicy::unknown(),
         test_only: false,
     })
 }

@@ -1,0 +1,100 @@
+name: Phase 4 reliability
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      subject_commit:
+        description: Full 40-character candidate SHA; defaults to the selected ref SHA
+        required: false
+        type: string
+      soak_profile:
+        description: Soak profile to run for this exact candidate
+        required: true
+        default: quick
+        type: choice
+        options:
+          - quick
+          - release
+  schedule:
+    - cron: "23 3 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PHILO_GATE_SUBJECT: ${{ inputs.subject_commit || github.event.pull_request.head.sha || github.sha }}
+  PHILO_SOAK_PROFILE: ${{ github.event_name == 'schedule' && 'release' || inputs.soak_profile || 'quick' }}
+
+jobs:
+  offline-reliability:
+    name: Offline benchmark, fault matrix, and client soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PHILO_GATE_SUBJECT" =~ ^[0-9a-f]{40}$ ]]
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$PHILO_GATE_SUBJECT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      - name: Fault and security contracts
+        run: cargo test --all-features --test phase4_reliability_contract --test phase4_fault_matrix
+      - name: Fixed-fixture SDK benchmark smoke
+        run: cargo bench --bench phase4_sdk -- --smoke
+      - name: Exact-SHA client soak
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PHILO_SOAK_PROFILE" in
+            quick) iterations=1000 ;;
+            release) iterations=100000 ;;
+            *) echo "unsupported soak profile: $PHILO_SOAK_PROFILE" >&2; exit 2 ;;
+          esac
+          cargo bench --bench phase4_client_soak -- "$PHILO_SOAK_PROFILE" "$iterations" \
+            | tee phase4-soak-result.jsonl
+          result="$(tail -n 1 phase4-soak-result.jsonl)"
+          test -n "$result"
+          if [[ "$PHILO_SOAK_PROFILE" == "release" ]]; then
+            grep -q '"resource_metrics_available":true' phase4-soak-result.jsonl
+          fi
+      - name: Record safe gate identity
+        if: always()
+        shell: bash
+        run: |
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$PHILO_GATE_SUBJECT"
+          {
+            echo "## Phase 4 offline reliability"
+            echo ""
+            echo "- Subject commit: \`$actual\`"
+            echo "- Soak profile: \`$PHILO_SOAK_PROFILE\`"
+            echo "- Network: offline fixtures only"
+            echo "- Content artifacts: disabled"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f phase4-soak-result.jsonl ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Soak result" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 1 phase4-soak-result.jsonl >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload value-free soak evidence
+        if: always() && hashFiles('phase4-soak-result.jsonl') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase4-soak-${{ env.PHILO_GATE_SUBJECT }}-${{ env.PHILO_SOAK_PROFILE }}
+          path: phase4-soak-result.jsonl
+          if-no-files-found: error
+          retention-days: 90

@@ -38,6 +38,12 @@ pub const PHASE_TWO_CONTRACT_ID: &str = "philo/openai-chat-p2";
 /// The version of the frozen phase-two behavior contract.
 pub const PHASE_TWO_CONTRACT_VERSION: &str = "1.1.0";
 
+/// The identifier of the phase-four production reliability contract.
+pub const PHASE_FOUR_RELIABILITY_CONTRACT_ID: &str = "philo/reliability-p4";
+
+/// The version of the phase-four production reliability contract.
+pub const PHASE_FOUR_RELIABILITY_CONTRACT_VERSION: &str = "1.0.0";
+
 /// The identifier of the versioned provider configuration schema.
 pub const PROVIDER_CONFIG_SCHEMA_ID: &str = "philo/provider-config";
 
@@ -77,13 +83,16 @@ pub use error::{
     CredentialError, CredentialFailure, ErrorStage, HeaderPolicyError, HeaderPolicyFailure,
     HistoryError, HistoryFailure, HttpStatusError, LlmError, ProtocolError, ProviderConfigError,
     ProviderConfigFailure, ProviderRegistryError, ProviderRegistryFailure, RetriableHint,
-    SchemaError, SchemaFailure, StructuredOutputError, StructuredOutputFailure, TimeoutError,
-    ToolValidationError, ToolValidationFailure, TransportError, TruncatedStreamError,
-    UnknownFinishReason, ValidationError, ValidationReason,
+    RetryReason, SchemaError, SchemaFailure, StructuredOutputError, StructuredOutputFailure,
+    TimeoutError, TimeoutStage, ToolValidationError, ToolValidationFailure, TransportError,
+    TruncatedStreamError, UnknownFinishReason, ValidationError, ValidationReason,
 };
+pub use execution::reliability::{RetryPolicy, RetryWaitPolicy, TimeoutPolicy};
+#[cfg(feature = "tracing")]
+pub use observability::TracingObserver;
 pub use observability::{
-    LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind, LifecycleIdentity,
-    LifecycleObserver,
+    AttemptId, AttemptIdentity, LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind,
+    LifecycleIdentity, LifecycleObserver, RetryStopReason,
 };
 pub use provider::{
     ApiKey, ApiKeyHeaderAuth, AuthContext, AuthDiagnostics, AuthProvider, AuthSchemeKind,
@@ -103,9 +112,10 @@ pub use provider::{
     EndpointTemplate, EndpointValues, EnvironmentSecretResolver, EvidenceVerification,
     FallbackDimension, FieldProvenance, FieldState, FinishReasonCompat, HeaderDiagnostic,
     HeaderLayer, HeaderOperation, HeaderPipeline, HeaderPolicy, HeaderSource, HeaderTraceEntry,
-    HistoryCompat, InlineErrorCompat, ListMerge, MapMerge, MaxOutputTokensWireFormat,
-    ModelBodyWireFormat, ModelCapabilityProfile, ModelCatalog, ModelEntry, ModelKey, ModelLimits,
-    MultiHeaderAuth, NamedConfigValue, NamedListMerge, NoAuth, NormalizedEndpointFacts,
+    HistoryCompat, IdempotencyCapability, IdempotencyKey, IdempotencyKeySource, IdempotencyPolicy,
+    InlineErrorCompat, ListMerge, MapMerge, MaxOutputTokensWireFormat, ModelBodyWireFormat,
+    ModelCapabilityProfile, ModelCatalog, ModelEntry, ModelKey, ModelLimits, MultiHeaderAuth,
+    NamedConfigValue, NamedListMerge, NoAuth, NormalizedEndpointFacts,
     OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, OfficialOpenAiFactory, OfficialOpenAiProfile,
     OpenRouterAttribution, OpenRouterProfile, OpenRouterRoutingContract, OpenRouterRoutingPatch,
     Origin, ProductId, ProtocolDialect, ProviderCapabilities, ProviderConfigDocument,
@@ -113,7 +123,9 @@ pub use provider::{
     ProviderModelId, ProviderProfile, ProviderRegistration, ProviderRegistrationMetadata,
     ProviderRegistry, ProviderRequestOptions, ProviderRuntime, ProviderRuntimeFactory,
     ProviderSelection, ProviderSelectionInput, ProviderSelectionSource, ProviderSelector,
-    ProviderTransportOptions, QueryMergeRule, RedirectPolicy, RequestCompat, ResolvedEndpoint,
+    ProviderTransportOptions, QueryMergeRule, RateLimitHeaderKind, RateLimitHeaderSpec,
+    RateLimitObservation, RateLimitPolicy, RateLimitQuota, RateLimitReset, RateLimitSourceKind,
+    RateLimitUnit, RateLimitValue, RedirectPolicy, RequestCompat, ResolvedEndpoint,
     ResolvedHeaders, ResolvedModelMapping, ResolvedProviderRouting, ResponseCompat,
     RoutingFallback, RoutingField, RoutingRegion, RoutingSort, SecretReference, SecretResolver,
     SensitiveHeaderValue, SupportDiagnostics, SupportStatus, TenantId, ToolArgumentsCompat,
@@ -121,9 +133,11 @@ pub use provider::{
     ZaiStandardProfile, resolve_compat,
 };
 pub use transport::{
-    ByteStream, CancellationToken, HttpRequest, HttpResponse, LimitedBody, RequestLifecycle,
-    ReqwestTransport, SseConfig, SseDecoder, SseError, SseEvent, SseLimit, Transport,
-    TransportContext, TransportFuture, read_body_limited,
+    ByteStream, CancellationToken, ConnectionPoolPolicy, DnsPolicy, ExplicitProxy, HttpRequest,
+    HttpResponse, HttpVersionPolicy, IpPreference, LimitedBody, MinimumTlsVersion, NetworkPolicy,
+    NoProxyList, ProxyCredentials, ProxyPolicy, RequestLifecycle, ReqwestTransport, SseConfig,
+    SseDecoder, SseError, SseEvent, SseLimit, TlsPolicy, Transport, TransportContext,
+    TransportFuture, read_body_limited,
 };
 
 #[cfg(test)]
@@ -149,6 +163,7 @@ mod tests {
     };
 
     use super::{
+        PHASE_FOUR_RELIABILITY_CONTRACT_ID, PHASE_FOUR_RELIABILITY_CONTRACT_VERSION,
         PHASE_ONE_CONTRACT_ID, PHASE_ONE_CONTRACT_VERSION, PHASE_TWO_CONTRACT_ID,
         PHASE_TWO_CONTRACT_VERSION, SDK_NAME, SDK_VERSION,
     };
@@ -161,6 +176,8 @@ mod tests {
         assert_eq!(PHASE_ONE_CONTRACT_VERSION, "1.0.0");
         assert_eq!(PHASE_TWO_CONTRACT_ID, "philo/openai-chat-p2");
         assert_eq!(PHASE_TWO_CONTRACT_VERSION, "1.1.0");
+        assert_eq!(PHASE_FOUR_RELIABILITY_CONTRACT_ID, "philo/reliability-p4");
+        assert_eq!(PHASE_FOUR_RELIABILITY_CONTRACT_VERSION, "1.0.0");
     }
 
     #[test]

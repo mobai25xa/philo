@@ -11,9 +11,17 @@ use philo::{
 pub(crate) type ExampleResult<T = ()> = Result<T, Box<dyn Error>>;
 
 pub(crate) fn client() -> ExampleResult<LlmClient> {
-    let key = std::env::var("OPENAI_API_KEY")?;
-    let runtime = OfficialOpenAiProfile::from_api_key(key)?.build()?;
+    let runtime = official_runtime_from_env()?;
     Ok(LlmClient::with_reqwest(runtime)?)
+}
+
+pub(crate) fn official_runtime_from_env() -> ExampleResult<philo::ProviderRuntime> {
+    let key = std::env::var("OPENAI_API_KEY")?;
+    Ok(OfficialOpenAiProfile::from_api_key(key)?.build()?)
+}
+
+pub(crate) fn model_from_env(provider: &str) -> ExampleResult<ModelRef> {
+    Ok(ModelRef::new(provider, std::env::var("OPENAI_MODEL")?)?)
 }
 
 /// Builds a client whose exact model profile enables selected phase-two features.

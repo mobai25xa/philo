@@ -11,8 +11,10 @@ pub mod diagnostics;
 pub mod endpoint;
 pub mod factory;
 pub mod headers;
+mod idempotency;
 pub mod profile;
 mod profiles;
+mod rate_limit;
 pub mod registry;
 pub mod runtime;
 
@@ -70,12 +72,21 @@ pub use headers::{
     HeaderPipeline, HeaderPolicy, HeaderSource, HeaderTraceEntry, ResolvedHeaders,
     SensitiveHeaderValue, TraceDecision, TraceOperation,
 };
+pub(crate) use idempotency::ResolvedIdempotency;
+pub use idempotency::{
+    IdempotencyCapability, IdempotencyKey, IdempotencyKeySource, IdempotencyPolicy,
+};
 pub use profile::ProviderProfile;
 #[doc(hidden)]
 pub use profiles::TestOnlyProfile;
 pub use profiles::{
     DeepSeekProfile, OfficialOpenAiProfile, OpenRouterAttribution, OpenRouterProfile,
     ZaiCodingProfile, ZaiStandardProfile,
+};
+pub(crate) use rate_limit::observe_rate_limit;
+pub use rate_limit::{
+    RateLimitHeaderKind, RateLimitHeaderSpec, RateLimitObservation, RateLimitPolicy,
+    RateLimitQuota, RateLimitReset, RateLimitSourceKind, RateLimitUnit, RateLimitValue,
 };
 pub use registry::{ProviderRegistration, ProviderRegistrationMetadata, ProviderRegistry};
 pub use runtime::ProviderRuntime;

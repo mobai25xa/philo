@@ -195,6 +195,8 @@ pub(crate) struct ResponseMeta {
     pub(crate) provider_request_id: Option<ProviderRequestId>,
     pub(crate) status: StatusCode,
     pub(crate) header_names: Vec<HeaderName>,
+    pub(crate) retry_after: Option<std::time::Duration>,
+    pub(crate) rate_limit: crate::provider::RateLimitObservation,
 }
 
 #[cfg(test)]

@@ -2,9 +2,11 @@
 #![allow(clippy::must_use_candidate)]
 
 use std::fmt;
+use std::time::Duration;
 use thiserror::Error;
 
 use crate::domain::ProviderRequestId;
+use crate::provider::RateLimitObservation;
 
 /// Whether an operation may be retried by a caller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +16,28 @@ pub enum RetriableHint {
     No,
     /// Retrying may help, subject to caller policy and lifecycle state.
     Maybe,
+}
+
+/// Stable, value-free reason explaining why another attempt was scheduled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RetryReason {
+    /// Connection setup failed before response headers were available.
+    ConnectFailure,
+    /// A retryable stage timeout elapsed before any domain event was delivered.
+    StageTimeout,
+    /// The provider returned HTTP 408.
+    RequestTimeoutStatus,
+    /// The provider returned HTTP 429.
+    RateLimited,
+    /// The provider returned an explicitly supported transient 5xx response.
+    TransientServerError,
+    /// The response body failed before any domain event was delivered.
+    EarlyBodyFailure,
+    /// The stream ended before a terminal event and before public delivery.
+    EarlyTruncation,
+    /// A dynamic credential lookup timed out before transport I/O.
+    CredentialTimeout,
 }
 
 /// Phase where an error occurred.
@@ -42,6 +66,43 @@ pub enum ErrorStage {
     Protocol,
     /// Overall timeout or deadline.
     Timeout,
+}
+
+/// Precise SDK timeout stage within one logical request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum TimeoutStage {
+    /// Dynamic authentication or header credential resolution.
+    Credential,
+    /// DNS, TCP, proxy, or TLS connection setup.
+    Connect,
+    /// Waiting for the HTTP status and response headers.
+    ResponseHeader,
+    /// Waiting for the first parsed domain event.
+    FirstEvent,
+    /// Waiting for parsed domain progress after an earlier event.
+    IdleStream,
+    /// The caller's overall request deadline.
+    Overall,
+    /// A transport timeout whose more precise stage is unavailable.
+    UnknownTransport,
+}
+
+impl From<ErrorStage> for TimeoutStage {
+    fn from(stage: ErrorStage) -> Self {
+        match stage {
+            ErrorStage::Connect | ErrorStage::Tls => Self::Connect,
+            ErrorStage::Timeout => Self::Overall,
+            ErrorStage::Body
+            | ErrorStage::Configuration
+            | ErrorStage::Validation
+            | ErrorStage::Capability
+            | ErrorStage::Http
+            | ErrorStage::Sse
+            | ErrorStage::Json
+            | ErrorStage::Protocol => Self::UnknownTransport,
+        }
+    }
 }
 
 /// Specific authentication-family failure.
@@ -527,6 +588,8 @@ pub struct HttpStatusError {
     body: BodySummary,
     request_id: Option<ProviderRequestId>,
     hint: RetriableHint,
+    retry_after: Option<Duration>,
+    rate_limit: Option<Box<RateLimitObservation>>,
 }
 impl HttpStatusError {
     /// Creates an HTTP status error with a bounded body.
@@ -542,7 +605,21 @@ impl HttpStatusError {
             body,
             request_id,
             hint,
+            retry_after: None,
+            rate_limit: None,
         }
+    }
+    /// Attaches a safely parsed server retry delay without retaining the raw header value.
+    #[must_use]
+    pub fn with_retry_after(mut self, retry_after: Option<Duration>) -> Self {
+        self.retry_after = retry_after;
+        self
+    }
+    /// Attaches typed, value-free rate-limit metadata for this attempt.
+    #[must_use]
+    pub fn with_rate_limit(mut self, observation: RateLimitObservation) -> Self {
+        self.rate_limit = Some(Box::new(observation));
+        self
     }
     /// Returns status code.
     pub fn status(&self) -> u16 {
@@ -559,6 +636,14 @@ impl HttpStatusError {
     /// Returns retry hint.
     pub fn retriable(&self) -> RetriableHint {
         self.hint
+    }
+    /// Returns the safely parsed server retry delay, when valid.
+    pub fn retry_after(&self) -> Option<Duration> {
+        self.retry_after
+    }
+    /// Returns typed rate-limit metadata parsed for this attempt.
+    pub fn rate_limit(&self) -> Option<&RateLimitObservation> {
+        self.rate_limit.as_deref()
     }
 }
 
@@ -599,10 +684,19 @@ impl ProtocolError {
 }
 
 /// A response semantic the current phase cannot represent.
-#[derive(Clone, Debug, Eq, PartialEq, Error)]
-#[error("unsupported response semantics: {raw}")]
+#[derive(Clone, Eq, PartialEq, Error)]
+#[error("unsupported response semantics")]
 pub struct UnsupportedResponseSemantics {
     raw: String,
+}
+
+impl fmt::Debug for UnsupportedResponseSemantics {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UnsupportedResponseSemantics")
+            .field("raw_len", &self.raw.len())
+            .finish()
+    }
 }
 impl UnsupportedResponseSemantics {
     /// Creates an unsupported-semantics error.
@@ -616,10 +710,19 @@ impl UnsupportedResponseSemantics {
 }
 
 /// A finish reason that was not recognized.
-#[derive(Clone, Debug, Eq, PartialEq, Error)]
-#[error("unknown finish reason: {raw}")]
+#[derive(Clone, Eq, PartialEq, Error)]
+#[error("unknown finish reason")]
 pub struct UnknownFinishReason {
     raw: String,
+}
+
+impl fmt::Debug for UnknownFinishReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UnknownFinishReason")
+            .field("raw_len", &self.raw.len())
+            .finish()
+    }
 }
 impl UnknownFinishReason {
     /// Creates an unknown finish reason.
@@ -637,20 +740,81 @@ impl UnknownFinishReason {
 #[error("stream ended before Done")]
 pub struct TruncatedStreamError;
 
-/// Timeout stage.
+/// Value-free timeout diagnostics for one lifecycle stage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
-#[error("timed out at {stage:?}")]
+#[error("timed out at {timeout_stage:?}")]
 pub struct TimeoutError {
-    stage: ErrorStage,
+    timeout_stage: TimeoutStage,
+    overall_limited: bool,
+    elapsed: Option<Duration>,
+    limit: Option<Duration>,
+    attempt_number: Option<u32>,
+    domain_event_delivered: bool,
 }
 impl TimeoutError {
     /// Creates a timeout error.
-    pub fn new(stage: ErrorStage) -> Self {
-        Self { stage }
+    pub fn new(stage: impl Into<TimeoutStage>) -> Self {
+        Self {
+            timeout_stage: stage.into(),
+            overall_limited: false,
+            elapsed: None,
+            limit: None,
+            attempt_number: None,
+            domain_event_delivered: false,
+        }
     }
-    /// Returns timeout stage.
-    pub fn stage(&self) -> ErrorStage {
-        self.stage
+
+    /// Attaches bounded, value-free request diagnostics.
+    #[must_use]
+    pub fn with_context(
+        mut self,
+        overall_limited: bool,
+        elapsed: Duration,
+        limit: Option<Duration>,
+        attempt_number: Option<u32>,
+        domain_event_delivered: bool,
+    ) -> Self {
+        self.overall_limited = overall_limited;
+        self.elapsed = Some(elapsed);
+        self.limit = limit;
+        self.attempt_number = attempt_number;
+        self.domain_event_delivered = domain_event_delivered;
+        self
+    }
+
+    /// Returns the broad error taxonomy stage retained for compatibility.
+    pub const fn stage(&self) -> ErrorStage {
+        ErrorStage::Timeout
+    }
+
+    /// Returns the precise lifecycle timeout stage.
+    pub const fn timeout_stage(&self) -> TimeoutStage {
+        self.timeout_stage
+    }
+
+    /// Returns whether the overall deadline shortened the stage limit.
+    pub const fn overall_limited(&self) -> bool {
+        self.overall_limited
+    }
+
+    /// Returns elapsed monotonic request time when available.
+    pub const fn elapsed(&self) -> Option<Duration> {
+        self.elapsed
+    }
+
+    /// Returns the configured stage limit when available.
+    pub const fn limit(&self) -> Option<Duration> {
+        self.limit
+    }
+
+    /// Returns the one-based attempt number when available.
+    pub const fn attempt_number(&self) -> Option<u32> {
+        self.attempt_number
+    }
+
+    /// Returns whether any domain event had already been delivered.
+    pub const fn domain_event_delivered(&self) -> bool {
+        self.domain_event_delivered
     }
 }
 
