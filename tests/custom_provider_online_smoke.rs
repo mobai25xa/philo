@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use futures_util::StreamExt as _;
 use philo::{
-    AnthropicUsageCompat, ApiKey, AssistantEvent, AuthScheme, CompatPatch, EndpointConfig,
-    EnvironmentSecretResolver, FinishReason, FinishReasonCompat, GenerateRequest,
-    GenerationOptions, LlmClient, LlmError, MaxOutputTokensWireFormat, Message, ModelRef,
-    PolicySource, ProductId, ProviderCapabilities, ProviderConfigError, ProviderDefinition,
-    ProviderDeploymentConfig, ProviderId, ProviderRuntime, RequestControl, SecretReference,
-    SecretResolver, StaticProviderFactory, UsageCompat,
+    AnthropicUsageCompat, ApiKey, AssistantEvent, AssistantStream, AuthScheme, CancellationToken,
+    CompatPatch, EndpointConfig, EnvironmentSecretResolver, FinishReason, FinishReasonCompat,
+    GenerateRequest, GenerationOptions, LlmClient, LlmError, MaxOutputTokensWireFormat, Message,
+    ModelRef, PolicySource, ProductId, ProviderCapabilities, ProviderConfigError,
+    ProviderDefinition, ProviderDeploymentConfig, ProviderId, ProviderRuntime, RequestControl,
+    SecretReference, SecretResolver, StaticProviderFactory, UsageCompat,
 };
 
 const CREDENTIAL_ENV: &str = "PHILO_PROVIDER_CREDENTIAL";
@@ -19,6 +19,8 @@ const OPENROUTER_MODEL: &str = "nvidia/nemotron-3-ultra-550b-a55b:free";
 const ZAI_ANTHROPIC_TARGET: &str = "custom-zai-anthropic-definition";
 const ZAI_ANTHROPIC_MODEL: &str = "glm-4.7-flash";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
+const ZAI_INTER_CASE_DELAY: Duration = Duration::from_secs(30);
+const MAX_TRANSIENT_START_RETRIES: usize = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CustomTarget {
@@ -111,6 +113,13 @@ impl CustomTarget {
         let deployment = ProviderDeploymentConfig::new(provider, credential);
         StaticProviderFactory::new(self.definition()?).build_deployment(&deployment, resolver)
     }
+
+    const fn inter_case_delay(self) -> Duration {
+        match self {
+            Self::OpenRouter => Duration::ZERO,
+            Self::ZaiAnthropic => ZAI_INTER_CASE_DELAY,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -149,18 +158,117 @@ fn request(target: CustomTarget, model: &str, prompt: &str, max_tokens: u32) -> 
     )
 }
 
+fn is_transient_capacity_error(error: &LlmError) -> bool {
+    matches!(error, LlmError::HttpStatus(error) if matches!(error.status(), 429 | 529))
+}
+
+fn redacted_failure_category(error: &LlmError) -> &'static str {
+    match error {
+        LlmError::HttpStatus(error) if error.status() == 429 => "http-rate-limited",
+        LlmError::HttpStatus(error) if error.status() == 529 => "http-overloaded",
+        LlmError::HttpStatus(_) => "http-status",
+        LlmError::Protocol(_) => "protocol",
+        LlmError::Transport(_) => "transport",
+        LlmError::Timeout(_) => "timeout",
+        LlmError::Cancelled => "cancelled",
+        _ => "other",
+    }
+}
+
+async fn transient_backoff(target: CustomTarget, attempt: usize) {
+    println!(
+        "custom_provider_smoke_transient_retry=true target={} attempt={} delay_seconds={}",
+        target.workflow_id(),
+        attempt,
+        target.inter_case_delay().as_secs(),
+    );
+    tokio::time::sleep(target.inter_case_delay()).await;
+}
+
+async fn start_stream_with_retry(
+    client: &LlmClient,
+    target: CustomTarget,
+    model: &str,
+    prompt: &str,
+    max_tokens: u32,
+    failure_label: &str,
+) -> AssistantStream {
+    for attempt in 0..=MAX_TRANSIENT_START_RETRIES {
+        match client
+            .stream(request(target, model, prompt, max_tokens))
+            .await
+        {
+            Ok(stream) => return stream,
+            Err(error)
+                if target == CustomTarget::ZaiAnthropic
+                    && is_transient_capacity_error(&error)
+                    && attempt < MAX_TRANSIENT_START_RETRIES =>
+            {
+                transient_backoff(target, attempt + 1).await;
+            }
+            Err(error) => panic!("{failure_label}: {}", redacted_failure_category(&error)),
+        }
+    }
+    unreachable!("bounded transient retry loop must return or panic")
+}
+
+async fn start_controlled_stream_with_retry(
+    client: &LlmClient,
+    target: CustomTarget,
+    model: &str,
+    prompt: &str,
+    failure_label: &str,
+) -> (AssistantStream, CancellationToken) {
+    for attempt in 0..=MAX_TRANSIENT_START_RETRIES {
+        let control = RequestControl::new();
+        let cancellation = control.cancellation_token().clone();
+        match client
+            .stream_with_control(request(target, model, prompt, 128), control)
+            .await
+        {
+            Ok(stream) => return (stream, cancellation),
+            Err(error)
+                if target == CustomTarget::ZaiAnthropic
+                    && is_transient_capacity_error(&error)
+                    && attempt < MAX_TRANSIENT_START_RETRIES =>
+            {
+                transient_backoff(target, attempt + 1).await;
+            }
+            Err(error) => panic!("{failure_label}: {}", redacted_failure_category(&error)),
+        }
+    }
+    unreachable!("bounded transient retry loop must return or panic")
+}
+
+async fn pace_between_cases(target: CustomTarget) {
+    if !target.inter_case_delay().is_zero() {
+        tokio::time::sleep(target.inter_case_delay()).await;
+    }
+}
+
 async fn run_text_stream(
     client: &LlmClient,
     target: CustomTarget,
     model: &str,
 ) -> StreamObservation {
-    let mut stream = client
-        .stream(request(target, model, "Reply with one short word.", 32))
-        .await
-        .expect("custom provider text stream must start");
+    let mut stream = start_stream_with_retry(
+        client,
+        target,
+        model,
+        "Reply with one short word.",
+        32,
+        "custom provider text stream must start",
+    )
+    .await;
     let mut observation = StreamObservation::default();
     while let Some(item) = stream.next().await {
-        match item.expect("custom provider text stream must decode") {
+        let event = item.unwrap_or_else(|error| {
+            panic!(
+                "custom provider text stream must decode: {}",
+                redacted_failure_category(&error)
+            )
+        });
+        match event {
             AssistantEvent::Start {
                 provider_request_id,
                 generation_id,
@@ -203,67 +311,81 @@ async fn run_text_stream(
 }
 
 async fn run_safe_4xx(client: &LlmClient, target: CustomTarget) {
-    let invalid = request(
-        target,
-        "philo-controlled-invalid-model",
-        "This bounded request must fail before producing content.",
-        1,
-    );
-    let error = client
-        .complete(invalid)
-        .await
-        .expect_err("reviewed invalid model must produce a safe client error");
-    assert!(
-        matches!(error, LlmError::HttpStatus(ref error) if (400..500).contains(&error.status())),
-        "controlled invalid model must produce an HTTP 4xx"
-    );
+    for attempt in 0..=MAX_TRANSIENT_START_RETRIES {
+        let invalid = request(
+            target,
+            "philo-controlled-invalid-model",
+            "This bounded request must fail before producing content.",
+            1,
+        );
+        match client.complete(invalid).await {
+            Err(error)
+                if target == CustomTarget::ZaiAnthropic
+                    && is_transient_capacity_error(&error)
+                    && attempt < MAX_TRANSIENT_START_RETRIES =>
+            {
+                transient_backoff(target, attempt + 1).await;
+            }
+            Err(LlmError::HttpStatus(error)) => {
+                assert!(
+                    (400..500).contains(&error.status()) && error.status() != 429,
+                    "controlled invalid model must produce a non-transient HTTP 4xx"
+                );
+                return;
+            }
+            Err(error) => panic!(
+                "controlled invalid model returned wrong category: {}",
+                redacted_failure_category(&error)
+            ),
+            Ok(_) => panic!("controlled invalid model unexpectedly succeeded"),
+        }
+    }
+    unreachable!("bounded transient retry loop must return or panic")
 }
 
 async fn run_explicit_cancellation(client: &LlmClient, target: CustomTarget, model: &str) {
-    let control = RequestControl::new();
-    let cancellation = control.cancellation_token().clone();
-    let mut stream = client
-        .stream_with_control(
-            request(
-                target,
-                model,
-                "Begin a longer bounded response and continue until stopped.",
-                128,
-            ),
-            control,
-        )
-        .await
-        .expect("cancellation stream must start");
+    let (mut stream, cancellation) = start_controlled_stream_with_retry(
+        client,
+        target,
+        model,
+        "Begin a longer bounded response and continue until stopped.",
+        "cancellation stream must start",
+    )
+    .await;
     let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await
         .expect("cancellation stream must emit promptly")
         .expect("cancellation stream must emit one event");
-    first.expect("cancellation stream must decode before cancellation");
+    first.unwrap_or_else(|error| {
+        panic!(
+            "cancellation stream must decode before cancellation: {}",
+            redacted_failure_category(&error)
+        )
+    });
     cancellation.cancel();
     drop(stream);
     assert!(cancellation.is_cancelled());
 }
 
 async fn run_drop_cancellation(client: &LlmClient, target: CustomTarget, model: &str) {
-    let control = RequestControl::new();
-    let cancellation = control.cancellation_token().clone();
-    let mut stream = client
-        .stream_with_control(
-            request(
-                target,
-                model,
-                "Begin another longer bounded response and continue until stopped.",
-                128,
-            ),
-            control,
-        )
-        .await
-        .expect("drop stream must start");
+    let (mut stream, cancellation) = start_controlled_stream_with_retry(
+        client,
+        target,
+        model,
+        "Begin another longer bounded response and continue until stopped.",
+        "drop stream must start",
+    )
+    .await;
     let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
         .await
         .expect("drop stream must emit promptly")
         .expect("drop stream must emit one event");
-    first.expect("drop stream must decode before drop");
+    first.unwrap_or_else(|error| {
+        panic!(
+            "drop stream must decode before drop: {}",
+            redacted_failure_category(&error)
+        )
+    });
     drop(stream);
     assert!(
         cancellation.is_cancelled(),
@@ -293,8 +415,11 @@ async fn protected_custom_provider_definition_smoke() {
     let client = LlmClient::with_reqwest(runtime).expect("reviewed HTTPS transport must build");
 
     let observation = run_text_stream(&client, target, &model).await;
+    pace_between_cases(target).await;
     run_safe_4xx(&client, target).await;
+    pace_between_cases(target).await;
     run_explicit_cancellation(&client, target, &model).await;
+    pace_between_cases(target).await;
     run_drop_cancellation(&client, target, &model).await;
 
     println!(
@@ -389,6 +514,11 @@ fn smoke_source_keeps_endpoint_and_output_policy_explicit() {
     assert!(source.contains("https://openrouter.ai/api/v1"));
     assert!(source.contains("https://api.z.ai/api/anthropic"));
     assert!(source.contains("safe_4xx=passed cancellation=passed drop=passed"));
+    assert!(source.contains("MAX_TRANSIENT_START_RETRIES"));
+    assert!(source.contains("ZAI_INTER_CASE_DELAY"));
+    assert!(source.contains("redacted_failure_category"));
+    let forbidden_method = ["expect", "_err"].concat();
+    assert!(!source.contains(&forbidden_method));
     let caller_endpoint_variable = ["PHILO_PROVIDER", "_ENDPOINT"].concat();
     assert!(!source.contains(&caller_endpoint_variable));
     for forbidden in [
