@@ -352,7 +352,7 @@ async fn run_explicit_cancellation(client: &LlmClient, target: CustomTarget, mod
         "cancellation stream must start",
     )
     .await;
-    let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
+    let first = tokio::time::timeout(REQUEST_TIMEOUT, stream.next())
         .await
         .expect("cancellation stream must emit promptly")
         .expect("cancellation stream must emit one event");
@@ -376,7 +376,7 @@ async fn run_drop_cancellation(client: &LlmClient, target: CustomTarget, model: 
         "drop stream must start",
     )
     .await;
-    let first = tokio::time::timeout(Duration::from_secs(30), stream.next())
+    let first = tokio::time::timeout(REQUEST_TIMEOUT, stream.next())
         .await
         .expect("drop stream must emit promptly")
         .expect("drop stream must emit one event");
