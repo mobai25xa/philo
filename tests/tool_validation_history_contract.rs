@@ -283,7 +283,7 @@ fn history_sanitizes_tool_call_ids_and_drops_thinking() {
 }
 
 #[test]
-fn history_removes_empty_assistant_and_rejects_unsupported_policy() {
+fn history_removes_empty_assistant_and_rejects_only_unsupported_policy() {
     let input = vec![
         Message::user("hi"),
         Message::new(philo::MessageRole::Assistant, vec![]),
@@ -317,14 +317,24 @@ fn history_removes_empty_assistant_and_rejects_unsupported_policy() {
 
     policy = HistoryPolicy::official_openai();
     policy.thinking_replay = ThinkingReplayPolicy::SameSourceOnly;
-    let error = normalize_history(
-        &input,
+    let same_source_input = vec![
+        Message::user("hi"),
+        Message::new(
+            philo::MessageRole::Assistant,
+            vec![ContentPart::Thinking(ThinkingContent::new("summary"))],
+        ),
+    ];
+    let normalized = normalize_history(
+        &same_source_input,
         &history_caps(),
         &DialectPolicy::official_openai(),
         &policy,
     )
-    .unwrap_err();
-    assert_eq!(error.reason(), HistoryFailure::UnsupportedPolicy);
+    .unwrap();
+    assert!(matches!(
+        normalized.messages()[1].content(),
+        [ContentPart::Thinking(_)]
+    ));
 
     policy = HistoryPolicy::official_openai();
     policy.unsupported_content = UnsupportedContentPolicy::DropWithDiagnostic;

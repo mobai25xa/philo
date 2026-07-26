@@ -1051,6 +1051,107 @@ contract_version = "1.0.0"
 notes = "Header names only; no credential values"
 
 [[fixture]]
+id = "p5-anthropic-request-minimal-text"
+path = "phase-5/anthropic-messages/request/minimal-text.json"
+purpose = "Encode the minimum supported Anthropic Messages text request"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-004 request golden with omitted optional fields"
+
+[[fixture]]
+id = "p5-anthropic-request-structured-json-schema"
+path = "phase-5/anthropic-messages/request/structured-json-schema.json"
+purpose = "Encode Anthropic output_config JSON Schema without schema mutation"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-004 synthetic structured-output request golden"
+
+[[fixture]]
+id = "p5-anthropic-request-system-tools-image"
+path = "phase-5/anthropic-messages/request/system-tools-image.json"
+purpose = "Preserve Anthropic top-level system, Tool, text, and image request shapes"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-004 and P5-007 request mapping golden; contains no network capture"
+
+[[fixture]]
+id = "p5-anthropic-stream-text"
+path = "phase-5/anthropic-messages/stream/text.sse"
+purpose = "Decode the Anthropic text block lifecycle, explicit zero usage, and finish"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-005 and P5-008 synthetic text lifecycle"
+
+[[fixture]]
+id = "p5-anthropic-stream-tool-use"
+path = "phase-5/anthropic-messages/stream/tool-use.sse"
+purpose = "Decode bounded Tool Use JSON deltas and tool_use finish"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-007 mapping fixture; SDK does not execute the Tool"
+
+[[fixture]]
+id = "p5-anthropic-stream-thinking-signature"
+path = "phase-5/anthropic-messages/stream/thinking-signature.sse"
+purpose = "Keep visible thinking separate while retaining an opaque signature"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-007 synthetic opaque value is a non-secret test canary"
+
+[[fixture]]
+id = "p5-anthropic-stream-redacted-thinking"
+path = "phase-5/anthropic-messages/stream/redacted-thinking.sse"
+purpose = "Retain redacted thinking as opaque state without emitting answer text"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-007 synthetic redaction canary must not enter Debug or text events"
+
+[[fixture]]
+id = "p5-anthropic-stream-ping-unknown"
+path = "phase-5/anthropic-messages/stream/ping-unknown.sse"
+purpose = "Ignore Anthropic ping and unknown ignorable events without content"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-005 forward-compatible event lifecycle fixture"
+
+[[fixture]]
+id = "p5-anthropic-stream-usage-finish"
+path = "phase-5/anthropic-messages/stream/usage-finish.sse"
+purpose = "Merge cumulative Usage snapshots without inventing total tokens"
+source = "synthetic"
+expected = "success"
+contract_version = "1.0.0"
+notes = "P5-008 covers cache, reasoning, nonterminal delta, and terminal snapshot"
+
+[[fixture]]
+id = "p5-anthropic-stream-error"
+path = "phase-5/anthropic-messages/stream/error.sse"
+purpose = "Map a bounded Anthropic stream error without leaking its message"
+source = "synthetic"
+expected = "error"
+expected_error = "protocol"
+contract_version = "1.0.0"
+notes = "P5-008 error message canary is retained only in the fixture input"
+
+[[fixture]]
+id = "p5-anthropic-stream-truncated"
+path = "phase-5/anthropic-messages/stream/truncated.sse"
+purpose = "Fail a stream that reaches EOF before Anthropic message_stop"
+source = "synthetic"
+expected = "error"
+expected_error = "truncated_stream"
+contract_version = "1.0.0"
+notes = "P5-005 strict truncation fixture never yields Done"
+
+[[fixture]]
 id = "p3-deepseek-contract"
 path = "provider-compat/deepseek/contract.json"
 purpose = "DeepSeek minimal, bounded option, and thinking-history reviewed shapes"

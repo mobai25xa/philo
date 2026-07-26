@@ -9,7 +9,7 @@ use http::{HeaderMap, HeaderName, HeaderValue, header};
 use secrecy::{ExposeSecret, SecretString};
 
 use super::catalog::ProductId;
-use super::endpoint::{CredentialAudience, ResolvedEndpoint};
+use super::endpoint::{CredentialBinding, ResolvedEndpoint};
 pub use super::headers::ClientIdentity;
 use super::headers::HeaderOperation;
 use crate::domain::ProviderId;
@@ -104,21 +104,29 @@ impl fmt::Display for ApiKey {
     }
 }
 
-/// Bearer credential bound to a credential audience.
+/// Bearer credential bound to an immutable destination.
 #[derive(Clone)]
 pub struct BearerCredential {
     key: ApiKey,
-    audience: CredentialAudience,
+    binding: CredentialBinding,
 }
 
 impl BearerCredential {
     /// Binds a secret to its allowed destination.
-    pub fn new(key: ApiKey, audience: CredentialAudience) -> Self {
-        Self { key, audience }
+    pub fn new(key: ApiKey, binding: impl Into<CredentialBinding>) -> Self {
+        Self {
+            key,
+            binding: binding.into(),
+        }
     }
-    /// Returns the credential audience.
-    pub fn audience(&self) -> &CredentialAudience {
-        &self.audience
+    /// Returns the credential destination binding.
+    pub fn binding(&self) -> &CredentialBinding {
+        &self.binding
+    }
+
+    /// Compatibility alias for [`Self::binding`].
+    pub fn audience(&self) -> &CredentialBinding {
+        self.binding()
     }
 }
 
@@ -126,7 +134,7 @@ impl fmt::Debug for BearerCredential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BearerCredential")
             .field("key", &"[REDACTED]")
-            .field("audience", &self.audience)
+            .field("binding", &self.binding)
             .finish()
     }
 }
@@ -205,7 +213,12 @@ pub trait AuthProvider: fmt::Debug + Send + Sync {
     /// Returns every header name owned by this authentication provider.
     fn protected_headers(&self) -> Vec<HeaderName>;
 
-    /// Validates credential audience before the runtime becomes usable.
+    /// Returns the immutable destination binding when this provider carries credentials.
+    fn credential_binding(&self) -> Option<&CredentialBinding> {
+        None
+    }
+
+    /// Validates credential binding before the runtime becomes usable.
     fn validate_endpoint(&self, endpoint: &ResolvedEndpoint) -> Result<(), LlmError>;
 
     /// Validates the final authentication fields for this concrete scheme.
@@ -235,14 +248,19 @@ impl BearerAuth {
     pub fn new(credential: BearerCredential) -> Self {
         Self { credential }
     }
-    /// Returns the bound audience.
-    pub fn audience(&self) -> &CredentialAudience {
-        self.credential.audience()
+    /// Returns the bound credential destination.
+    pub fn binding(&self) -> &CredentialBinding {
+        self.credential.binding()
     }
 
-    /// Produces the Bearer header after validating credential audience.
+    /// Compatibility alias for [`Self::binding`].
+    pub fn audience(&self) -> &CredentialBinding {
+        self.binding()
+    }
+
+    /// Produces the Bearer header after validating the credential binding.
     pub fn operation(&self, context: AuthContext<'_>) -> Result<HeaderOperation, LlmError> {
-        self.credential.audience.validate(context.endpoint())?;
+        self.credential.binding.validate(context.endpoint())?;
         let value = HeaderValue::from_str(&format!("Bearer {}", self.credential.key.expose()))
             .map_err(|_| {
                 validation(
@@ -279,8 +297,12 @@ impl AuthProvider for BearerAuth {
         vec![header::AUTHORIZATION]
     }
 
+    fn credential_binding(&self) -> Option<&CredentialBinding> {
+        Some(&self.credential.binding)
+    }
+
     fn validate_endpoint(&self, endpoint: &ResolvedEndpoint) -> Result<(), LlmError> {
-        self.credential.audience.validate(endpoint)
+        self.credential.binding.validate(endpoint)
     }
 
     fn validate_final(&self, headers: &HeaderMap) -> Result<(), LlmError> {

@@ -16,8 +16,8 @@ use super::schema::SchemaLimits;
 use super::structured::ResponseFormat;
 use super::usage::UsageDetails;
 use super::{
-    ContentIndex, ContentPart, ModelRef, RefusalContent, ThinkingContent, ToolCall, ToolCallId,
-    WireToolIndex,
+    ContentIndex, ContentPart, ModelRef, OpaqueReasoning, RefusalContent, ThinkingContent,
+    ToolCall, ToolCallId, WireToolIndex,
 };
 use crate::error::{LlmError, ProtocolError, TruncatedStreamError};
 
@@ -117,6 +117,13 @@ pub enum AssistantEvent {
         index: ContentIndex,
         /// Unmodified visible fragment.
         delta: String,
+    },
+    /// Attaches provider state that must remain opaque to one thinking block.
+    ThinkingOpaque {
+        /// Provider-independent content position.
+        index: ContentIndex,
+        /// Opaque state carrying its validated replay source identity.
+        opaque: OpaqueReasoning,
     },
     /// Ends a visible thinking content block.
     ThinkingEnd {
@@ -315,7 +322,10 @@ fn validate_structured_output(
 
 enum OpenBlock {
     Text(String),
-    Thinking(String),
+    Thinking {
+        text: String,
+        opaque: Option<OpaqueReasoning>,
+    },
     Refusal(String),
     ToolCall {
         wire_index: WireToolIndex,
@@ -382,23 +392,48 @@ impl Collector {
                 self.end_block(index, ContentPart::text(text))?;
             }
             AssistantEvent::ThinkingStart { index } => {
-                self.start_block(index, OpenBlock::Thinking(String::new()))?;
+                self.start_block(
+                    index,
+                    OpenBlock::Thinking {
+                        text: String::new(),
+                        opaque: None,
+                    },
+                )?;
             }
             AssistantEvent::ThinkingDelta { index, delta } => {
-                let Some(OpenBlock::Thinking(text)) = self.open.get_mut(&index) else {
+                let Some(OpenBlock::Thinking { text, .. }) = self.open.get_mut(&index) else {
                     return Err(Self::protocol(
                         "ThinkingDelta requires a matching ThinkingStart",
                     ));
                 };
                 text.push_str(&delta);
             }
+            AssistantEvent::ThinkingOpaque { index, opaque } => {
+                let Some(OpenBlock::Thinking {
+                    opaque: current, ..
+                }) = self.open.get_mut(&index)
+                else {
+                    return Err(Self::protocol(
+                        "ThinkingOpaque requires a matching ThinkingStart",
+                    ));
+                };
+                if current.replace(opaque).is_some() {
+                    return Err(Self::protocol(
+                        "thinking block received duplicate opaque state",
+                    ));
+                }
+            }
             AssistantEvent::ThinkingEnd { index } => {
-                let Some(OpenBlock::Thinking(text)) = self.open.remove(&index) else {
+                let Some(OpenBlock::Thinking { text, opaque }) = self.open.remove(&index) else {
                     return Err(Self::protocol(
                         "ThinkingEnd requires a matching ThinkingStart",
                     ));
                 };
-                self.end_block(index, ContentPart::Thinking(ThinkingContent::new(text)))?;
+                let mut thinking = ThinkingContent::new(text);
+                if let Some(opaque) = opaque {
+                    thinking = thinking.with_opaque(opaque);
+                }
+                self.end_block(index, ContentPart::Thinking(thinking))?;
             }
             AssistantEvent::RefusalStart { index } => {
                 self.start_block(index, OpenBlock::Refusal(String::new()))?;

@@ -20,7 +20,7 @@ use crate::error::{
     CredentialError, CredentialFailure, LlmError, ValidationError, ValidationReason,
 };
 use crate::provider::catalog::ProductId;
-use crate::provider::endpoint::{CredentialAudience, ResolvedEndpoint};
+use crate::provider::endpoint::{CredentialBinding, ResolvedEndpoint};
 use crate::provider::headers::HeaderOperation;
 use crate::transport::{CancellationToken, await_with_lifecycle};
 
@@ -175,7 +175,7 @@ pub struct DynamicCredentialContext {
     tenant_id: TenantId,
     provider_id: ProviderId,
     product_id: ProductId,
-    audience: CredentialAudience,
+    binding: CredentialBinding,
     credential_identity: CredentialIdentity,
     deadline: Option<Instant>,
     cancellation: CancellationToken,
@@ -194,9 +194,13 @@ impl DynamicCredentialContext {
     pub fn product_id(&self) -> &ProductId {
         &self.product_id
     }
-    /// Returns the endpoint credential audience.
-    pub fn audience(&self) -> &CredentialAudience {
-        &self.audience
+    /// Returns the endpoint credential binding.
+    pub fn binding(&self) -> &CredentialBinding {
+        &self.binding
+    }
+    /// Compatibility alias for [`Self::binding`].
+    pub fn audience(&self) -> &CredentialBinding {
+        self.binding()
     }
     /// Returns the opaque credential identity used for cache partitioning.
     pub fn credential_identity(&self) -> &CredentialIdentity {
@@ -219,7 +223,7 @@ impl fmt::Debug for DynamicCredentialContext {
             .field("tenant_id", &"[REDACTED]")
             .field("provider_id", &self.provider_id)
             .field("product_id", &self.product_id)
-            .field("audience", &self.audience)
+            .field("binding", &self.binding)
             .field("credential_identity", &"[REDACTED]")
             .field("deadline", &self.deadline)
             .field("is_cancelled", &self.cancellation.is_cancelled())
@@ -244,7 +248,7 @@ pub struct DynamicAuth {
     cache: DynamicCredentialCache,
     tenant_id: TenantId,
     credential_identity: CredentialIdentity,
-    audience: CredentialAudience,
+    binding: CredentialBinding,
     allowed_schemes: Vec<DynamicCredentialScheme>,
     callback_timeout: Duration,
     refresh_window: Duration,
@@ -255,7 +259,7 @@ impl DynamicAuth {
     /// Creates a dynamic Bearer provider with isolated cache identity.
     pub fn new(
         source: Arc<dyn DynamicCredentialSource>,
-        audience: CredentialAudience,
+        binding: impl Into<CredentialBinding>,
         tenant_id: TenantId,
         credential_identity: CredentialIdentity,
     ) -> Self {
@@ -264,7 +268,7 @@ impl DynamicAuth {
             cache: DynamicCredentialCache::new(),
             tenant_id,
             credential_identity,
-            audience,
+            binding: binding.into(),
             allowed_schemes: vec![DynamicCredentialScheme::Bearer],
             callback_timeout: Duration::from_secs(5),
             refresh_window: Duration::from_secs(30),
@@ -321,7 +325,7 @@ impl DynamicAuth {
         &self,
         context: AuthContext<'_>,
     ) -> Result<Vec<HeaderOperation>, LlmError> {
-        self.audience.validate(context.endpoint())?;
+        self.binding.validate(context.endpoint())?;
         let provider_id = context
             .provider_id()
             .ok_or_else(|| CredentialError::new(CredentialFailure::Invalid))?
@@ -337,7 +341,7 @@ impl DynamicAuth {
             tenant_id: self.tenant_id.clone(),
             provider_id: provider_id.clone(),
             product_id: product_id.clone(),
-            audience: self.audience.clone(),
+            binding: self.binding.clone(),
             credential_identity: self.credential_identity.clone(),
         };
         let source = Arc::clone(&self.source);
@@ -345,7 +349,7 @@ impl DynamicAuth {
             tenant_id: self.tenant_id.clone(),
             provider_id,
             product_id,
-            audience: self.audience.clone(),
+            binding: self.binding.clone(),
             credential_identity: self.credential_identity.clone(),
             deadline: lifecycle.deadline(),
             cancellation: lifecycle.cancellation().clone(),
@@ -395,7 +399,7 @@ impl fmt::Debug for DynamicAuth {
             .field("cache", &self.cache)
             .field("tenant_id", &"[REDACTED]")
             .field("credential_identity", &"[REDACTED]")
-            .field("audience", &self.audience)
+            .field("binding", &self.binding)
             .field("allowed_schemes", &self.allowed_schemes)
             .field("callback_timeout", &self.callback_timeout)
             .field("refresh_window", &self.refresh_window)
@@ -422,8 +426,12 @@ impl AuthProvider for DynamicAuth {
             .collect()
     }
 
+    fn credential_binding(&self) -> Option<&CredentialBinding> {
+        Some(&self.binding)
+    }
+
     fn validate_endpoint(&self, endpoint: &ResolvedEndpoint) -> Result<(), LlmError> {
-        self.audience.validate(endpoint)
+        self.binding.validate(endpoint)
     }
 
     fn validate_final(&self, headers: &HeaderMap) -> Result<(), LlmError> {

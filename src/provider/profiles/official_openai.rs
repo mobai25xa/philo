@@ -3,21 +3,19 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::domain::{ModelId, ProtocolId, ProviderId, ResourceLimits};
+use crate::domain::{ModelId, ProviderId, ResourceLimits};
 use crate::error::LlmError;
 use crate::transport::SseConfig;
 
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
-use super::super::capability::{
-    ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
-};
+use super::super::capability::{ModelCapabilityProfile, ProviderCapabilities};
 use super::super::catalog::{ModelCatalog, ProductId};
 use super::super::compat::CompatPatch;
+use super::super::definition::{AuthScheme, ProviderDefinition, ResolvedProviderDeployment};
 use super::super::endpoint::{CredentialAudience, EndpointConfig};
 use super::super::headers::DynamicHeaderPolicy;
-use super::super::profile::{ProviderProfile, ProviderProfileParts};
+use super::super::profile::ProviderProfile;
 use super::super::runtime::ProviderRuntime;
-use super::super::{IdempotencyPolicy, RateLimitPolicy};
 
 /// Stable phase-one official `OpenAI` profile constructor.
 #[derive(Clone, Debug)]
@@ -137,36 +135,32 @@ impl OfficialOpenAiProfile {
 
     /// Produces the declarative profile.
     pub fn profile(self) -> Result<ProviderProfile, LlmError> {
-        let audience = CredentialAudience::OfficialOpenAi;
-        ProviderProfile::from_parts(ProviderProfileParts {
-            provider_id: ProviderId::new("official-openai")?,
-            product_id: ProductId::new("chat-completions")?,
-            protocol_id: ProtocolId::new("openai-chat-completions")?,
-            endpoint: EndpointConfig::base_and_path(
-                "https://api.openai.com/v1",
-                "/chat/completions",
-            )?,
-            auth: self.auth,
-            audience,
-            client_identity: self.client_identity,
-            provider_headers: Vec::new(),
-            model_headers: Vec::new(),
-            dynamic_header_policy: self.dynamic_header_policy,
-            capabilities: ProviderCapabilities::official_openai(),
-            model_capabilities: self.model_capabilities,
-            catalog: self.catalog,
-            provider_compat: self.provider_compat,
-            model_compat: self.model_compat,
-            openrouter_routing: None,
-            dialect: ProtocolDialect::OpenAiChatCompletions,
-            transport: ProviderTransportOptions::secure_defaults(),
-            resource_limits: self.resource_limits,
-            sse: self.sse,
-            max_http_error_body_bytes: self.max_http_error_body_bytes,
-            rate_limit: RateLimitPolicy::standard_only(),
-            idempotency: IdempotencyPolicy::unknown(),
-            test_only: false,
-        })
+        let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
+        let mut builder = ProviderDefinition::openai_chat(
+            ProviderId::new("official-openai")?,
+            ProductId::new("chat-completions")?,
+        )
+        .with_endpoint(EndpointConfig::base_and_path(
+            "https://api.openai.com/v1",
+            "/chat/completions",
+        )?)
+        .with_credential_binding(CredentialAudience::OfficialOpenAi.into())
+        .with_auth_scheme(auth_scheme)
+        .with_shared_dynamic_header_policy(self.dynamic_header_policy)
+        .with_capabilities(ProviderCapabilities::official_openai())
+        .with_catalog(self.catalog)
+        .with_provider_compat(self.provider_compat);
+        for capability in self.model_capabilities.into_values() {
+            builder = builder.with_model_capabilities(capability);
+        }
+        for (model, compat) in self.model_compat {
+            builder = builder.with_model_compat(model, compat);
+        }
+        let deployment = ResolvedProviderDeployment::new(self.auth, self.client_identity)
+            .with_resource_limits(self.resource_limits)
+            .with_sse_config(self.sse)
+            .with_max_http_error_body_bytes(self.max_http_error_body_bytes)?;
+        builder.build()?.compile_resolved(deployment)
     }
 
     /// Builds the immutable runtime.

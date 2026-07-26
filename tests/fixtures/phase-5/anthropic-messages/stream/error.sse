@@ -1,0 +1,6 @@
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_test_error","model":"claude-test","usage":{}}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"stream-error-body-canary"}}
+

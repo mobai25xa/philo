@@ -152,6 +152,11 @@ pub(crate) fn decide_retry(
         LlmError::HttpStatus(error) if matches!(error.status(), 502..=504) && replay_safe => {
             RetryReason::TransientServerError
         }
+        LlmError::Protocol(error)
+            if error.retriable() == crate::error::RetriableHint::Maybe && replay_safe =>
+        {
+            RetryReason::EarlyBodyFailure
+        }
         LlmError::TruncatedStream(_) if replay_safe => RetryReason::EarlyTruncation,
         LlmError::Cancelled
         | LlmError::Configuration(_)
@@ -180,7 +185,7 @@ pub(crate) fn decide_retry(
 
 #[cfg(test)]
 mod tests {
-    use crate::error::{BodySummary, HttpStatusError, RetriableHint};
+    use crate::error::{BodySummary, HttpStatusError, ProtocolError, RetriableHint};
 
     use super::{DeliveryState, RetryDecision, RetryPolicy, decide_retry};
 
@@ -193,6 +198,35 @@ mod tests {
             RetriableHint::Maybe,
         )
         .into();
+        assert_eq!(
+            decide_retry(
+                &error,
+                DeliveryState::DomainEventDelivered,
+                1,
+                RetryPolicy::standard(),
+                None,
+                true,
+            ),
+            RetryDecision::Fail
+        );
+    }
+
+    #[test]
+    fn provider_stream_retry_hint_still_obeys_delivery_boundary() {
+        let error = ProtocolError::new("provider stream error")
+            .with_provider_context("overloaded_error".to_owned(), None, RetriableHint::Maybe)
+            .into();
+        assert_eq!(
+            decide_retry(
+                &error,
+                DeliveryState::NothingDelivered,
+                1,
+                RetryPolicy::standard(),
+                None,
+                true,
+            ),
+            RetryDecision::Retry(crate::error::RetryReason::EarlyBodyFailure)
+        );
         assert_eq!(
             decide_retry(
                 &error,

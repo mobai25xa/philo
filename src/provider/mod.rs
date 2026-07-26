@@ -6,6 +6,7 @@ pub mod capability;
 pub mod catalog;
 pub mod compat;
 pub mod config;
+mod definition;
 pub mod detection;
 pub mod diagnostics;
 pub mod endpoint;
@@ -14,6 +15,7 @@ pub mod headers;
 mod idempotency;
 pub mod profile;
 mod profiles;
+mod protocol_contract;
 mod rate_limit;
 pub mod registry;
 pub mod runtime;
@@ -25,8 +27,9 @@ pub use auth::{
     DynamicCredentialSource, MultiHeaderAuth, NoAuth, TenantId,
 };
 pub use capability::{
-    ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, ProtocolDialect,
-    ProviderCapabilities, ProviderTransportOptions,
+    ModelCapabilityProfile, OFFICIAL_ANTHROPIC_CAPABILITY_REVIEW_DATE,
+    OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, ProtocolDialect, ProviderCapabilities,
+    ProviderTransportOptions,
 };
 pub use catalog::{
     CatalogCapabilities, CatalogDefaults, CatalogSource, CatalogSourceId, DeploymentId,
@@ -34,12 +37,12 @@ pub use catalog::{
     SupportStatus, WireModelValue,
 };
 pub use compat::{
-    CompatField, CompatPatch, CompatProfile, ConstraintStrength, DataRetention, FallbackDimension,
-    FinishReasonCompat, HistoryCompat, InlineErrorCompat, MaxOutputTokensWireFormat,
-    ModelBodyWireFormat, OpenRouterRoutingContract, OpenRouterRoutingPatch, ProviderRequestOptions,
-    RequestCompat, ResolvedProviderRouting, ResponseCompat, RoutingFallback, RoutingField,
-    RoutingRegion, RoutingSort, ToolArgumentsCompat, UpstreamId, UsageCompat, resolve_compat,
-    validate_compat,
+    AnthropicUsageCompat, CompatField, CompatPatch, CompatProfile, ConstraintStrength,
+    DataRetention, FallbackDimension, FinishReasonCompat, HistoryCompat, InlineErrorCompat,
+    MaxOutputTokensWireFormat, ModelBodyWireFormat, OpenRouterRoutingContract,
+    OpenRouterRoutingPatch, ProviderRequestOptions, RequestCompat, ResolvedProviderRouting,
+    ResponseCompat, RoutingFallback, RoutingField, RoutingRegion, RoutingSort, ToolArgumentsCompat,
+    UpstreamId, UsageCompat, resolve_compat, validate_compat,
 };
 pub use config::{
     ClientIdentityConfig, ConfigSchemaVersion, ConfigSource, ConfigSourceId, ConfigSourceKind,
@@ -47,6 +50,9 @@ pub use config::{
     EnvironmentSecretResolver, FieldProvenance, FieldState, ListMerge, MapMerge, NamedConfigValue,
     NamedListMerge, ProviderConfigDocument, ProviderConfigField, ProviderConfigLayer,
     ProviderConfigSnapshot, SecretReference, SecretResolver,
+};
+pub use definition::{
+    AuthScheme, ProviderDefinition, ProviderDefinitionBuilder, ProviderDeploymentConfig,
 };
 pub use detection::{
     DetectionConfidence, DetectionExplanation, DetectionSuggestion, DetectionUnknownReason,
@@ -57,14 +63,14 @@ pub use diagnostics::{
     EvidenceVerification, HeaderDiagnostic, ProviderDiagnostics, SupportDiagnostics,
 };
 pub use endpoint::{
-    CredentialAudience, EndpointConfig, EndpointNetworkPolicy, EndpointPathVariable, EndpointQuery,
-    EndpointQueryAction, EndpointQueryDiagnostic, EndpointQuerySource,
-    EndpointResolutionDiagnostics, EndpointTemplate, EndpointValues, Origin, QueryMergeRule,
-    RedirectPolicy, ResolvedEndpoint, ResolvedModelMapping,
+    CredentialAudience, CredentialBinding, EndpointConfig, EndpointNetworkPolicy,
+    EndpointPathVariable, EndpointQuery, EndpointQueryAction, EndpointQueryDiagnostic,
+    EndpointQuerySource, EndpointResolutionDiagnostics, EndpointTemplate, EndpointValues, Origin,
+    QueryMergeRule, RedirectPolicy, ResolvedEndpoint, ResolvedModelMapping,
 };
 pub use factory::{
-    OfficialOpenAiFactory, ProviderRuntimeFactory, ProviderSelection, ProviderSelectionInput,
-    ProviderSelectionSource, ProviderSelector,
+    OfficialAnthropicFactory, OfficialOpenAiFactory, ProviderRuntimeFactory, ProviderSelection,
+    ProviderSelectionInput, ProviderSelectionSource, ProviderSelector, StaticProviderFactory,
 };
 pub use headers::{
     ClientIdentity, ClientIdentityFragment, DynamicHeaderContext, DynamicHeaderFuture,
@@ -80,8 +86,12 @@ pub use profile::ProviderProfile;
 #[doc(hidden)]
 pub use profiles::TestOnlyProfile;
 pub use profiles::{
-    DeepSeekProfile, OfficialOpenAiProfile, OpenRouterAttribution, OpenRouterProfile,
-    ZaiCodingProfile, ZaiStandardProfile,
+    DeepSeekProfile, OFFICIAL_ANTHROPIC_API_VERSION, OfficialAnthropicProfile,
+    OfficialOpenAiProfile, OpenRouterAttribution, OpenRouterProfile, ZaiCodingProfile,
+    ZaiStandardProfile,
+};
+pub(crate) use protocol_contract::{
+    AnthropicMessagesContract, OpenAiChatContract, ResolvedProtocolContract,
 };
 pub(crate) use rate_limit::observe_rate_limit;
 pub use rate_limit::{

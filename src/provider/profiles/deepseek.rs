@@ -2,15 +2,20 @@
 
 use std::sync::Arc;
 
+use crate::domain::{ModelId, ProtocolId, ProviderId};
 use crate::error::LlmError;
 
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
+use super::super::capability::ProviderCapabilities;
+use super::super::catalog::ProductId;
 use super::super::compat::MaxOutputTokensWireFormat;
+use super::super::definition::{AuthScheme, ProviderDefinition};
 use super::super::endpoint::CredentialAudience;
+use super::super::endpoint::EndpointConfig;
 use super::super::headers::DynamicHeaderPolicy;
 use super::super::profile::ProviderProfile;
 use super::super::runtime::ProviderRuntime;
-use super::common::{CompatibleProfileParts, build_compatible_profile, provider_patch};
+use super::common::{compatible_deployment, exact_model_catalog, provider_patch};
 
 /// Experimental built-in `DeepSeek` OpenAI-format Chat preset.
 #[derive(Clone, Debug)]
@@ -60,22 +65,33 @@ impl DeepSeekProfile {
     /// Produces the declarative profile.
     pub fn profile(self) -> Result<ProviderProfile, LlmError> {
         let compat = provider_patch().with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens);
-        build_compatible_profile(CompatibleProfileParts {
-            provider: "deepseek",
-            product: "deepseek-chat-openai",
-            base_url: "https://api.deepseek.com",
-            endpoint_path: "/chat/completions",
-            audience: CredentialAudience::DeepSeekApi,
-            auth: self.auth,
-            client_identity: self.client_identity,
-            provider_headers: Vec::new(),
-            dynamic_header_policy: self.dynamic_header_policy,
-            exact_model: "deepseek-v4-flash",
-            display_name: "DeepSeek V4 Flash",
-            catalog_source: "p3-001-deepseek-official-docs",
-            provider_compat: compat,
-            openrouter_routing: None,
-        })
+        let provider_id = ProviderId::new("deepseek")?;
+        let product_id = ProductId::new("deepseek-chat-openai")?;
+        let protocol_id = ProtocolId::new("openai-chat-completions")?;
+        let model_id = ModelId::new("deepseek-v4-flash")?;
+        let catalog = exact_model_catalog(
+            provider_id.clone(),
+            product_id.clone(),
+            protocol_id,
+            &model_id,
+            "DeepSeek V4 Flash",
+            "p3-001-deepseek-official-docs",
+            compat.clone(),
+        )?;
+        let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
+        let definition = ProviderDefinition::openai_chat(provider_id, product_id)
+            .with_endpoint(EndpointConfig::base_and_path(
+                "https://api.deepseek.com",
+                "/chat/completions",
+            )?)
+            .with_credential_binding(CredentialAudience::DeepSeekApi.into())
+            .with_auth_scheme(auth_scheme)
+            .with_shared_dynamic_header_policy(self.dynamic_header_policy)
+            .with_capabilities(ProviderCapabilities::openai_compatible())
+            .with_catalog(catalog)
+            .with_provider_compat(compat)
+            .build()?;
+        definition.compile_resolved(compatible_deployment(self.auth, self.client_identity))
     }
 
     /// Builds the immutable runtime.

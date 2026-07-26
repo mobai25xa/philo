@@ -310,6 +310,8 @@ mod wire {
             response_format_json_object: CapabilityStatus::Unknown,
             response_format_json_schema: CapabilityStatus::Unknown,
             reasoning_efforts: ReasoningEffortSupport::Unknown,
+            adaptive_thinking: CapabilityStatus::Unknown,
+            adaptive_thinking_effort: CapabilityStatus::Unknown,
         }
     }
 

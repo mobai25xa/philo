@@ -9,6 +9,9 @@ use crate::provider::endpoint::RedirectPolicy;
 /// Date on which official phase-two capability declarations were last reviewed.
 pub const OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE: &str = "2026-07-19";
 
+/// Date on which the official Anthropic Messages capability declarations were reviewed.
+pub const OFFICIAL_ANTHROPIC_CAPABILITY_REVIEW_DATE: &str = "2026-07-25";
+
 /// Provider defaults before an exact model capability profile is applied.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderCapabilities {
@@ -42,9 +45,47 @@ pub struct ProviderCapabilities {
     pub response_format_json_schema: CapabilityStatus,
     /// Exact reasoning efforts supported by an exact model profile.
     pub reasoning_efforts: ReasoningEffortSupport,
+    /// Protocol-scoped adaptive-thinking request support.
+    pub adaptive_thinking: CapabilityStatus,
+    /// Protocol-scoped adaptive-thinking effort support.
+    pub adaptive_thinking_effort: CapabilityStatus,
 }
 
 impl ProviderCapabilities {
+    /// Returns a conservative custom `OpenAI` Chat declaration.
+    ///
+    /// Only core text generation, token limits, and streaming are declared;
+    /// tools, images, structured output, and reasoning remain unknown.
+    pub fn conservative_chat_completions() -> Self {
+        Self::openai_compatible()
+    }
+
+    /// Returns a conservative custom Anthropic Messages declaration.
+    ///
+    /// Only core text generation, token limits, and streaming are declared;
+    /// tools, images, structured output, and thinking remain unknown.
+    pub fn conservative_messages() -> Self {
+        Self {
+            developer_role: CapabilityStatus::Supported,
+            temperature: CapabilityStatus::Supported,
+            max_completion_tokens: CapabilityStatus::Supported,
+            streaming: CapabilityStatus::Supported,
+            streaming_usage: CapabilityStatus::Supported,
+            function_tools: CapabilityStatus::Unknown,
+            tool_choice_required: CapabilityStatus::Unknown,
+            tool_choice_specific: CapabilityStatus::Unknown,
+            parallel_tool_calls: CapabilityStatus::Unknown,
+            strict_tools: CapabilityStatus::Unknown,
+            vision_input: CapabilityStatus::Unknown,
+            image_detail_original: CapabilityStatus::Unsupported,
+            response_format_json_object: CapabilityStatus::Unknown,
+            response_format_json_schema: CapabilityStatus::Unknown,
+            reasoning_efforts: ReasoningEffortSupport::Unsupported,
+            adaptive_thinking: CapabilityStatus::Unknown,
+            adaptive_thinking_effort: CapabilityStatus::Unknown,
+        }
+    }
+
     /// Returns the subset used by domain request validation.
     pub fn generation_options(&self) -> CapabilitySet {
         CapabilitySet {
@@ -80,6 +121,30 @@ impl ProviderCapabilities {
             response_format_json_object: CapabilityStatus::Unknown,
             response_format_json_schema: CapabilityStatus::Unknown,
             reasoning_efforts: ReasoningEffortSupport::Unknown,
+            adaptive_thinking: CapabilityStatus::Unsupported,
+            adaptive_thinking_effort: CapabilityStatus::Unsupported,
+        }
+    }
+
+    pub(super) fn official_anthropic() -> Self {
+        Self {
+            developer_role: CapabilityStatus::Supported,
+            temperature: CapabilityStatus::Supported,
+            max_completion_tokens: CapabilityStatus::Supported,
+            streaming: CapabilityStatus::Supported,
+            streaming_usage: CapabilityStatus::Supported,
+            function_tools: CapabilityStatus::Supported,
+            tool_choice_required: CapabilityStatus::Supported,
+            tool_choice_specific: CapabilityStatus::Supported,
+            parallel_tool_calls: CapabilityStatus::Supported,
+            strict_tools: CapabilityStatus::Supported,
+            vision_input: CapabilityStatus::Supported,
+            image_detail_original: CapabilityStatus::Unsupported,
+            response_format_json_object: CapabilityStatus::Unsupported,
+            response_format_json_schema: CapabilityStatus::Supported,
+            reasoning_efforts: ReasoningEffortSupport::Unsupported,
+            adaptive_thinking: CapabilityStatus::Unknown,
+            adaptive_thinking_effort: CapabilityStatus::Unknown,
         }
     }
 
@@ -101,6 +166,8 @@ impl ProviderCapabilities {
             response_format_json_object: CapabilityStatus::Unknown,
             response_format_json_schema: CapabilityStatus::Unknown,
             reasoning_efforts: ReasoningEffortSupport::Unknown,
+            adaptive_thinking: CapabilityStatus::Unsupported,
+            adaptive_thinking_effort: CapabilityStatus::Unsupported,
         }
     }
 
@@ -133,6 +200,8 @@ impl ProviderCapabilities {
         self.response_format_json_object = profile.response_format_json_object;
         self.response_format_json_schema = profile.response_format_json_schema;
         self.reasoning_efforts = profile.reasoning_efforts.clone();
+        self.adaptive_thinking = profile.adaptive_thinking;
+        self.adaptive_thinking_effort = profile.adaptive_thinking_effort;
     }
 
     pub(super) fn apply_catalog(&mut self, profile: &CatalogCapabilities) {
@@ -146,6 +215,8 @@ impl ProviderCapabilities {
         self.response_format_json_object = profile.response_format_json_object;
         self.response_format_json_schema = profile.response_format_json_schema;
         self.reasoning_efforts = profile.reasoning_efforts.clone();
+        self.adaptive_thinking = profile.adaptive_thinking;
+        self.adaptive_thinking_effort = profile.adaptive_thinking_effort;
     }
 }
 
@@ -164,6 +235,8 @@ pub struct ModelCapabilityProfile {
     response_format_json_object: CapabilityStatus,
     response_format_json_schema: CapabilityStatus,
     reasoning_efforts: ReasoningEffortSupport,
+    adaptive_thinking: CapabilityStatus,
+    adaptive_thinking_effort: CapabilityStatus,
 }
 
 impl ModelCapabilityProfile {
@@ -181,6 +254,8 @@ impl ModelCapabilityProfile {
             response_format_json_object: CapabilityStatus::Unknown,
             response_format_json_schema: CapabilityStatus::Unknown,
             reasoning_efforts: ReasoningEffortSupport::Unknown,
+            adaptive_thinking: CapabilityStatus::Unknown,
+            adaptive_thinking_effort: CapabilityStatus::Unknown,
         }
     }
 
@@ -249,6 +324,18 @@ impl ModelCapabilityProfile {
         self
     }
 
+    /// Sets adaptive-thinking request support.
+    pub fn with_adaptive_thinking(mut self, status: CapabilityStatus) -> Self {
+        self.adaptive_thinking = status;
+        self
+    }
+
+    /// Sets adaptive-thinking effort support.
+    pub fn with_adaptive_thinking_effort(mut self, status: CapabilityStatus) -> Self {
+        self.adaptive_thinking_effort = status;
+        self
+    }
+
     /// Returns function tool support.
     pub fn function_tools(&self) -> CapabilityStatus {
         self.function_tools
@@ -305,6 +392,8 @@ impl ModelCapabilityProfile {
 pub enum ProtocolDialect {
     /// Official `OpenAI` Chat Completions semantics.
     OpenAiChatCompletions,
+    /// Official Anthropic Messages semantics.
+    AnthropicMessages,
 }
 
 /// Transport safety options owned by a provider profile.

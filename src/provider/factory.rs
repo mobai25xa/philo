@@ -11,6 +11,7 @@ use super::detection::{
     NormalizedEndpointFacts,
 };
 use super::runtime::ProviderRuntime;
+use super::{ProviderDefinition, ProviderDeploymentConfig};
 
 /// Winning source in the frozen provider-selection precedence chain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,6 +210,33 @@ pub trait ProviderRuntimeFactory: Send + Sync {
     ) -> Result<ProviderRuntime, LlmError>;
 }
 
+/// Generic compiler for one immutable static provider definition.
+#[derive(Clone, Debug)]
+pub struct StaticProviderFactory {
+    definition: ProviderDefinition,
+}
+
+impl StaticProviderFactory {
+    /// Creates a static factory without requiring a custom factory trait implementation.
+    pub const fn new(definition: ProviderDefinition) -> Self {
+        Self { definition }
+    }
+
+    /// Returns the immutable registered definition.
+    pub const fn definition(&self) -> &ProviderDefinition {
+        &self.definition
+    }
+
+    /// Resolves deployment credentials and freezes a runtime.
+    pub fn build_deployment(
+        &self,
+        deployment: &ProviderDeploymentConfig,
+        resolver: &dyn SecretResolver,
+    ) -> Result<ProviderRuntime, LlmError> {
+        ProviderRuntime::build(self.definition.compile(deployment, resolver)?)
+    }
+}
+
 /// Built-in factory for the official `OpenAI` Chat Completions profile.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OfficialOpenAiFactory;
@@ -220,5 +248,19 @@ impl ProviderRuntimeFactory for OfficialOpenAiFactory {
         resolver: &dyn SecretResolver,
     ) -> Result<ProviderRuntime, LlmError> {
         config.build_official_openai_runtime(resolver)
+    }
+}
+
+/// Built-in factory for the official Anthropic Messages profile.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OfficialAnthropicFactory;
+
+impl ProviderRuntimeFactory for OfficialAnthropicFactory {
+    fn build(
+        &self,
+        config: &ProviderConfigSnapshot,
+        resolver: &dyn SecretResolver,
+    ) -> Result<ProviderRuntime, LlmError> {
+        config.build_official_anthropic_runtime(resolver)
     }
 }

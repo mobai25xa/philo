@@ -77,7 +77,9 @@ fn primary_public_surface_does_not_name_private_implementation_types() {
         "src/observability/trace.rs",
         "src/provider/profile.rs",
         "src/provider/profiles/official_openai.rs",
+        "src/provider/profiles/official_anthropic.rs",
         "src/provider/profiles/test_only.rs",
+        "src/extensions.rs",
         "src/provider/capability.rs",
         "src/provider/diagnostics.rs",
         "src/provider/runtime.rs",
@@ -112,6 +114,10 @@ fn primary_public_surface_does_not_name_private_implementation_types() {
             assert!(
                 !normalized.contains("openai_chat"),
                 "private wire leaked in {relative}"
+            );
+            assert!(
+                !normalized.contains("anthropic_messages::wire"),
+                "private Anthropic wire leaked in {relative}"
             );
             assert!(
                 !normalized.contains("wire::"),
@@ -289,16 +295,72 @@ fn versioned_provider_config_has_root_and_deep_public_paths() {
 #[test]
 fn provider_registry_factory_public_paths_are_additive() {
     use philo::provider::{
-        OfficialOpenAiFactory as DeepFactory, ProviderRegistration as DeepRegistration,
-        ProviderRegistry as DeepRegistry, ProviderRuntimeFactory as DeepFactoryTrait,
+        OfficialAnthropicFactory as DeepAnthropicFactory, OfficialOpenAiFactory as DeepFactory,
+        ProviderRegistration as DeepRegistration, ProviderRegistry as DeepRegistry,
+        ProviderRuntimeFactory as DeepFactoryTrait,
     };
 
     let _: &dyn DeepFactoryTrait = &DeepFactory;
+    let _: &dyn DeepFactoryTrait = &DeepAnthropicFactory;
     let registration: philo::ProviderRegistration =
         DeepRegistration::new("official-openai", "1.0", DeepFactory).unwrap();
     let registry: philo::ProviderRegistry = DeepRegistry::new();
     registry.register(registration).unwrap();
     assert_eq!(registry.list().unwrap().len(), 1);
+    assert_eq!(
+        DeepRegistry::with_official_profiles()
+            .unwrap()
+            .list()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn anthropic_public_api_is_typed_additive_and_wire_private() {
+    use philo::protocol_options::{
+        AnthropicEffort as DeepEffort, AnthropicMessagesOptions as DeepOptions,
+        AnthropicThinkingDisplay as DeepDisplay, ProtocolOptions as DeepProtocolOptions,
+    };
+    use philo::provider::OfficialAnthropicProfile as DeepProfile;
+
+    let options: philo::AnthropicMessagesOptions = DeepOptions::new()
+        .with_adaptive_thinking(DeepDisplay::Omitted)
+        .with_effort(DeepEffort::High);
+    let protocol_options: philo::ProtocolOptions = options.clone().into();
+    let _: DeepProtocolOptions = protocol_options.clone();
+    assert_eq!(
+        protocol_options.protocol_id(),
+        philo::ANTHROPIC_MESSAGES_PROTOCOL_ID
+    );
+    let request = philo::GenerateRequest::new(
+        philo::ModelRef::new("official-anthropic", "claude-sonnet-5").unwrap(),
+        vec![philo::Message::user("public compile contract")],
+    )
+    .with_options(
+        philo::GenerationOptions::new()
+            .with_max_output_tokens(64)
+            .with_protocol_options(options),
+    );
+    assert!(request.options().protocol_options().is_some());
+
+    let root = philo::OfficialAnthropicProfile::from_api_key("root-path-placeholder").unwrap();
+    let deep = DeepProfile::from_api_key("deep-path-placeholder").unwrap();
+    let _: philo::ProviderProfile = root.profile().unwrap();
+    let _: philo::ProviderProfile = deep.profile().unwrap();
+
+    let facade = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+    )
+    .unwrap();
+    for wire in [
+        "MessagesRequestWire",
+        "MessageStartEventWire",
+        "ContentBlockDeltaWire",
+    ] {
+        assert!(!facade.contains(wire), "Anthropic wire leaked: {wire}");
+    }
 }
 
 #[test]
@@ -308,8 +370,8 @@ fn model_catalog_and_typed_compat_have_root_and_deep_public_paths() {
         ModelCatalog as DeepModelCatalog, ProductId as DeepProductId,
     };
     use philo::provider::compat::{
-        CompatPatch as DeepCompatPatch, MaxOutputTokensWireFormat as DeepTokenFormat,
-        resolve_compat as deep_resolve_compat,
+        AnthropicUsageCompat as DeepAnthropicUsageCompat, CompatPatch as DeepCompatPatch,
+        MaxOutputTokensWireFormat as DeepTokenFormat, resolve_compat as deep_resolve_compat,
     };
 
     let _: philo::ProductId = DeepProductId::new("chat-completions").unwrap();
@@ -329,6 +391,7 @@ fn model_catalog_and_typed_compat_have_root_and_deep_public_paths() {
         resolved.request().max_output_tokens,
         philo::MaxOutputTokensWireFormat::MaxTokens
     );
+    let _: philo::AnthropicUsageCompat = DeepAnthropicUsageCompat::AllowMonotonicStableFields;
 }
 
 #[test]

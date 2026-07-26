@@ -587,6 +587,7 @@ pub struct HttpStatusError {
     stage: ErrorStage,
     body: BodySummary,
     request_id: Option<ProviderRequestId>,
+    provider_code: Option<String>,
     hint: RetriableHint,
     retry_after: Option<Duration>,
     rate_limit: Option<Box<RateLimitObservation>>,
@@ -604,6 +605,7 @@ impl HttpStatusError {
             stage: ErrorStage::Http,
             body,
             request_id,
+            provider_code: None,
             hint,
             retry_after: None,
             rate_limit: None,
@@ -621,6 +623,12 @@ impl HttpStatusError {
         self.rate_limit = Some(Box::new(observation));
         self
     }
+    /// Attaches a bounded, low-sensitivity provider error code.
+    #[must_use]
+    pub fn with_provider_code(mut self, provider_code: Option<String>) -> Self {
+        self.provider_code = provider_code;
+        self
+    }
     /// Returns status code.
     pub fn status(&self) -> u16 {
         self.status
@@ -632,6 +640,10 @@ impl HttpStatusError {
     /// Returns provider request id.
     pub fn request_id(&self) -> Option<&ProviderRequestId> {
         self.request_id.as_ref()
+    }
+    /// Returns the bounded provider error code, when decoded safely.
+    pub fn provider_code(&self) -> Option<&str> {
+        self.provider_code.as_deref()
     }
     /// Returns retry hint.
     pub fn retriable(&self) -> RetriableHint {
@@ -653,6 +665,9 @@ impl HttpStatusError {
 pub struct ProtocolError {
     stage: ErrorStage,
     message: String,
+    provider_code: Option<String>,
+    request_id: Option<ProviderRequestId>,
+    hint: RetriableHint,
 }
 impl ProtocolError {
     /// Creates a protocol error from a safe message.
@@ -660,6 +675,9 @@ impl ProtocolError {
         Self {
             stage: ErrorStage::Protocol,
             message: message.into(),
+            provider_code: None,
+            request_id: None,
+            hint: RetriableHint::No,
         }
     }
     /// Creates a protocol error classified at a specific parsing stage.
@@ -671,7 +689,23 @@ impl ProtocolError {
         Self {
             stage,
             message: message.into(),
+            provider_code: None,
+            request_id: None,
+            hint: RetriableHint::No,
         }
+    }
+    /// Attaches bounded provider context without retaining an error body.
+    #[must_use]
+    pub fn with_provider_context(
+        mut self,
+        provider_code: String,
+        request_id: Option<ProviderRequestId>,
+        hint: RetriableHint,
+    ) -> Self {
+        self.provider_code = Some(provider_code);
+        self.request_id = request_id;
+        self.hint = hint;
+        self
     }
     /// Returns the parsing or state-machine stage.
     pub fn stage(&self) -> ErrorStage {
@@ -680,6 +714,18 @@ impl ProtocolError {
     /// Returns diagnostic message.
     pub fn message(&self) -> &str {
         &self.message
+    }
+    /// Returns the bounded provider error code, when available.
+    pub fn provider_code(&self) -> Option<&str> {
+        self.provider_code.as_deref()
+    }
+    /// Returns the provider request identifier, when available.
+    pub fn request_id(&self) -> Option<&ProviderRequestId> {
+        self.request_id.as_ref()
+    }
+    /// Returns the protocol-supplied retry hint.
+    pub fn retriable(&self) -> RetriableHint {
+        self.hint
     }
 }
 

@@ -22,6 +22,7 @@ use super::{
     ContentPart, ImageDetail, ImageSource, Message, MessageRole, ModelRef, ResourceLimits,
 };
 use crate::error::{CapabilityError, LlmError, ValidationError, ValidationReason};
+use crate::extensions::ProtocolOptions;
 
 /// A three-state capability declaration used for fail-closed validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,6 +210,7 @@ pub struct GenerationOptions {
     timeout: Option<RequestTimeout>,
     headers: HeaderMap,
     metadata: RequestMetadata,
+    protocol_options: Option<ProtocolOptions>,
 }
 impl GenerationOptions {
     /// Creates empty options.
@@ -270,6 +272,11 @@ impl GenerationOptions {
         self.metadata = metadata;
         self
     }
+    /// Sets protocol-scoped options. The selected runtime must have the same protocol ID.
+    pub fn with_protocol_options(mut self, options: impl Into<ProtocolOptions>) -> Self {
+        self.protocol_options = Some(options.into());
+        self
+    }
     /// Returns temperature.
     pub fn temperature(&self) -> Option<f64> {
         self.temperature
@@ -309,6 +316,10 @@ impl GenerationOptions {
     /// Returns local metadata.
     pub fn metadata(&self) -> &RequestMetadata {
         &self.metadata
+    }
+    /// Returns protocol-scoped options when set.
+    pub fn protocol_options(&self) -> Option<&ProtocolOptions> {
+        self.protocol_options.as_ref()
     }
 }
 
@@ -783,11 +794,21 @@ fn validate_assistant_request_message(message: &Message, index: usize) -> Result
             ContentPart::ToolCall(_) => {
                 seen_tool_call = true;
             }
-            ContentPart::Image(_) | ContentPart::Thinking(_) | ContentPart::Refusal(_) => {
+            ContentPart::Thinking(_) => {
+                if seen_tool_call {
+                    return Err(ValidationError::new(
+                        format!("messages[{index}].content[{part_index}]"),
+                        ValidationReason::TextPartCount,
+                        "assistant thinking after tool calls is not allowed",
+                    )
+                    .into());
+                }
+            }
+            ContentPart::Image(_) | ContentPart::Refusal(_) => {
                 return Err(ValidationError::new(
                     format!("messages[{index}].content[{part_index}]"),
                     ValidationReason::TextPartCount,
-                    "official assistant request messages only accept text and tool calls",
+                    "assistant request messages do not accept image or refusal content",
                 )
                 .into());
             }

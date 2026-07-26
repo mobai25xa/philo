@@ -156,6 +156,7 @@ fn hosted_workflow_exposes_only_the_selected_secret_to_the_test_process() {
     assert!(workflow.contains("permissions:\n  contents: read"));
     assert!(workflow.contains("if: github.event_name == 'workflow_dispatch'"));
     assert!(workflow.contains("environment: provider-conformance"));
+    assert!(workflow.contains("github.event_name == 'workflow_dispatch' && inputs.subject_commit"));
     assert!(!workflow.contains("env:\n      OPENAI_API_KEY"));
     assert!(!workflow.contains("secrets.OPENAI_API_KEY"));
     assert!(!workflow.contains("secrets.DEEPSEEK_API_KEY"));
@@ -167,6 +168,11 @@ fn hosted_workflow_exposes_only_the_selected_secret_to_the_test_process() {
     ] {
         assert_eq!(workflow.matches(secret).count(), 1);
     }
+    assert!(workflow.contains("custom-openrouter-definition"));
+    assert!(workflow.contains("custom-zai-anthropic-definition"));
+    assert!(workflow.contains("nvidia/nemotron-3-ultra-550b-a55b:free"));
+    assert!(workflow.contains("glm-4.7-flash"));
+    assert!(workflow.contains("--test custom_provider_online_smoke"));
 }
 
 #[test]

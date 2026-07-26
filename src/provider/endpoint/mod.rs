@@ -8,7 +8,7 @@ mod origin;
 mod policy;
 mod template;
 
-pub use audience::CredentialAudience;
+pub use audience::{CredentialAudience, CredentialBinding};
 pub use config::{EndpointConfig, resolve_official, resolve_official_for, resolve_test_only};
 pub use mapping::ResolvedModelMapping;
 pub use origin::{EndpointResolutionDiagnostics, Origin, ResolvedEndpoint};

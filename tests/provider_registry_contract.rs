@@ -7,10 +7,11 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    ApiKey, ConfigSource, ConfigValue, EndpointSpec, GenerateRequest, LlmClient, Message, ModelRef,
+    AnthropicMessagesOptions, AnthropicRawExtension, ApiKey, ConfigSource, ConfigValue,
+    EndpointSpec, GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef,
     OfficialOpenAiFactory, ProviderConfigFailure, ProviderConfigLayer, ProviderConfigSnapshot,
     ProviderId, ProviderRegistration, ProviderRegistry, ProviderRegistryFailure,
-    ProviderRuntimeFactory, SecretReference, SecretResolver,
+    ProviderRequestOptions, ProviderRuntimeFactory, SecretReference, SecretResolver,
 };
 
 const KEY_CANARY: &str = "philo-registry-secret-canary-1734";
@@ -60,6 +61,58 @@ fn official_snapshot() -> ProviderConfigSnapshot {
         .unwrap()
 }
 
+fn anthropic_snapshot() -> ProviderConfigSnapshot {
+    let layer = ProviderConfigLayer::new(
+        ConfigSource::environment_secret("env/registry", SECRET_NAME).unwrap(),
+    )
+    .with_credential(ConfigValue::set(
+        SecretReference::environment_variable(SECRET_NAME).unwrap(),
+    ));
+    ProviderConfigSnapshot::official_anthropic()
+        .unwrap()
+        .merge_layers([layer])
+        .unwrap()
+}
+
+#[test]
+fn official_anthropic_factory_is_explicit_and_diagnostics_are_value_free() {
+    let registry = ProviderRegistry::with_official_profiles().unwrap();
+    assert_eq!(registry.list().unwrap().len(), 2);
+    let provider_id = ProviderId::new("official-anthropic").unwrap();
+    let runtime = registry
+        .build(&provider_id, &anthropic_snapshot(), &StaticResolver::new())
+        .unwrap();
+    assert_eq!(runtime.protocol_id().as_str(), "anthropic-messages");
+    assert_eq!(
+        runtime.endpoint().url().as_str(),
+        "https://api.anthropic.com/v1/messages"
+    );
+
+    let raw = AnthropicRawExtension::dangerous_from_object(
+        serde_json::json!({"future_feature": "diagnostic-secret-canary"}),
+    )
+    .unwrap();
+    let request = GenerateRequest::new(
+        ModelRef::new("official-anthropic", "claude-sonnet-5").unwrap(),
+        vec![Message::user("message-secret-canary")],
+    )
+    .with_options(
+        GenerationOptions::new()
+            .with_protocol_options(AnthropicMessagesOptions::new().with_raw_extension(raw)),
+    );
+    let diagnostics = runtime
+        .diagnostics_for_request(&request, &ProviderRequestOptions::new(), "2026-07-26")
+        .unwrap();
+    assert!(diagnostics.compat().is_empty());
+    assert_eq!(
+        diagnostics.typed_extensions(),
+        ["anthropic-messages-options", "non_portable_extension_used"]
+    );
+    let debug = format!("{diagnostics:?}");
+    assert!(!debug.contains("diagnostic-secret-canary"));
+    assert!(!debug.contains("message-secret-canary"));
+}
+
 fn registration(version: &str) -> ProviderRegistration {
     ProviderRegistration::new("official-openai", version, OfficialOpenAiFactory).unwrap()
 }
@@ -82,6 +135,49 @@ fn success_response(generation_id: &str) -> MockResponse {
             generation_id, generation_id
         )))],
     )
+}
+
+fn anthropic_success_response() -> MockResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    MockResponse::new(
+        StatusCode::OK,
+        headers,
+        vec![MockBodyItem::chunk(Bytes::from_static(include_bytes!(
+            "fixtures/phase-5/anthropic-messages/stream/text.sse"
+        )))],
+    )
+}
+
+#[tokio::test]
+async fn official_anthropic_runtime_dispatches_end_to_end_without_protocol_guessing() {
+    let registry = ProviderRegistry::with_official_anthropic().unwrap();
+    let provider_id = ProviderId::new("official-anthropic").unwrap();
+    let runtime = registry
+        .build(&provider_id, &anthropic_snapshot(), &StaticResolver::new())
+        .unwrap();
+    let transport = MockTransport::scripted([MockExchange::response(anthropic_success_response())]);
+    let client = LlmClient::new(runtime, transport.clone());
+    client
+        .complete(GenerateRequest::new(
+            ModelRef::new("official-anthropic", "claude-sonnet-5").unwrap(),
+            vec![Message::user("Hello")],
+        ))
+        .await
+        .unwrap();
+    transport.assert_consumed();
+    let captured = transport.captured_requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].headers()["x-api-key"], KEY_CANARY);
+    assert_eq!(captured[0].headers()["anthropic-version"], "2023-06-01");
+    assert!(!captured[0].headers().contains_key("anthropic-beta"));
+    let body: serde_json::Value = serde_json::from_slice(captured[0].body()).unwrap();
+    assert_eq!(body["model"], "claude-sonnet-5");
+    assert_eq!(body["max_tokens"], 4096);
+    assert_eq!(body["stream"], true);
 }
 
 #[test]

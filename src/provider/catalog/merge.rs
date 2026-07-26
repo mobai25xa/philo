@@ -147,6 +147,8 @@ fn merge_capabilities(base: &mut ModelEntry, overlay: &ModelEntry) {
         base.capabilities.reasoning_efforts = overlay.capabilities.reasoning_efforts.clone();
         copy_source(base, overlay, "capabilities.reasoning_efforts");
     }
+    status!(adaptive_thinking);
+    status!(adaptive_thinking_effort);
 }
 
 fn merge_limits(base: &mut ModelEntry, overlay: &ModelEntry) {

@@ -10,8 +10,8 @@ use crate::provider::HeaderOperation;
 
 use super::request::encode_planned_request;
 use crate::protocol::{
-    ExpectedContentType, HttpResponseRequirements, OpenAiChatResponsePlan, PreparedCall,
-    ProtocolOperation, ProtocolRequestParts, ProtocolResponsePlan, RequestFacts,
+    ExpectedContentType, HttpResponseRequirements, MaxOutputTokensSource, OpenAiChatResponsePlan,
+    PreparedCall, ProtocolOperation, ProtocolRequestParts, ProtocolResponsePlan, RequestFacts,
     ResponseFormatKind, ResponsePlan,
 };
 
@@ -22,6 +22,11 @@ pub(crate) struct OpenAiChatDriver;
 impl OpenAiChatDriver {
     /// Converts a fully planned logical call into owned protocol request parts.
     pub(crate) fn prepare(&self, plan: &ResolvedCallPlan) -> Result<PreparedCall, LlmError> {
+        let contract = plan.policy.protocol.openai_chat().ok_or_else(|| {
+            crate::error::ProtocolError::new(
+                "OpenAI Chat driver requires an OpenAI Chat protocol contract",
+            )
+        })?;
         let body = encode_planned_request(plan)?;
         let protocol_headers = vec![
             HeaderOperation::set(
@@ -56,7 +61,7 @@ impl OpenAiChatDriver {
                 protocol: ProtocolResponsePlan::OpenAiChat(OpenAiChatResponsePlan {
                     model: plan.planned.model.clone(),
                     response_format: plan.policy.response_format.clone(),
-                    compat: plan.policy.compat.clone(),
+                    contract: contract.clone(),
                     limits: plan.policy.limits.response,
                     sse: plan.policy.limits.transport.sse,
                 }),
@@ -76,6 +81,13 @@ impl OpenAiChatDriver {
                     ThinkingRequest::ProviderDefault
                 ),
                 response_format: ResponseFormatKind::from(plan.planned.options.response_format()),
+                max_output_tokens_source: if plan.planned.options.max_output_tokens().is_some() {
+                    MaxOutputTokensSource::Request
+                } else if plan.policy.limits.model.default_max_output_tokens.is_some() {
+                    MaxOutputTokensSource::ModelDefault
+                } else {
+                    MaxOutputTokensSource::Omitted
+                },
             },
             execution: plan.execution.clone(),
         })
@@ -110,5 +122,22 @@ mod tests {
         assert_eq!(body["stream"], true);
         assert_eq!(body["stream_options"]["include_usage"], true);
         assert_eq!(prepared.request.protocol_headers.len(), 2);
+    }
+
+    #[test]
+    fn driver_rejects_another_protocol_contract() {
+        let runtime =
+            TestOnlyProfile::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
+                .unwrap()
+                .build()
+                .unwrap();
+        let request = GenerateRequest::new(
+            ModelRef::new("test-only", "gpt-test").unwrap(),
+            vec![Message::user("hello")],
+        );
+        let mut plan = CallPlanner::plan(&runtime, &request).unwrap();
+        plan.policy.protocol =
+            crate::provider::ResolvedProtocolContract::strict_anthropic_messages();
+        assert!(OpenAiChatDriver.prepare(&plan).is_err());
     }
 }

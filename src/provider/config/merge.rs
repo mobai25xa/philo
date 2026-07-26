@@ -467,6 +467,49 @@ impl ProviderConfigSnapshot {
         Ok(snapshot)
     }
 
+    /// Creates the built-in official Anthropic configuration without a secret value.
+    pub fn official_anthropic() -> Result<Self, ProviderConfigError> {
+        let source = ConfigSource::built_in("builtin/official-anthropic")?;
+        let mut snapshot = Self {
+            version: ConfigSchemaVersion::CURRENT,
+            provider_id: ResolvedField::default(),
+            protocol_id: ResolvedField::default(),
+            endpoint: ResolvedField::default(),
+            credential_audience: ResolvedField::default(),
+            credential: ResolvedField::default(),
+            client_identity: ResolvedField::default(),
+            max_http_error_body_bytes: ResolvedField::default(),
+        };
+        snapshot
+            .provider_id
+            .apply(ConfigValue::Set("official-anthropic".to_owned()), &source);
+        snapshot
+            .protocol_id
+            .apply(ConfigValue::Set("anthropic-messages".to_owned()), &source);
+        snapshot.endpoint.apply(
+            ConfigValue::Set(EndpointSpec::base_and_path(
+                "https://api.anthropic.com/v1",
+                "/messages",
+            )),
+            &source,
+        );
+        snapshot.credential_audience.apply(
+            ConfigValue::Set(CredentialAudienceSpec::OfficialAnthropic),
+            &source,
+        );
+        snapshot.client_identity.apply(
+            ConfigValue::Set(ClientIdentityConfig::new(
+                crate::SDK_NAME,
+                crate::SDK_VERSION,
+            )),
+            &source,
+        );
+        snapshot
+            .max_http_error_body_bytes
+            .apply(ConfigValue::Set(16 * 1024), &source);
+        Ok(snapshot)
+    }
+
     /// Merges layers by source precedence and then by source ID.
     pub fn merge_layers<I>(mut self, layers: I) -> Result<Self, ProviderConfigError>
     where

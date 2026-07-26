@@ -15,7 +15,9 @@ on:
         type: choice
         options:
           - openrouter
+          - custom-openrouter-definition
           - zai-standard
+          - custom-zai-anthropic-definition
           - zai-coding
       model:
         description: Exact reviewed model identifier
@@ -37,17 +39,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_commit || github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --test provider_conformance
+      - run: cargo test --test provider_conformance --test custom_provider_online_smoke
 
   online:
     name: Protected provider smoke
     if: github.event_name == 'workflow_dispatch'
     needs: offline
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     environment: provider-conformance
     env:
       PHILO_PROVIDER_ONLINE_ENABLED: "true"
@@ -63,24 +65,50 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PHILO_PROVIDER_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$PHILO_PROVIDER" =~ ^(openrouter|zai-standard|zai-coding)$ ]]
+          [[ "$PHILO_PROVIDER" =~ ^(openrouter|custom-openrouter-definition|zai-standard|custom-zai-anthropic-definition|zai-coding)$ ]]
           test "${#PHILO_PROVIDER_MODEL}" -le 128
           [[ "$PHILO_PROVIDER_MODEL" =~ ^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$ ]]
+          if [[ "$PHILO_PROVIDER" == "custom-openrouter-definition" ]]; then
+            test "$PHILO_PROVIDER_MODEL" = "nvidia/nemotron-3-ultra-550b-a55b:free"
+          fi
+          if [[ "$PHILO_PROVIDER" == "custom-zai-anthropic-definition" ]]; then
+            test "$PHILO_PROVIDER_MODEL" = "glm-4.7-flash"
+          fi
           test "$(git rev-parse HEAD)" = "$PHILO_PROVIDER_CANDIDATE_SHA"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run OpenRouter protected suite
-        if: inputs.provider == 'openrouter'
+        if: inputs.provider == 'openrouter' || inputs.provider == 'custom-openrouter-definition'
         env:
           # Environment secret from Settings > Environments > provider-conformance.
           PHILO_PROVIDER_CREDENTIAL: ${{ secrets.OPENROUTER_API_KEY }}
-        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PHILO_PROVIDER" in
+            openrouter)
+              cargo test --test provider_online_smoke -- --ignored --nocapture
+              ;;
+            custom-openrouter-definition)
+              cargo test --test custom_provider_online_smoke -- --ignored --nocapture
+              ;;
+          esac
       - name: Run Z.AI Standard protected suite
-        if: inputs.provider == 'zai-standard'
+        if: inputs.provider == 'zai-standard' || inputs.provider == 'custom-zai-anthropic-definition'
         env:
           # Environment secret from Settings > Environments > provider-conformance.
           PHILO_PROVIDER_CREDENTIAL: ${{ secrets.ZAI_API_KEY }}
-        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PHILO_PROVIDER" in
+            zai-standard)
+              cargo test --test provider_online_smoke -- --ignored --nocapture
+              ;;
+            custom-zai-anthropic-definition)
+              cargo test --test custom_provider_online_smoke -- --ignored --nocapture
+              ;;
+          esac
       - name: Run Z.AI Coding protected suite
         if: inputs.provider == 'zai-coding'
         env:

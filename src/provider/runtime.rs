@@ -1,5 +1,9 @@
 //! Validated immutable provider runtime.
-#![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::too_many_lines
+)]
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -8,16 +12,14 @@ use std::sync::Arc;
 use http::{HeaderMap, HeaderValue, Method, header};
 
 use crate::domain::{
-    GenerateRequest, HistoryPolicy, LocalRequestId, ModelId, PolicySource, ProtocolId, ProviderId,
+    GenerateRequest, LocalRequestId, ModelId, PolicySource, ProtocolId, ProviderId,
 };
 use crate::error::LlmError;
 use crate::protocol::RequestFacts;
 use crate::transport::{RequestLifecycle, SseConfig};
 
 use super::auth::{AuthContext, AuthProvider, ClientIdentity};
-use super::call_policy::{
-    CallPolicySnapshot, ProtocolKind, ResolvedCompat, ResolvedLimits, ResolvedTarget,
-};
+use super::call_policy::{CallPolicySnapshot, ProtocolKind, ResolvedLimits, ResolvedTarget};
 use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
@@ -36,6 +38,7 @@ use super::headers::{
 };
 use super::profile::ProviderProfile;
 use super::{IdempotencyPolicy, RateLimitPolicy};
+use super::{OpenAiChatContract, ResolvedProtocolContract};
 
 /// Immutable, concurrency-safe provider runtime.
 #[derive(Clone)]
@@ -59,6 +62,7 @@ pub struct ProviderRuntime {
     model_compat: BTreeMap<ModelId, CompatPatch>,
     openrouter_routing: Option<OpenRouterRoutingContract>,
     dialect: ProtocolDialect,
+    protocol_contract: ResolvedProtocolContract,
     transport: ProviderTransportOptions,
     resource_limits: crate::domain::ResourceLimits,
     sse: SseConfig,
@@ -110,11 +114,36 @@ impl ProviderRuntime {
                         .to_owned(),
                 ));
             }
+            ProtocolDialect::AnthropicMessages
+                if profile.protocol_id.as_str() == "anthropic-messages" =>
+            {
+                ProtocolKind::AnthropicMessages
+            }
+            ProtocolDialect::AnthropicMessages => {
+                return Err(LlmError::Configuration(
+                    "Anthropic Messages dialect requires the anthropic-messages protocol id"
+                        .to_owned(),
+                ));
+            }
         };
+        if !profile.protocol_contract.matches_dialect(profile.dialect) {
+            return Err(LlmError::Configuration(
+                "protocol dialect does not match resolved protocol contract".to_owned(),
+            ));
+        }
+        if matches!(profile.dialect, ProtocolDialect::AnthropicMessages)
+            && (!profile.provider_compat.is_empty()
+                || profile.model_compat.values().any(|patch| !patch.is_empty())
+                || profile.openrouter_routing.is_some())
+        {
+            return Err(LlmError::Configuration(
+                "Anthropic Messages profiles cannot carry OpenAI compatibility policy".to_owned(),
+            ));
+        }
         let endpoint_mode = if profile.test_only {
             EndpointMode::TestOnly
         } else {
-            EndpointMode::Official
+            EndpointMode::Production
         };
         let endpoint = if profile.endpoint.requires_mapping() {
             let first = profile.catalog.entries().next().ok_or_else(|| {
@@ -128,11 +157,25 @@ impl ProviderRuntime {
         } else {
             resolve_official(&profile.endpoint)?
         };
-        profile.audience.validate(&endpoint)?;
+        profile.credential_binding.validate(&endpoint)?;
         profile.auth.validate_endpoint(&endpoint)?;
+        match profile.auth.credential_binding() {
+            Some(binding) if binding != &profile.credential_binding => {
+                return Err(LlmError::Configuration(
+                    "authentication binding does not match provider credential binding".to_owned(),
+                ));
+            }
+            None if profile.auth.scheme_kind() != super::auth::AuthSchemeKind::None => {
+                return Err(LlmError::Configuration(
+                    "credential-bearing authentication must expose its destination binding"
+                        .to_owned(),
+                ));
+            }
+            Some(_) | None => {}
+        }
         for entry in profile.catalog.entries() {
             let mapped = resolve_entry_endpoint(&profile.endpoint, endpoint_mode, entry)?;
-            profile.audience.validate(&mapped)?;
+            profile.credential_binding.validate(&mapped)?;
             profile.auth.validate_endpoint(&mapped)?;
         }
         let auth_headers = profile.auth.protected_headers();
@@ -166,6 +209,7 @@ impl ProviderRuntime {
             model_compat: profile.model_compat,
             openrouter_routing: profile.openrouter_routing,
             dialect: profile.dialect,
+            protocol_contract: profile.protocol_contract,
             transport: profile.transport,
             resource_limits: profile.resource_limits,
             sse: profile.sse,
@@ -277,6 +321,7 @@ impl ProviderRuntime {
             model_headers,
             dynamic_headers,
             request_headers,
+            protocol_option_labels: protocol_option_labels(request),
         })
     }
 
@@ -316,10 +361,38 @@ impl ProviderRuntime {
             )
             .into());
         }
+        if let Some(options) = request.options().protocol_options()
+            && options.protocol_id() != self.protocol_id.as_str()
+        {
+            return Err(crate::error::ValidationError::new(
+                "protocol_options",
+                crate::error::ValidationReason::Conflict,
+                "protocol-scoped options do not match the selected runtime protocol",
+            )
+            .into());
+        }
 
         let entry = self.model_entry(request.model().model());
         let capabilities = self.capabilities_for(request.model().model());
         capabilities.validate()?;
+        if let Some(options) = request
+            .options()
+            .protocol_options()
+            .and_then(crate::extensions::ProtocolOptions::anthropic_messages)
+        {
+            if options.adaptive_thinking().is_some() {
+                validate_protocol_capability(
+                    "protocol_options.anthropic.adaptive_thinking",
+                    capabilities.adaptive_thinking,
+                )?;
+            }
+            if options.effort().is_some() {
+                validate_protocol_capability(
+                    "protocol_options.anthropic.effort",
+                    capabilities.adaptive_thinking_effort,
+                )?;
+            }
+        }
         let mut compat_layers = vec![self.provider_compat.clone()];
         if let Some(entry) = entry {
             compat_layers.push(entry.compat_overrides.clone());
@@ -327,11 +400,16 @@ impl ProviderRuntime {
         if let Some(model) = self.model_compat.get(request.model().model()) {
             compat_layers.push(model.clone());
         }
-        let compat_profile = match self.dialect {
-            ProtocolDialect::OpenAiChatCompletions => resolve_compat(&compat_layers),
+        let protocol = match &self.protocol_contract {
+            ResolvedProtocolContract::OpenAiChat(_) => {
+                let compat = resolve_compat(&compat_layers);
+                validate_compat(&compat, &capabilities)?;
+                ResolvedProtocolContract::OpenAiChat(OpenAiChatContract::from_compat(compat))
+            }
+            ResolvedProtocolContract::AnthropicMessages(contract) => {
+                ResolvedProtocolContract::AnthropicMessages(*contract)
+            }
         };
-        validate_compat(&compat_profile, &capabilities)?;
-        let dialect = compat_profile.dialect_policy();
         let model_limits = entry.map(|entry| entry.limits).unwrap_or_default();
         let limits = ResolvedLimits::compile(
             model_limits.apply_to(self.resource_limits),
@@ -340,9 +418,8 @@ impl ProviderRuntime {
             model_limits.max_output_tokens,
             entry.and_then(|entry| entry.default_max_output_tokens),
         )?;
-        let mut history = HistoryPolicy::official_openai();
-        history.max_messages = limits.request.max_messages;
-        history.max_total_text_bytes = limits.request.max_text_bytes;
+        let history =
+            protocol.history_policy(limits.request.max_messages, limits.request.max_text_bytes);
         let request_routing = provider_options.openrouter_routing();
         let openrouter_routing = match (&self.openrouter_routing, request_routing) {
             (Some(contract), request) => {
@@ -378,10 +455,7 @@ impl ProviderRuntime {
                     .unwrap_or_else(|| request.model().model().clone()),
             },
             capabilities,
-            compat: ResolvedCompat {
-                dialect,
-                profile: compat_profile,
-            },
+            protocol,
             history,
             limits,
             response_format: request.options().response_format().clone(),
@@ -470,7 +544,7 @@ impl ProviderRuntime {
             return Err(crate::error::ValidationError::new(
                 "request_headers.content-type",
                 crate::error::ValidationReason::ProtectedHeader,
-                "OpenAI Chat protocol must set application/json",
+                "generation protocol must set application/json",
             )
             .into());
         }
@@ -544,7 +618,7 @@ impl ProviderRuntime {
             return Err(crate::error::ValidationError::new(
                 "request_headers.content-type",
                 crate::error::ValidationReason::ProtectedHeader,
-                "OpenAI Chat protocol must set application/json",
+                "generation protocol must set application/json",
             )
             .into());
         }
@@ -572,9 +646,46 @@ impl ProviderRuntime {
             target.deployment_id.as_ref(),
         );
         match self.endpoint_mode {
-            EndpointMode::Official => resolve_official_for(&self.endpoint_config, values),
+            EndpointMode::Production => resolve_official_for(&self.endpoint_config, values),
             EndpointMode::TestOnly => resolve_test_only_for(&self.endpoint_config, values),
         }
+    }
+}
+
+fn protocol_option_labels(request: &GenerateRequest) -> Vec<&'static str> {
+    let Some(options) = request.options().protocol_options() else {
+        return Vec::new();
+    };
+    let mut labels = vec!["anthropic-messages-options"];
+    if options.diagnostics().iter().any(|diagnostic| {
+        matches!(
+            diagnostic,
+            crate::extensions::ProtocolOptionDiagnostic::NonPortableExtensionUsed
+        )
+    }) {
+        labels.push("non_portable_extension_used");
+    }
+    labels
+}
+
+fn validate_protocol_capability(
+    field: &'static str,
+    status: crate::domain::CapabilityStatus,
+) -> Result<(), LlmError> {
+    match status {
+        crate::domain::CapabilityStatus::Supported => Ok(()),
+        crate::domain::CapabilityStatus::Unsupported => Err(crate::error::ValidationError::new(
+            field,
+            crate::error::ValidationReason::CapabilityUnsupported,
+            "selected model does not support this protocol-scoped option",
+        )
+        .into()),
+        crate::domain::CapabilityStatus::Unknown => Err(crate::error::ValidationError::new(
+            field,
+            crate::error::ValidationReason::CapabilityUnknown,
+            "selected model support for this protocol-scoped option is unknown",
+        )
+        .into()),
     }
 }
 
@@ -586,7 +697,7 @@ fn resolve_entry_endpoint(
     let mapping = ResolvedModelMapping::from_entry(entry);
     let values = mapping.endpoint_values();
     match mode {
-        EndpointMode::Official => resolve_official_for(config, values),
+        EndpointMode::Production => resolve_official_for(config, values),
         EndpointMode::TestOnly => resolve_test_only_for(config, values),
     }
 }

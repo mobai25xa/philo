@@ -13,7 +13,8 @@ pub use merge::{CompatPatch, resolve_compat};
 pub use profile::{CompatField, CompatProfile};
 pub use request::{MaxOutputTokensWireFormat, ModelBodyWireFormat, RequestCompat};
 pub use response::{
-    FinishReasonCompat, InlineErrorCompat, ResponseCompat, ToolArgumentsCompat, UsageCompat,
+    AnthropicUsageCompat, FinishReasonCompat, InlineErrorCompat, ResponseCompat,
+    ToolArgumentsCompat, UsageCompat,
 };
 pub use routing::{
     ConstraintStrength, DataRetention, FallbackDimension, OpenRouterRoutingContract,

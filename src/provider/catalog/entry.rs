@@ -131,6 +131,10 @@ pub struct CatalogCapabilities {
     pub response_format_json_schema: CapabilityStatus,
     /// Reasoning efforts.
     pub reasoning_efforts: ReasoningEffortSupport,
+    /// Protocol-scoped adaptive-thinking request support.
+    pub adaptive_thinking: CapabilityStatus,
+    /// Protocol-scoped adaptive-thinking effort support.
+    pub adaptive_thinking_effort: CapabilityStatus,
 }
 
 impl Default for CatalogCapabilities {
@@ -146,6 +150,8 @@ impl Default for CatalogCapabilities {
             response_format_json_object: CapabilityStatus::Unknown,
             response_format_json_schema: CapabilityStatus::Unknown,
             reasoning_efforts: ReasoningEffortSupport::Unknown,
+            adaptive_thinking: CapabilityStatus::Unknown,
+            adaptive_thinking_effort: CapabilityStatus::Unknown,
         }
     }
 }
@@ -253,6 +259,8 @@ impl ModelEntry {
             "capabilities.response_format_json_object",
             "capabilities.response_format_json_schema",
             "capabilities.reasoning_efforts",
+            "capabilities.adaptive_thinking",
+            "capabilities.adaptive_thinking_effort",
             "limits.context_window_tokens",
             "limits.max_output_tokens",
             "limits.max_messages",

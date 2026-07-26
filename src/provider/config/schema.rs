@@ -191,6 +191,8 @@ impl ProviderConfigDocument {
 pub enum CredentialAudienceSpec {
     /// Official `OpenAI` API origin.
     OfficialOpenAi,
+    /// Official Anthropic API origin.
+    OfficialAnthropic,
 }
 
 /// A named environment-secret reference. The secret value is never stored here.

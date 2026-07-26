@@ -6,7 +6,7 @@ use crate::error::{LlmError, ProviderConfigError, ProviderConfigFailure};
 use crate::provider::auth::ClientIdentity;
 use crate::provider::endpoint::EndpointConfig;
 use crate::provider::profile::ProviderProfile;
-use crate::provider::profiles::OfficialOpenAiProfile;
+use crate::provider::profiles::{OfficialAnthropicProfile, OfficialOpenAiProfile};
 use crate::provider::runtime::ProviderRuntime;
 
 use super::merge::ProviderConfigSnapshot;
@@ -141,6 +141,65 @@ impl ProviderConfigSnapshot {
         resolver: &R,
     ) -> Result<ProviderRuntime, LlmError> {
         ProviderRuntime::build(self.build_official_openai_profile(resolver)?)
+    }
+
+    /// Compiles this snapshot into the official Anthropic Messages profile.
+    pub fn build_official_anthropic_profile<R: SecretResolver + ?Sized>(
+        &self,
+        resolver: &R,
+    ) -> Result<ProviderProfile, LlmError> {
+        validate_snapshot(self)?;
+        require_exact(
+            self.provider_id_field(),
+            "official-anthropic",
+            "provider_id",
+        )?;
+        require_exact(
+            self.protocol_id_field(),
+            "anthropic-messages",
+            "protocol_id",
+        )?;
+        if self.credential_audience() != Some(CredentialAudienceSpec::OfficialAnthropic) {
+            return Err(with_source(
+                ProviderConfigError::new(
+                    "credential_audience",
+                    ProviderConfigFailure::ForbiddenOverride,
+                    "official profile requires the official credential audience",
+                ),
+                self.audience_field().source_id(),
+            )
+            .into());
+        }
+        let expected_endpoint =
+            EndpointConfig::base_and_path("https://api.anthropic.com/v1", "/messages")?;
+        let actual_endpoint = compile_endpoint(required(self.endpoint_field(), "endpoint")?)?;
+        if actual_endpoint != expected_endpoint {
+            return Err(with_source(
+                ProviderConfigError::new(
+                    "endpoint",
+                    ProviderConfigFailure::ForbiddenOverride,
+                    "official profile endpoint cannot be overridden",
+                ),
+                self.endpoint_field().source_id(),
+            )
+            .into());
+        }
+        let key = resolver.resolve(required(self.credential_field(), "credential")?)?;
+        let identity = required(self.identity_field(), "client_identity")?;
+        let identity = ClientIdentity::new(identity.product.clone(), identity.version.clone())?;
+        let limit = *required(self.error_limit_field(), "max_http_error_body_bytes")?;
+        OfficialAnthropicProfile::new(key)?
+            .with_client_identity(identity)
+            .with_max_http_error_body_bytes(limit)?
+            .profile()
+    }
+
+    /// Compiles and freezes the official Anthropic Messages runtime.
+    pub fn build_official_anthropic_runtime<R: SecretResolver + ?Sized>(
+        &self,
+        resolver: &R,
+    ) -> Result<ProviderRuntime, LlmError> {
+        ProviderRuntime::build(self.build_official_anthropic_profile(resolver)?)
     }
 }
 

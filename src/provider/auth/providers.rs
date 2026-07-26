@@ -7,7 +7,7 @@ use http::{HeaderMap, HeaderName, HeaderValue, header};
 
 use super::{ApiKey, AuthContext, AuthFuture, AuthProvider, AuthSchemeKind, CredentialSourceKind};
 use crate::error::{LlmError, ValidationError, ValidationReason};
-use crate::provider::endpoint::{CredentialAudience, ResolvedEndpoint};
+use crate::provider::endpoint::{CredentialBinding, ResolvedEndpoint};
 use crate::provider::headers::HeaderOperation;
 
 /// Fixed API-key value written to one explicitly registered authentication header.
@@ -15,7 +15,7 @@ use crate::provider::headers::HeaderOperation;
 pub struct ApiKeyHeaderAuth {
     name: HeaderName,
     key: ApiKey,
-    audience: CredentialAudience,
+    binding: CredentialBinding,
 }
 
 impl ApiKeyHeaderAuth {
@@ -28,18 +28,18 @@ impl ApiKeyHeaderAuth {
     pub fn new(
         name: HeaderName,
         key: ApiKey,
-        audience: CredentialAudience,
+        binding: impl Into<CredentialBinding>,
     ) -> Result<Self, LlmError> {
         validate_auth_name(&name)?;
         Ok(Self {
             name,
             key,
-            audience,
+            binding: binding.into(),
         })
     }
 
     fn operation(&self, context: AuthContext<'_>) -> Result<HeaderOperation, LlmError> {
-        self.audience.validate(context.endpoint())?;
+        self.binding.validate(context.endpoint())?;
         let value = HeaderValue::from_str(self.key.expose()).map_err(|_| invalid_auth_value())?;
         Ok(HeaderOperation::set_sensitive(self.name.clone(), value))
     }
@@ -51,7 +51,7 @@ impl fmt::Debug for ApiKeyHeaderAuth {
             .debug_struct("ApiKeyHeaderAuth")
             .field("name", &self.name)
             .field("key", &"[REDACTED]")
-            .field("audience", &self.audience)
+            .field("binding", &self.binding)
             .finish()
     }
 }
@@ -72,8 +72,12 @@ impl AuthProvider for ApiKeyHeaderAuth {
         vec![self.name.clone()]
     }
 
+    fn credential_binding(&self) -> Option<&CredentialBinding> {
+        Some(&self.binding)
+    }
+
     fn validate_endpoint(&self, endpoint: &ResolvedEndpoint) -> Result<(), LlmError> {
-        self.audience.validate(endpoint)
+        self.binding.validate(endpoint)
     }
 
     fn validate_final(&self, headers: &HeaderMap) -> Result<(), LlmError> {
@@ -99,7 +103,7 @@ impl AuthProvider for ApiKeyHeaderAuth {
 #[derive(Clone)]
 pub struct MultiHeaderAuth {
     entries: Vec<(HeaderName, ApiKey)>,
-    audience: CredentialAudience,
+    binding: CredentialBinding,
 }
 
 impl MultiHeaderAuth {
@@ -111,7 +115,7 @@ impl MultiHeaderAuth {
     /// more than eight authentication headers.
     pub fn new(
         entries: Vec<(HeaderName, ApiKey)>,
-        audience: CredentialAudience,
+        binding: impl Into<CredentialBinding>,
     ) -> Result<Self, LlmError> {
         if entries.is_empty() || entries.len() > 8 {
             return Err(ValidationError::new(
@@ -133,11 +137,14 @@ impl MultiHeaderAuth {
                 .into());
             }
         }
-        Ok(Self { entries, audience })
+        Ok(Self {
+            entries,
+            binding: binding.into(),
+        })
     }
 
     fn operations(&self, context: AuthContext<'_>) -> Result<Vec<HeaderOperation>, LlmError> {
-        self.audience.validate(context.endpoint())?;
+        self.binding.validate(context.endpoint())?;
         self.entries
             .iter()
             .map(|(name, key)| {
@@ -160,7 +167,7 @@ impl fmt::Debug for MultiHeaderAuth {
             .debug_struct("MultiHeaderAuth")
             .field("names", &names)
             .field("values", &"[REDACTED]")
-            .field("audience", &self.audience)
+            .field("binding", &self.binding)
             .finish()
     }
 }
@@ -181,8 +188,12 @@ impl AuthProvider for MultiHeaderAuth {
         self.entries.iter().map(|(name, _)| name.clone()).collect()
     }
 
+    fn credential_binding(&self) -> Option<&CredentialBinding> {
+        Some(&self.binding)
+    }
+
     fn validate_endpoint(&self, endpoint: &ResolvedEndpoint) -> Result<(), LlmError> {
-        self.audience.validate(endpoint)
+        self.binding.validate(endpoint)
     }
 
     fn validate_final(&self, headers: &HeaderMap) -> Result<(), LlmError> {
@@ -254,18 +265,20 @@ impl AuthProvider for NoAuth {
 }
 
 pub(super) fn validate_auth_name(name: &HeaderName) -> Result<(), LlmError> {
-    if matches!(
-        name.as_str(),
-        "host"
-            | "content-length"
-            | "content-type"
-            | "accept"
-            | "transfer-encoding"
-            | "connection"
-            | "cookie"
-            | "set-cookie"
-            | "user-agent"
-    ) {
+    if name.as_str().len() > 128
+        || matches!(
+            name.as_str(),
+            "host"
+                | "content-length"
+                | "content-type"
+                | "accept"
+                | "transfer-encoding"
+                | "connection"
+                | "cookie"
+                | "set-cookie"
+                | "user-agent"
+        )
+    {
         Err(ValidationError::new(
             "auth.header_name",
             ValidationReason::ProtectedHeader,

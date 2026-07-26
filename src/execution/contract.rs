@@ -7,7 +7,7 @@ use http::HeaderMap;
 
 use crate::domain::{
     GenerationOptions, IdMapping, Message, ModelRef, NormalizationDiagnostic, PolicySource,
-    RequestTimeout,
+    RequestTimeout, SourceIdentity,
 };
 use crate::provider::call_policy::CallPolicySnapshot;
 
@@ -36,6 +36,7 @@ impl fmt::Debug for ResolvedCallPlan {
 #[derive(Clone)]
 pub(crate) struct PlannedRequest {
     pub(crate) model: ModelRef,
+    pub(crate) source: SourceIdentity,
     pub(crate) messages: Vec<Message>,
     pub(crate) options: GenerationOptions,
     pub(crate) normalization: NormalizationReport,
@@ -133,6 +134,11 @@ mod tests {
         .with_options(options.clone());
         let planned = PlannedRequest {
             model: request.model().clone(),
+            source: crate::domain::SourceIdentity::new(
+                request.model().provider().clone(),
+                request.model().model().clone(),
+                crate::domain::ProtocolId::new("openai-chat").unwrap(),
+            ),
             messages: request.messages().to_vec(),
             options,
             normalization: NormalizationReport {

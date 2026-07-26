@@ -315,6 +315,11 @@ pub struct LimitedBody {
 }
 
 impl LimitedBody {
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(bytes: Bytes, truncated: bool) -> Self {
+        Self { bytes, truncated }
+    }
+
     /// Returns the retained body prefix.
     pub fn bytes(&self) -> &Bytes {
         &self.bytes

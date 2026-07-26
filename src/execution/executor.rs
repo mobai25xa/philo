@@ -140,7 +140,9 @@ impl AttemptExecutor {
         }
         lifecycle_preflight(&context.lifecycle)?;
         let endpoint = match call.request.operation {
-            ProtocolOperation::ChatCompletions => runtime.resolve_target_endpoint(&call.target)?,
+            ProtocolOperation::ChatCompletions | ProtocolOperation::Messages => {
+                runtime.resolve_target_endpoint(&call.target)?
+            }
         };
         emit(&context, LifecycleEventKind::EndpointResolved);
 
@@ -310,6 +312,7 @@ fn emit(context: &AttemptContext, kind: LifecycleEventKind) {
 fn provider_request_id(headers: &HeaderMap) -> Option<ProviderRequestId> {
     headers
         .get("x-request-id")
+        .or_else(|| headers.get("request-id"))
         .and_then(|value| value.to_str().ok())
         .and_then(|value| ProviderRequestId::new(value).ok())
 }
@@ -371,7 +374,7 @@ mod tests {
     use crate::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
     use crate::transport::{CancellationToken, RequestLifecycle};
 
-    use super::{AttemptContext, AttemptExecutor, AttemptResponseBody};
+    use super::{AttemptContext, AttemptExecutor, AttemptResponseBody, provider_request_id};
 
     fn runtime(error_limit: usize) -> (crate::provider::ProviderRuntime, GenerateRequest) {
         let runtime =
@@ -403,6 +406,28 @@ mod tests {
             )
             .unwrap(),
         }
+    }
+
+    #[test]
+    fn provider_request_id_accepts_anthropic_header_fallback() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "request-id",
+            HeaderValue::from_static("anthropic-request-id"),
+        );
+        assert_eq!(
+            provider_request_id(&headers).map(|id| id.as_str().to_owned()),
+            Some("anthropic-request-id".to_owned())
+        );
+
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_static("preferred-request-id"),
+        );
+        assert_eq!(
+            provider_request_id(&headers).map(|id| id.as_str().to_owned()),
+            Some("preferred-request-id".to_owned())
+        );
     }
 
     #[tokio::test]

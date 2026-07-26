@@ -291,21 +291,29 @@ impl ProviderDiagnostics {
         let endpoint = endpoint_diagnostics(input.endpoint);
         let headers = header_diagnostics(&input);
         let support = support_diagnostics(input.entry, input.as_of)?;
-        let compat = CompatField::all()
-            .into_iter()
-            .map(|field| CompatDiagnostic {
-                field,
-                value: compat_value(&input.plan.compat.profile, field),
-                source: input.plan.compat.profile.source(field),
-            })
-            .collect();
-        let typed_extensions = input
+        let compat = input
+            .plan
+            .protocol
+            .openai_chat()
+            .map_or_else(Vec::new, |profile| {
+                let profile = profile.compat();
+                CompatField::all()
+                    .into_iter()
+                    .map(|field| CompatDiagnostic {
+                        field,
+                        value: compat_value(profile, field),
+                        source: profile.source(field),
+                    })
+                    .collect()
+            });
+        let mut typed_extensions: Vec<&'static str> = input
             .plan
             .provider_routing
             .is_some()
             .then_some("openrouter-routing")
             .into_iter()
             .collect();
+        typed_extensions.extend(input.protocol_option_labels);
 
         Ok(Self {
             provider_id: input.plan.target.provider_id.clone(),
@@ -378,6 +386,7 @@ pub(crate) struct DiagnosticsInput<'a> {
     pub(crate) model_headers: Vec<HeaderName>,
     pub(crate) dynamic_headers: Vec<HeaderName>,
     pub(crate) request_headers: Vec<HeaderName>,
+    pub(crate) protocol_option_labels: Vec<&'static str>,
 }
 
 fn endpoint_diagnostics(endpoint: &ResolvedEndpoint) -> EndpointDiagnostics {

@@ -6,18 +6,23 @@ use std::sync::Arc;
 use http::{HeaderName, HeaderValue};
 use url::Url;
 
+use crate::domain::{ModelId, ProtocolId, ProviderId};
 use crate::error::{LlmError, ValidationError, ValidationReason};
 
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
+use super::super::capability::ProviderCapabilities;
+use super::super::catalog::ProductId;
 use super::super::compat::{
     FinishReasonCompat, MaxOutputTokensWireFormat, OpenRouterRoutingContract,
     OpenRouterRoutingPatch, UsageCompat,
 };
+use super::super::definition::{AuthScheme, ProviderDefinition};
 use super::super::endpoint::CredentialAudience;
+use super::super::endpoint::EndpointConfig;
 use super::super::headers::{DynamicHeaderPolicy, HeaderOperation};
 use super::super::profile::ProviderProfile;
 use super::super::runtime::ProviderRuntime;
-use super::common::{CompatibleProfileParts, build_compatible_profile, provider_patch};
+use super::common::{compatible_deployment, exact_model_catalog, provider_patch};
 
 /// Reviewed `OpenRouter` application attribution headers.
 #[derive(Clone)]
@@ -187,22 +192,38 @@ impl OpenRouterProfile {
             .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens)
             .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate)
             .with_usage(UsageCompat::OpenAiDropInconsistentReasoning);
-        build_compatible_profile(CompatibleProfileParts {
-            provider: "openrouter",
-            product: "openrouter-chat",
-            base_url: "https://openrouter.ai/api/v1",
-            endpoint_path: "/chat/completions",
-            audience: CredentialAudience::OpenRouterApi,
-            auth: self.auth,
-            client_identity: self.client_identity,
-            provider_headers,
-            dynamic_header_policy: self.dynamic_header_policy,
-            exact_model: "nvidia/nemotron-3-ultra-550b-a55b:free",
-            display_name: "OpenRouter NVIDIA Nemotron 3 Ultra 550B A55B (free)",
-            catalog_source: "p3-001-openrouter-official-docs",
-            provider_compat: compat,
-            openrouter_routing: self.routing,
-        })
+        let provider_id = ProviderId::new("openrouter")?;
+        let product_id = ProductId::new("openrouter-chat")?;
+        let protocol_id = ProtocolId::new("openai-chat-completions")?;
+        let model_id = ModelId::new("nvidia/nemotron-3-ultra-550b-a55b:free")?;
+        let catalog = exact_model_catalog(
+            provider_id.clone(),
+            product_id.clone(),
+            protocol_id,
+            &model_id,
+            "OpenRouter NVIDIA Nemotron 3 Ultra 550B A55B (free)",
+            "p3-001-openrouter-official-docs",
+            compat.clone(),
+        )?;
+        let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
+        let mut builder = ProviderDefinition::openai_chat(provider_id, product_id)
+            .with_endpoint(EndpointConfig::base_and_path(
+                "https://openrouter.ai/api/v1",
+                "/chat/completions",
+            )?)
+            .with_credential_binding(CredentialAudience::OpenRouterApi.into())
+            .with_auth_scheme(auth_scheme)
+            .with_provider_headers(provider_headers)
+            .with_shared_dynamic_header_policy(self.dynamic_header_policy)
+            .with_capabilities(ProviderCapabilities::openai_compatible())
+            .with_catalog(catalog)
+            .with_provider_compat(compat);
+        if let Some(routing) = self.routing {
+            builder = builder.with_openrouter_routing(routing);
+        }
+        builder
+            .build()?
+            .compile_resolved(compatible_deployment(self.auth, self.client_identity))
     }
 
     /// Builds the immutable runtime.
