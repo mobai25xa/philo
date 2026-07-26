@@ -25,6 +25,7 @@ fn required_examples() -> &'static [&'static str] {
         "provider_config.rs",
         "deployment_mapping.rs",
         "provider_routing.rs",
+        "anthropic_messages.rs",
     ]
 }
 
@@ -43,6 +44,10 @@ fn phase2_examples_exist_without_hardcoded_secrets() {
         assert!(
             !source.contains("OPENAI_API_KEY="),
             "{name} must not hardcode credential assignment"
+        );
+        assert!(
+            !source.contains("ANTHROPIC_API_KEY="),
+            "{name} must not hardcode Anthropic credential assignment"
         );
     }
 }

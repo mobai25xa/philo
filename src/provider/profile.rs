@@ -100,6 +100,14 @@ impl ProviderProfile {
                         .to_owned(),
                 ));
             }
+            ProtocolDialect::AnthropicMessages
+                if parts.protocol_id.as_str() == "anthropic-messages" => {}
+            ProtocolDialect::AnthropicMessages => {
+                return Err(LlmError::Configuration(
+                    "Anthropic Messages dialect requires the anthropic-messages protocol id"
+                        .to_owned(),
+                ));
+            }
         }
         let endpoint = if parts.test_only {
             resolve_test_only(&parts.endpoint)?

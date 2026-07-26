@@ -102,6 +102,8 @@ pub enum PolicySource {
 pub enum ToolChoiceWireFormat {
     /// Nested `OpenAI` function object.
     OpenAiNestedFunction,
+    /// Anthropic Messages `tool` choice object.
+    AnthropicTool,
 }
 
 /// Whether tool result messages include the tool name on the wire.
@@ -131,6 +133,8 @@ pub enum ThinkingWireFormat {
     Unsupported,
     /// Official `OpenAI` `reasoning_effort` request path only.
     OpenAiReasoningEffort,
+    /// Anthropic Messages adaptive-thinking object.
+    AnthropicAdaptive,
 }
 
 /// How images are represented on the wire.
@@ -138,6 +142,8 @@ pub enum ThinkingWireFormat {
 pub enum ImageWireFormat {
     /// Official `OpenAI` `image_url` content parts.
     OpenAiImageUrl,
+    /// Anthropic Messages source objects.
+    AnthropicSource,
 }
 
 /// Streaming usage request policy.
@@ -147,6 +153,8 @@ pub enum StreamUsagePolicy {
     IncludeUsage,
     /// Streaming usage is unsupported.
     Unsupported,
+    /// Anthropic Messages event-level usage snapshots.
+    AnthropicSnapshots,
 }
 
 /// Structured-output wire format.
@@ -154,6 +162,8 @@ pub enum StreamUsagePolicy {
 pub enum StructuredOutputWireFormat {
     /// Official `OpenAI` `response_format` object.
     OpenAiResponseFormat,
+    /// Anthropic Messages `output_config.format` object.
+    AnthropicOutputConfig,
 }
 
 /// Complete dialect strategy group for one encoding target.
@@ -189,6 +199,20 @@ impl DialectPolicy {
             image: ImageWireFormat::OpenAiImageUrl,
             stream_usage: StreamUsagePolicy::IncludeUsage,
             structured_output: StructuredOutputWireFormat::OpenAiResponseFormat,
+        }
+    }
+
+    /// Official Anthropic Messages dialect policy.
+    pub const fn official_anthropic() -> Self {
+        Self {
+            source: PolicySource::ProtocolDefault,
+            tool_choice: ToolChoiceWireFormat::AnthropicTool,
+            tool_result_name: ToolResultNamePolicy::Omit,
+            tool_call_id: ToolCallIdPolicy::Preserve,
+            thinking: ThinkingWireFormat::AnthropicAdaptive,
+            image: ImageWireFormat::AnthropicSource,
+            stream_usage: StreamUsagePolicy::AnthropicSnapshots,
+            structured_output: StructuredOutputWireFormat::AnthropicOutputConfig,
         }
     }
 }

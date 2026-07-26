@@ -222,3 +222,17 @@ impl ProviderRuntimeFactory for OfficialOpenAiFactory {
         config.build_official_openai_runtime(resolver)
     }
 }
+
+/// Built-in factory for the official Anthropic Messages profile.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OfficialAnthropicFactory;
+
+impl ProviderRuntimeFactory for OfficialAnthropicFactory {
+    fn build(
+        &self,
+        config: &ProviderConfigSnapshot,
+        resolver: &dyn SecretResolver,
+    ) -> Result<ProviderRuntime, LlmError> {
+        config.build_official_anthropic_runtime(resolver)
+    }
+}

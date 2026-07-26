@@ -1,0 +1,23 @@
+{
+  "model": "claude-test",
+  "max_tokens": 128,
+  "messages": [{
+    "role": "user",
+    "content": [
+      { "type": "text", "text": "Look" },
+      { "type": "image", "source": { "type": "url", "url": "https://example.com/test.png" } }
+    ]
+  }],
+  "system": [{ "type": "text", "text": "policy" }],
+  "stream": true,
+  "tools": [{
+    "name": "lookup",
+    "input_schema": {
+      "type": "object",
+      "properties": { "query": { "type": "string" } },
+      "required": ["query"],
+      "additionalProperties": false
+    }
+  }],
+  "tool_choice": { "type": "auto", "disable_parallel_tool_use": true }
+}

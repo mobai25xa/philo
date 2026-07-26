@@ -19,6 +19,7 @@ use crate::transport::SseConfig;
 pub(crate) type EventStream =
     Pin<Box<dyn Stream<Item = Result<AssistantEvent, LlmError>> + Send + 'static>>;
 
+pub(crate) mod anthropic_messages;
 pub(crate) mod openai_chat;
 mod response;
 
@@ -28,12 +29,16 @@ pub(crate) use response::ResponseSession;
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ProtocolDispatch {
     OpenAiChat(openai_chat::OpenAiChatDriver),
+    AnthropicMessages(anthropic_messages::AnthropicMessagesDriver),
 }
 
 impl ProtocolDispatch {
     pub(crate) fn for_kind(kind: ProtocolKind) -> Self {
         match kind {
             ProtocolKind::OpenAiChatCompletions => Self::OpenAiChat(openai_chat::OpenAiChatDriver),
+            ProtocolKind::AnthropicMessages => {
+                Self::AnthropicMessages(anthropic_messages::AnthropicMessagesDriver)
+            }
         }
     }
 
@@ -43,6 +48,7 @@ impl ProtocolDispatch {
     ) -> Result<PreparedCall, LlmError> {
         match self {
             Self::OpenAiChat(driver) => driver.prepare(plan),
+            Self::AnthropicMessages(driver) => driver.prepare(plan),
         }
     }
 }
@@ -99,6 +105,8 @@ impl fmt::Debug for ProtocolRequestParts {
 pub(crate) enum ProtocolOperation {
     /// OpenAI-compatible `POST /chat/completions`.
     ChatCompletions,
+    /// Anthropic `POST /v1/messages`.
+    Messages,
 }
 
 /// Low-sensitivity request facts used by dynamic header policy.
@@ -109,6 +117,16 @@ pub(crate) struct RequestFacts {
     pub(crate) contains_images: bool,
     pub(crate) reasoning_enabled: bool,
     pub(crate) response_format: ResponseFormatKind,
+    pub(crate) max_output_tokens_source: MaxOutputTokensSource,
+}
+
+/// Value-free source of the resolved output-token request field.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MaxOutputTokensSource {
+    Request,
+    ModelDefault,
+    Omitted,
 }
 
 /// Value-free response-format classification.
@@ -143,6 +161,7 @@ pub(crate) struct ResponsePlan {
 #[derive(Clone, Debug)]
 pub(crate) enum ProtocolResponsePlan {
     OpenAiChat(OpenAiChatResponsePlan),
+    AnthropicMessages(AnthropicMessagesResponsePlan),
 }
 
 /// HTTP response properties checked before protocol decoding.
@@ -187,6 +206,31 @@ impl fmt::Debug for OpenAiChatResponsePlan {
     }
 }
 
+/// Inputs required to create an Anthropic Messages response state machine.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub(crate) struct AnthropicMessagesResponsePlan {
+    pub(crate) model: ModelRef,
+    pub(crate) response_format: ResponseFormat,
+    pub(crate) limits: ResponseLimits,
+    pub(crate) sse: SseConfig,
+}
+
+impl fmt::Debug for AnthropicMessagesResponsePlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AnthropicMessagesResponsePlan")
+            .field("model", &self.model)
+            .field(
+                "response_format",
+                &ResponseFormatKind::from(&self.response_format),
+            )
+            .field("limits", &self.limits)
+            .field("sse", &self.sse)
+            .finish()
+    }
+}
+
 /// Value-free response metadata admitted into protocol state.
 #[allow(dead_code)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -204,8 +248,9 @@ mod tests {
     use bytes::Bytes;
     use http::{HeaderValue, Method, header};
 
-    use super::{ProtocolOperation, ProtocolRequestParts};
+    use super::{ProtocolDispatch, ProtocolOperation, ProtocolRequestParts};
     use crate::provider::HeaderOperation;
+    use crate::provider::call_policy::ProtocolKind;
 
     const CANARY: &str = "protocol-contract-canary";
 
@@ -223,5 +268,17 @@ mod tests {
         let debug = format!("{request:?}");
         assert!(debug.contains("body_bytes"));
         assert!(!debug.contains(CANARY));
+    }
+
+    #[test]
+    fn dispatch_selects_each_validated_protocol_kind() {
+        assert!(matches!(
+            ProtocolDispatch::for_kind(ProtocolKind::OpenAiChatCompletions),
+            ProtocolDispatch::OpenAiChat(_)
+        ));
+        assert!(matches!(
+            ProtocolDispatch::for_kind(ProtocolKind::AnthropicMessages),
+            ProtocolDispatch::AnthropicMessages(_)
+        ));
     }
 }

@@ -10,8 +10,8 @@ use crate::provider::HeaderOperation;
 
 use super::request::encode_planned_request;
 use crate::protocol::{
-    ExpectedContentType, HttpResponseRequirements, OpenAiChatResponsePlan, PreparedCall,
-    ProtocolOperation, ProtocolRequestParts, ProtocolResponsePlan, RequestFacts,
+    ExpectedContentType, HttpResponseRequirements, MaxOutputTokensSource, OpenAiChatResponsePlan,
+    PreparedCall, ProtocolOperation, ProtocolRequestParts, ProtocolResponsePlan, RequestFacts,
     ResponseFormatKind, ResponsePlan,
 };
 
@@ -76,6 +76,13 @@ impl OpenAiChatDriver {
                     ThinkingRequest::ProviderDefault
                 ),
                 response_format: ResponseFormatKind::from(plan.planned.options.response_format()),
+                max_output_tokens_source: if plan.planned.options.max_output_tokens().is_some() {
+                    MaxOutputTokensSource::Request
+                } else if plan.policy.limits.model.default_max_output_tokens.is_some() {
+                    MaxOutputTokensSource::ModelDefault
+                } else {
+                    MaxOutputTokensSource::Omitted
+                },
             },
             execution: plan.execution.clone(),
         })

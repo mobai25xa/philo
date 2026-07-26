@@ -25,8 +25,9 @@ pub use auth::{
     DynamicCredentialSource, MultiHeaderAuth, NoAuth, TenantId,
 };
 pub use capability::{
-    ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, ProtocolDialect,
-    ProviderCapabilities, ProviderTransportOptions,
+    ModelCapabilityProfile, OFFICIAL_ANTHROPIC_CAPABILITY_REVIEW_DATE,
+    OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, ProtocolDialect, ProviderCapabilities,
+    ProviderTransportOptions,
 };
 pub use catalog::{
     CatalogCapabilities, CatalogDefaults, CatalogSource, CatalogSourceId, DeploymentId,
@@ -63,8 +64,8 @@ pub use endpoint::{
     RedirectPolicy, ResolvedEndpoint, ResolvedModelMapping,
 };
 pub use factory::{
-    OfficialOpenAiFactory, ProviderRuntimeFactory, ProviderSelection, ProviderSelectionInput,
-    ProviderSelectionSource, ProviderSelector,
+    OfficialAnthropicFactory, OfficialOpenAiFactory, ProviderRuntimeFactory, ProviderSelection,
+    ProviderSelectionInput, ProviderSelectionSource, ProviderSelector,
 };
 pub use headers::{
     ClientIdentity, ClientIdentityFragment, DynamicHeaderContext, DynamicHeaderFuture,
@@ -80,8 +81,9 @@ pub use profile::ProviderProfile;
 #[doc(hidden)]
 pub use profiles::TestOnlyProfile;
 pub use profiles::{
-    DeepSeekProfile, OfficialOpenAiProfile, OpenRouterAttribution, OpenRouterProfile,
-    ZaiCodingProfile, ZaiStandardProfile,
+    DeepSeekProfile, OFFICIAL_ANTHROPIC_API_VERSION, OfficialAnthropicProfile,
+    OfficialOpenAiProfile, OpenRouterAttribution, OpenRouterProfile, ZaiCodingProfile,
+    ZaiStandardProfile,
 };
 pub(crate) use rate_limit::observe_rate_limit;
 pub use rate_limit::{

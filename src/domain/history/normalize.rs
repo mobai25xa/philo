@@ -251,14 +251,6 @@ fn validate_policy_supported(policy: &HistoryPolicy) -> Result<(), HistoryError>
             "only UnsupportedContentPolicy::Reject is supported in phase two",
         ));
     }
-    if !matches!(policy.thinking_replay, ThinkingReplayPolicy::DropAll) {
-        return Err(HistoryError::new(
-            "history_policy.thinking_replay",
-            HistoryFailure::UnsupportedPolicy,
-            None,
-            "only ThinkingReplayPolicy::DropAll is supported in phase two",
-        ));
-    }
     Ok(())
 }
 
@@ -405,12 +397,14 @@ fn normalize_content_part(
                 }
                 Ok(None)
             }
-            ThinkingReplayPolicy::SameSourceOnly => Err(HistoryError::new(
-                "history_policy.thinking_replay",
-                HistoryFailure::UnsupportedPolicy,
-                None,
-                "SameSourceOnly thinking replay is not implemented in phase two",
-            )),
+            ThinkingReplayPolicy::SameSourceOnly => {
+                add_text_bytes(
+                    total_text_bytes,
+                    thinking.text().len(),
+                    max_total_text_bytes,
+                )?;
+                Ok(Some(ContentPart::Thinking(thinking.clone())))
+            }
         },
         ContentPart::Refusal(refusal) => {
             if !allow_refusal {

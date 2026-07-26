@@ -962,3 +962,138 @@ fn endpoint_mapping_has_one_resolver_and_typed_pre_transport_owners() {
     assert!(request.contains("ModelBodyWireFormat::Omit"));
     assert!(!request.contains("provider_id.as_str()"));
 }
+
+#[test]
+fn phase_five_protocol_adapters_are_isolated_and_wire_types_remain_private() {
+    for (directory, forbidden) in [
+        ("src/protocol/openai_chat", "anthropic_messages"),
+        ("src/protocol/anthropic_messages", "openai_chat"),
+    ] {
+        for (file, text) in production_sources_under(directory) {
+            assert!(
+                !text.contains(forbidden),
+                "protocol adapter imports the other protocol in {file}: {forbidden}"
+            );
+        }
+    }
+
+    for facade in ["src/lib.rs", "src/protocol/mod.rs"] {
+        let text = production_source(facade);
+        for forbidden in [
+            "MessagesRequestWire",
+            "MessageStartEventWire",
+            "ContentBlockStartWire",
+            "ChatCompletionChunkWire",
+            "ToolCallDeltaWire",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "protocol wire type re-exported by {facade}: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn phase_five_adapters_have_no_network_or_tool_execution_authority() {
+    for (file, text) in production_sources_under("src/protocol") {
+        for forbidden in [
+            "reqwest::Client",
+            "TcpStream",
+            "UdpSocket",
+            "std::process::Command",
+            "tokio::process::Command",
+            "execute_tool",
+            "invoke_tool",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "protocol adapter gained I/O or tool execution authority in {file}: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn phase_five_runtime_reliability_and_complete_remain_protocol_neutral() {
+    for directory in ["src/execution", "src/client"] {
+        for (file, text) in production_sources_under(directory) {
+            for forbidden in [
+                "anthropic-messages",
+                "openai-chat-completions",
+                "ProtocolDialect::AnthropicMessages",
+                "ProtocolDialect::OpenAiChatCompletions",
+            ] {
+                assert!(
+                    !text.contains(forbidden),
+                    "shared lifecycle branches on protocol in {file}: {forbidden}"
+                );
+            }
+        }
+    }
+
+    let client = production_source("src/client/lifecycle.rs");
+    let complete = client.find("pub async fn complete(").unwrap();
+    let complete_body = &client[complete..];
+    assert!(complete_body.contains("self.stream(request).await?"));
+    assert!(complete_body.contains("collect_assistant_message_for_format"));
+}
+
+#[test]
+fn phase_five_official_profiles_use_shared_runtime_pipelines() {
+    for path in [
+        "src/provider/profiles/official_openai.rs",
+        "src/provider/profiles/official_anthropic.rs",
+    ] {
+        let profile = production_source(path);
+        for required in [
+            "ProviderProfile::from_parts",
+            "ProviderProfileParts",
+            "ProviderTransportOptions::secure_defaults()",
+            "CredentialAudience",
+        ] {
+            assert!(
+                profile.contains(required),
+                "{path} bypasses shared owner: {required}"
+            );
+        }
+        for forbidden in ["reqwest::Client", "MockTransport", "LlmClient::new"] {
+            assert!(
+                !profile.contains(forbidden),
+                "official profile creates execution/transport state in {path}: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn phase_five_protocol_accumulators_use_typed_resource_limits() {
+    let anthropic_request = production_source("src/protocol/anthropic_messages/request.rs");
+    let anthropic_history = production_source("src/protocol/anthropic_messages/history.rs");
+    let anthropic_machine =
+        production_source("src/protocol/anthropic_messages/response/machine.rs");
+    let anthropic_stream = production_source("src/protocol/anthropic_messages/response/stream.rs");
+    assert!(
+        anthropic_request.contains("max_body_bytes"),
+        "missing request body limit"
+    );
+    for required in [
+        "MAX_STREAM_EVENTS",
+        "max_tool_arguments_bytes",
+        "max_structured_output_bytes",
+        "MAX_OPAQUE_THINKING_BYTES",
+    ] {
+        assert!(
+            anthropic_machine.contains(required),
+            "missing decoder limit: {required}"
+        );
+    }
+    for required in ["max_inline_image_bytes", "max_image_url_bytes"] {
+        assert!(
+            anthropic_history.contains(required),
+            "missing history limit: {required}"
+        );
+    }
+    assert!(anthropic_stream.contains("SseConfig"));
+    assert!(anthropic_stream.contains("ResponseLimits"));
+}

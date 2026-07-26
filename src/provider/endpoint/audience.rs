@@ -9,6 +9,8 @@ use super::{Origin, ResolvedEndpoint};
 pub enum CredentialAudience {
     /// Official `OpenAI` API at `https://api.openai.com:443`.
     OfficialOpenAi,
+    /// Official Anthropic API at `https://api.anthropic.com:443`.
+    OfficialAnthropic,
     /// `OpenRouter` API at `https://openrouter.ai:443`.
     OpenRouterApi,
     /// `DeepSeek` API at `https://api.deepseek.com:443`.
@@ -31,6 +33,7 @@ impl CredentialAudience {
                     && endpoint.origin().host() == "api.openai.com"
                     && endpoint.origin().port() == 443
             }
+            Self::OfficialAnthropic => exact_https_origin(endpoint, "api.anthropic.com"),
             Self::OpenRouterApi => exact_https_origin(endpoint, "openrouter.ai"),
             Self::DeepSeekApi => exact_https_origin(endpoint, "api.deepseek.com"),
             Self::ZaiStandard => {

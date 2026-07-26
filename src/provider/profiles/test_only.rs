@@ -74,6 +74,18 @@ impl TestOnlyProfile {
         self
     }
 
+    /// Switches this localhost runtime to explicit Anthropic Messages protocol dispatch.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_anthropic_messages(mut self) -> Self {
+        self.profile.product_id = ProductId::new("messages").expect("static product ID is valid");
+        self.profile.protocol_id =
+            ProtocolId::new("anthropic-messages").expect("static protocol ID is valid");
+        self.profile.dialect = ProtocolDialect::AnthropicMessages;
+        self.profile.capabilities = ProviderCapabilities::official_anthropic();
+        self
+    }
+
     /// Replaces Bearer authentication for an offline test runtime.
     #[must_use]
     pub fn with_auth_provider<A>(mut self, auth: A) -> Self

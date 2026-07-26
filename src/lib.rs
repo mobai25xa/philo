@@ -7,10 +7,9 @@
 //! `OpenAI` Chat wire/state types remain private; callers do not need reqwest, JSON,
 //! or SSE implementation details.
 //!
-//! The protocol adapter supports official `OpenAI` Chat Completions text, function
-//! tools, image inputs, structured output, usage/cost helpers, and reasoning-effort
-//! request options. Phase-two still does not execute tools and does not claim
-//! third-party thinking dialects.
+//! Protocol adapters support official `OpenAI` Chat Completions and official Anthropic
+//! Messages. They share the provider-independent domain while keeping wire types,
+//! protocol-specific options, authentication, and streaming state isolated.
 //!
 //! # Stability
 //!
@@ -54,8 +53,13 @@ pub mod client;
 pub mod domain;
 pub mod error;
 mod execution;
+mod extensions;
 pub mod observability;
 mod protocol;
+/// Protocol-scoped typed options and the bounded dangerous escape hatch.
+pub mod protocol_options {
+    pub use crate::extensions::*;
+}
 pub mod provider;
 pub mod transport;
 
@@ -88,6 +92,10 @@ pub use error::{
     TruncatedStreamError, UnknownFinishReason, ValidationError, ValidationReason,
 };
 pub use execution::reliability::{RetryPolicy, RetryWaitPolicy, TimeoutPolicy};
+pub use extensions::{
+    ANTHROPIC_MESSAGES_PROTOCOL_ID, AnthropicEffort, AnthropicMessagesOptions,
+    AnthropicRawExtension, AnthropicThinkingDisplay, ProtocolOptionDiagnostic, ProtocolOptions,
+};
 #[cfg(feature = "tracing")]
 pub use observability::TracingObserver;
 pub use observability::{
@@ -116,21 +124,22 @@ pub use provider::{
     InlineErrorCompat, ListMerge, MapMerge, MaxOutputTokensWireFormat, ModelBodyWireFormat,
     ModelCapabilityProfile, ModelCatalog, ModelEntry, ModelKey, ModelLimits, MultiHeaderAuth,
     NamedConfigValue, NamedListMerge, NoAuth, NormalizedEndpointFacts,
-    OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, OfficialOpenAiFactory, OfficialOpenAiProfile,
-    OpenRouterAttribution, OpenRouterProfile, OpenRouterRoutingContract, OpenRouterRoutingPatch,
-    Origin, ProductId, ProtocolDialect, ProviderCapabilities, ProviderConfigDocument,
-    ProviderConfigField, ProviderConfigLayer, ProviderConfigSnapshot, ProviderDiagnostics,
-    ProviderModelId, ProviderProfile, ProviderRegistration, ProviderRegistrationMetadata,
-    ProviderRegistry, ProviderRequestOptions, ProviderRuntime, ProviderRuntimeFactory,
-    ProviderSelection, ProviderSelectionInput, ProviderSelectionSource, ProviderSelector,
-    ProviderTransportOptions, QueryMergeRule, RateLimitHeaderKind, RateLimitHeaderSpec,
-    RateLimitObservation, RateLimitPolicy, RateLimitQuota, RateLimitReset, RateLimitSourceKind,
-    RateLimitUnit, RateLimitValue, RedirectPolicy, RequestCompat, ResolvedEndpoint,
-    ResolvedHeaders, ResolvedModelMapping, ResolvedProviderRouting, ResponseCompat,
-    RoutingFallback, RoutingField, RoutingRegion, RoutingSort, SecretReference, SecretResolver,
-    SensitiveHeaderValue, SupportDiagnostics, SupportStatus, TenantId, ToolArgumentsCompat,
-    TraceDecision, TraceOperation, UpstreamId, UsageCompat, WireModelValue, ZaiCodingProfile,
-    ZaiStandardProfile, resolve_compat,
+    OFFICIAL_ANTHROPIC_API_VERSION, OFFICIAL_ANTHROPIC_CAPABILITY_REVIEW_DATE,
+    OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, OfficialAnthropicFactory, OfficialAnthropicProfile,
+    OfficialOpenAiFactory, OfficialOpenAiProfile, OpenRouterAttribution, OpenRouterProfile,
+    OpenRouterRoutingContract, OpenRouterRoutingPatch, Origin, ProductId, ProtocolDialect,
+    ProviderCapabilities, ProviderConfigDocument, ProviderConfigField, ProviderConfigLayer,
+    ProviderConfigSnapshot, ProviderDiagnostics, ProviderModelId, ProviderProfile,
+    ProviderRegistration, ProviderRegistrationMetadata, ProviderRegistry, ProviderRequestOptions,
+    ProviderRuntime, ProviderRuntimeFactory, ProviderSelection, ProviderSelectionInput,
+    ProviderSelectionSource, ProviderSelector, ProviderTransportOptions, QueryMergeRule,
+    RateLimitHeaderKind, RateLimitHeaderSpec, RateLimitObservation, RateLimitPolicy,
+    RateLimitQuota, RateLimitReset, RateLimitSourceKind, RateLimitUnit, RateLimitValue,
+    RedirectPolicy, RequestCompat, ResolvedEndpoint, ResolvedHeaders, ResolvedModelMapping,
+    ResolvedProviderRouting, ResponseCompat, RoutingFallback, RoutingField, RoutingRegion,
+    RoutingSort, SecretReference, SecretResolver, SensitiveHeaderValue, SupportDiagnostics,
+    SupportStatus, TenantId, ToolArgumentsCompat, TraceDecision, TraceOperation, UpstreamId,
+    UsageCompat, WireModelValue, ZaiCodingProfile, ZaiStandardProfile, resolve_compat,
 };
 pub use transport::{
     ByteStream, CancellationToken, ConnectionPoolPolicy, DnsPolicy, ExplicitProxy, HttpRequest,

@@ -83,7 +83,10 @@ impl CallPlanner {
                 compat_source: policy
                     .compat
                     .profile
-                    .source(crate::provider::CompatField::RequestMaxOutputTokens),
+                    .as_ref()
+                    .map_or(crate::domain::PolicySource::ProtocolDefault, |profile| {
+                        profile.source(crate::provider::CompatField::RequestMaxOutputTokens)
+                    }),
                 model_override_applied,
             },
             execution: CallExecutionIntent {

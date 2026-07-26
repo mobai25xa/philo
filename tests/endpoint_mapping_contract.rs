@@ -53,6 +53,8 @@ fn entry(deployment: &str) -> ModelEntry {
             response_format_json_object: CapabilityStatus::Unknown,
             response_format_json_schema: CapabilityStatus::Unknown,
             reasoning_efforts: ReasoningEffortSupport::Unknown,
+            adaptive_thinking: CapabilityStatus::Unknown,
+            adaptive_thinking_effort: CapabilityStatus::Unknown,
         },
         limits: ModelLimits::default(),
         default_max_output_tokens: None,

@@ -4,6 +4,11 @@
 
 The official OpenAI Chat Completions adapter implements the frozen phase-one text path and the phase-two official semantics for function tools, tool streams/results, history normalization, image inputs, reasoning effort/usage, structured output, and local cost estimation. Phase three adds experimental OpenRouter, DeepSeek, and Z.AI profiles plus versioned configuration, typed compatibility policy, deployment mapping, diagnostics, and offline conformance. Phase four adds bounded deadlines, stage timeouts, opt-in same-provider retry, backpressure, typed rate/idempotency metadata, secure network policy, and value-free lifecycle hooks. Arbitrary request-body extensions remain out of scope.
 
+Phase five adds official Anthropic Messages as a second protocol behind the same
+client and reliability pipeline. Anthropic request/stream wire types remain
+private; typed protocol options expose adaptive thinking and effort without
+adding provider fields to the common domain.
+
 Behavior contracts:
 
 - `philo/openai-chat-p1` version `1.0.0` for the text stream foundation
@@ -30,6 +35,8 @@ The current implementation includes:
   waits, and a permanent no-retry boundary after the first delivered event;
 - an optional `tracing` lifecycle adapter without an SDK-owned subscriber/exporter;
 - offline benchmark, fault-matrix, and per-client soak harnesses.
+- official Anthropic Messages text, Tool, thinking, image, usage, finish, and
+  error mapping with explicit protocol selection and bounded raw extensions.
 
 Capabilities that are `Unknown` for an exact model id fail closed. The SDK never executes tools; applications validate, authorize, and run them.
 
@@ -65,6 +72,7 @@ Examples:
 - phase four: `reliability_controls.rs`, `lifecycle_observer.rs`,
   and `slow_consumer_drop.rs`; the offline soak lives in
   `benches/phase4_client_soak.rs`
+- phase five: `anthropic_messages.rs`
 
 Provider guides live in the workspace under `docs/philo/stage/guide/providers/`.
 The standalone repository keeps its checked support declaration in
@@ -79,6 +87,8 @@ Reliability guidance:
 - [`support/security-boundary.md`](./support/security-boundary.md)
 - [`support/phase4-migration.md`](./support/phase4-migration.md)
 - [`docs/phase-4/README.md`](./docs/phase-4/README.md)
+- [`docs/phase-5/README.md`](./docs/phase-5/README.md)
+- [`support/phase5-support-matrix.md`](./support/phase5-support-matrix.md)
 
 ## Build
 
@@ -117,19 +127,19 @@ assert_eq!(PHASE_TWO_CONTRACT_ID, "philo/openai-chat-p2");
   Content-Type, or connection-specific headers;
 - redirects are disabled by the official phase-one profile;
 - HTTP error bodies are bounded and redacted before entering diagnostics;
-- the official smoke test reads credentials only from `OPENAI_API_KEY`, is disabled
-  by default, and never prints prompt, output, secret, or request-ID values.
+- official smoke tests read only their documented named credential variables,
+  are disabled by default, and never print prompt, output, secret, Tool arguments,
+  thinking, or request-ID values.
 
 See [`SECURITY.md`](./SECURITY.md) for reporting and handling expectations.
 
 ## Limitations
 
-The official adapter still does not support audio, prompt-cache controls,
-the Responses API, cross-provider fallback, arbitrary
-`extra_body`, dangerous header overrides, or automatic tool execution. Visible
-thinking text and opaque reasoning signatures are not produced by Official Chat
-Completions in phase two; synthetic phase-three boundary fixtures only prove
-replay safety. Unsupported or unknown capabilities fail closed.
+The SDK still does not support audio, prompt-cache automation, the Responses API,
+cross-provider fallback, dangerous header overrides, or automatic Tool execution.
+Anthropic raw extensions are explicit, bounded, protected, non-portable, and
+diagnostic; OpenAI has no arbitrary body extension. Unsupported or unknown
+capabilities fail closed.
 
 OpenRouter, DeepSeek, and Z.AI profiles remain `Experimental`: offline fixtures
 do not constitute real-provider verification or a `Supported` claim. Their

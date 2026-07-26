@@ -12,7 +12,7 @@ use crate::error::{
 };
 
 use super::config::{ProviderConfigField, ProviderConfigSnapshot, SecretResolver};
-use super::factory::{OfficialOpenAiFactory, ProviderRuntimeFactory};
+use super::factory::{OfficialAnthropicFactory, OfficialOpenAiFactory, ProviderRuntimeFactory};
 use super::runtime::ProviderRuntime;
 
 /// Value-free metadata describing one registered provider factory.
@@ -109,6 +109,28 @@ impl ProviderRegistry {
             "official-openai",
             crate::PROVIDER_CONFIG_SCHEMA_VERSION,
             OfficialOpenAiFactory,
+        )?)?;
+        Ok(registry)
+    }
+
+    /// Creates a registry containing the official Anthropic built-in factory.
+    pub fn with_official_anthropic() -> Result<Self, ProviderRegistryError> {
+        let registry = Self::new();
+        registry.register(ProviderRegistration::new(
+            "official-anthropic",
+            crate::PROVIDER_CONFIG_SCHEMA_VERSION,
+            OfficialAnthropicFactory,
+        )?)?;
+        Ok(registry)
+    }
+
+    /// Creates a registry containing all official built-in factories.
+    pub fn with_official_profiles() -> Result<Self, ProviderRegistryError> {
+        let registry = Self::with_official_openai()?;
+        registry.register(ProviderRegistration::new(
+            "official-anthropic",
+            crate::PROVIDER_CONFIG_SCHEMA_VERSION,
+            OfficialAnthropicFactory,
         )?)?;
         Ok(registry)
     }

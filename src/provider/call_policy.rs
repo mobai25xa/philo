@@ -63,13 +63,14 @@ pub(crate) struct ResolvedTarget {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProtocolKind {
     OpenAiChatCompletions,
+    AnthropicMessages,
 }
 
 /// Protocol compatibility policy compiled from the provider dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedCompat {
     pub(crate) dialect: DialectPolicy,
-    pub(crate) profile: CompatProfile,
+    pub(crate) profile: Option<CompatProfile>,
 }
 
 /// Complete request, response, and transport limits for one logical call.
@@ -234,7 +235,7 @@ mod tests {
             capabilities: ProviderCapabilities::official_openai(),
             compat: ResolvedCompat {
                 dialect: DialectPolicy::official_openai(),
-                profile: crate::provider::CompatProfile::openai_chat_default(),
+                profile: Some(crate::provider::CompatProfile::openai_chat_default()),
             },
             history: HistoryPolicy::official_openai(),
             limits: ResolvedLimits::compile(

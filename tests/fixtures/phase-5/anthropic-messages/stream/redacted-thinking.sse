@@ -1,0 +1,21 @@
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_test_redacted","model":"claude-test","usage":{}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque_redacted_canary"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":"answer"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
