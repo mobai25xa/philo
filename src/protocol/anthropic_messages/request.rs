@@ -13,6 +13,9 @@ use super::wire::{
 
 #[allow(clippy::too_many_lines)]
 pub(super) fn encode_planned_request(plan: &ResolvedCallPlan) -> Result<Bytes, LlmError> {
+    plan.policy.protocol.anthropic_messages().ok_or_else(|| {
+        ProtocolError::new("Anthropic Messages request requires an Anthropic protocol contract")
+    })?;
     let anthropic_options = plan
         .planned
         .options
@@ -183,13 +186,13 @@ mod tests {
     use crate::domain::{
         CapabilityStatus, ContentPart, GenerateRequest, GenerationOptions, ImageContent,
         ImageDetail, Message, MessageRole, ModelId, ModelRef, OpaqueReasoning, ParallelToolCalls,
-        PolicySource, ProtocolId, ProviderId, ResponseFormat, SourceIdentity, StructuredSchema,
-        ThinkingContent, ThinkingReplayPolicy, ToolArguments, ToolCall, ToolCallId, ToolChoice,
-        ToolDefinition, ToolName, ToolResultMessage, ToolSchema,
+        ProtocolId, ProviderId, ResponseFormat, SourceIdentity, StructuredSchema, ThinkingContent,
+        ToolArguments, ToolCall, ToolCallId, ToolChoice, ToolDefinition, ToolName,
+        ToolResultMessage, ToolSchema,
     };
     use crate::execution::planner::CallPlanner;
     use crate::protocol::openai_chat::OpenAiChatDriver;
-    use crate::provider::{CompatPatch, ModelCapabilityProfile, TestOnlyProfile};
+    use crate::provider::{ModelCapabilityProfile, TestOnlyProfile};
     use crate::{
         AnthropicEffort, AnthropicMessagesOptions, AnthropicRawExtension, AnthropicThinkingDisplay,
     };
@@ -203,6 +206,7 @@ mod tests {
         let runtime =
             TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
                 .unwrap()
+                .with_anthropic_messages()
                 .with_model_capabilities(
                     ModelCapabilityProfile::new(ModelId::new("claude-test").unwrap())
                         .with_function_tools(CapabilityStatus::Supported)
@@ -223,17 +227,32 @@ mod tests {
     }
 
     fn plan_with_replay(messages: Vec<Message>) -> crate::execution::contract::ResolvedCallPlan {
-        let mut compat = CompatPatch::from_source(PolicySource::ProviderProfile);
-        compat.history_thinking_replay = Some(ThinkingReplayPolicy::SameSourceOnly);
         let runtime =
             TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
                 .unwrap()
-                .with_compat(compat)
+                .with_anthropic_messages()
                 .build()
                 .unwrap();
         let request =
             GenerateRequest::new(ModelRef::new("test-only", "claude-test").unwrap(), messages)
                 .with_options(GenerationOptions::new().with_max_output_tokens(128));
+        CallPlanner::plan(&runtime, &request).unwrap()
+    }
+
+    fn openai_plan(
+        messages: Vec<Message>,
+        options: GenerationOptions,
+    ) -> crate::execution::contract::ResolvedCallPlan {
+        let runtime = TestOnlyProfile::localhost(
+            "http://127.0.0.1:8787/chat/completions",
+            "request-test-key",
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        let request =
+            GenerateRequest::new(ModelRef::new("test-only", "claude-test").unwrap(), messages)
+                .with_options(options);
         CallPlanner::plan(&runtime, &request).unwrap()
     }
 
@@ -520,8 +539,18 @@ mod tests {
             diagnostic.code() == crate::domain::DiagnosticCode::MergedAdjacentMessages
         }));
 
+        let openai_plan = openai_plan(
+            vec![
+                Message::system("system"),
+                Message::developer("developer"),
+                Message::user("one"),
+                Message::user("two"),
+            ],
+            GenerationOptions::new().with_max_output_tokens(128),
+        );
         let openai: Value =
-            serde_json::from_slice(&OpenAiChatDriver.prepare(&plan).unwrap().request.body).unwrap();
+            serde_json::from_slice(&OpenAiChatDriver.prepare(&openai_plan).unwrap().request.body)
+                .unwrap();
         let anthropic: Value =
             serde_json::from_slice(&AnthropicMessagesDriver.prepare(&plan).unwrap().request.body)
                 .unwrap();

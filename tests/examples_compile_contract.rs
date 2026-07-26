@@ -26,6 +26,10 @@ fn required_examples() -> &'static [&'static str] {
         "deployment_mapping.rs",
         "provider_routing.rs",
         "anthropic_messages.rs",
+        "custom_openai_chat_provider.rs",
+        "custom_anthropic_messages_provider.rs",
+        "multi_provider_same_protocol.rs",
+        "one_provider_multiple_protocols.rs",
     ]
 }
 

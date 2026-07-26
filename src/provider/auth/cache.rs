@@ -13,14 +13,14 @@ use super::dynamic::{CredentialIdentity, DynamicCredential, TenantId};
 use crate::domain::ProviderId;
 use crate::error::LlmError;
 use crate::provider::catalog::ProductId;
-use crate::provider::endpoint::CredentialAudience;
+use crate::provider::endpoint::CredentialBinding;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct AuthCacheKey {
     pub(super) tenant_id: TenantId,
     pub(super) provider_id: ProviderId,
     pub(super) product_id: ProductId,
-    pub(super) audience: CredentialAudience,
+    pub(super) binding: CredentialBinding,
     pub(super) credential_identity: CredentialIdentity,
 }
 

@@ -293,10 +293,10 @@ impl ProviderDiagnostics {
         let support = support_diagnostics(input.entry, input.as_of)?;
         let compat = input
             .plan
-            .compat
-            .profile
-            .as_ref()
+            .protocol
+            .openai_chat()
             .map_or_else(Vec::new, |profile| {
+                let profile = profile.compat();
                 CompatField::all()
                     .into_iter()
                     .map(|field| CompatDiagnostic {

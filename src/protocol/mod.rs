@@ -8,12 +8,13 @@ use futures_core::Stream;
 use http::{HeaderName, Method, StatusCode};
 
 use crate::domain::AssistantEvent;
-use crate::domain::{LocalRequestId, ModelRef, ProviderRequestId, ResponseFormat};
+use crate::domain::{LocalRequestId, ModelRef, ProviderRequestId, ResponseFormat, SourceIdentity};
 use crate::error::LlmError;
 use crate::execution::contract::CallExecutionIntent;
 use crate::provider::HeaderOperation;
 use crate::provider::call_policy::ProtocolKind;
-use crate::provider::call_policy::{ResolvedCompat, ResolvedTarget, ResponseLimits};
+use crate::provider::call_policy::{ResolvedTarget, ResponseLimits};
+use crate::provider::{AnthropicMessagesContract, OpenAiChatContract};
 use crate::transport::SseConfig;
 
 pub(crate) type EventStream =
@@ -185,7 +186,7 @@ pub(crate) enum ExpectedContentType {
 pub(crate) struct OpenAiChatResponsePlan {
     pub(crate) model: ModelRef,
     pub(crate) response_format: ResponseFormat,
-    pub(crate) compat: ResolvedCompat,
+    pub(crate) contract: OpenAiChatContract,
     pub(crate) limits: ResponseLimits,
     pub(crate) sse: SseConfig,
 }
@@ -199,7 +200,7 @@ impl fmt::Debug for OpenAiChatResponsePlan {
                 "response_format",
                 &ResponseFormatKind::from(&self.response_format),
             )
-            .field("compat", &self.compat)
+            .field("contract", &"openai-chat")
             .field("limits", &self.limits)
             .field("sse", &self.sse)
             .finish()
@@ -210,8 +211,9 @@ impl fmt::Debug for OpenAiChatResponsePlan {
 #[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct AnthropicMessagesResponsePlan {
-    pub(crate) model: ModelRef,
+    pub(crate) source: SourceIdentity,
     pub(crate) response_format: ResponseFormat,
+    pub(crate) contract: AnthropicMessagesContract,
     pub(crate) limits: ResponseLimits,
     pub(crate) sse: SseConfig,
 }
@@ -220,11 +222,12 @@ impl fmt::Debug for AnthropicMessagesResponsePlan {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("AnthropicMessagesResponsePlan")
-            .field("model", &self.model)
+            .field("source", &self.source)
             .field(
                 "response_format",
                 &ResponseFormatKind::from(&self.response_format),
             )
+            .field("contract", &"anthropic-messages")
             .field("limits", &self.limits)
             .field("sse", &self.sse)
             .finish()

@@ -9,13 +9,14 @@ use crate::domain::{ModelId, ProtocolId, ProviderId, ResourceLimits};
 use crate::error::LlmError;
 use crate::transport::SseConfig;
 
+use super::ResolvedProtocolContract;
 use super::auth::{AuthProvider, ClientIdentity};
 use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::catalog::{ModelCatalog, ProductId};
 use super::compat::{CompatPatch, OpenRouterRoutingContract};
-use super::endpoint::{CredentialAudience, EndpointConfig, resolve_official, resolve_test_only};
+use super::endpoint::{CredentialBinding, EndpointConfig, resolve_official, resolve_test_only};
 use super::headers::{DynamicHeaderPolicy, HeaderOperation};
 use super::{IdempotencyPolicy, RateLimitPolicy};
 
@@ -26,7 +27,7 @@ pub struct ProviderProfile {
     pub(super) product_id: ProductId,
     pub(super) protocol_id: ProtocolId,
     pub(super) endpoint: EndpointConfig,
-    pub(super) audience: CredentialAudience,
+    pub(super) credential_binding: CredentialBinding,
     pub(super) auth: Arc<dyn AuthProvider>,
     pub(super) client_identity: ClientIdentity,
     pub(super) provider_headers: Vec<HeaderOperation>,
@@ -39,6 +40,7 @@ pub struct ProviderProfile {
     pub(super) model_compat: BTreeMap<ModelId, CompatPatch>,
     pub(super) openrouter_routing: Option<OpenRouterRoutingContract>,
     pub(super) dialect: ProtocolDialect,
+    pub(super) protocol_contract: ResolvedProtocolContract,
     pub(super) transport: ProviderTransportOptions,
     pub(super) resource_limits: ResourceLimits,
     pub(super) sse: SseConfig,
@@ -54,7 +56,7 @@ pub(super) struct ProviderProfileParts {
     pub(super) product_id: ProductId,
     pub(super) protocol_id: ProtocolId,
     pub(super) endpoint: EndpointConfig,
-    pub(super) audience: CredentialAudience,
+    pub(super) credential_binding: CredentialBinding,
     pub(super) auth: Arc<dyn AuthProvider>,
     pub(super) client_identity: ClientIdentity,
     pub(super) provider_headers: Vec<HeaderOperation>,
@@ -67,6 +69,7 @@ pub(super) struct ProviderProfileParts {
     pub(super) model_compat: BTreeMap<ModelId, CompatPatch>,
     pub(super) openrouter_routing: Option<OpenRouterRoutingContract>,
     pub(super) dialect: ProtocolDialect,
+    pub(super) protocol_contract: ResolvedProtocolContract,
     pub(super) transport: ProviderTransportOptions,
     pub(super) resource_limits: ResourceLimits,
     pub(super) sse: SseConfig,
@@ -109,20 +112,39 @@ impl ProviderProfile {
                 ));
             }
         }
+        if !parts.protocol_contract.matches_dialect(parts.dialect) {
+            return Err(LlmError::Configuration(
+                "protocol dialect does not match resolved protocol contract".to_owned(),
+            ));
+        }
         let endpoint = if parts.test_only {
             resolve_test_only(&parts.endpoint)?
         } else {
             resolve_official(&parts.endpoint)?
         };
-        parts.audience.validate(&endpoint)?;
+        parts.credential_binding.validate(&endpoint)?;
         parts.auth.validate_endpoint(&endpoint)?;
+        match parts.auth.credential_binding() {
+            Some(binding) if binding != &parts.credential_binding => {
+                return Err(LlmError::Configuration(
+                    "authentication binding does not match provider credential binding".to_owned(),
+                ));
+            }
+            None if parts.auth.scheme_kind() != super::auth::AuthSchemeKind::None => {
+                return Err(LlmError::Configuration(
+                    "credential-bearing authentication must expose its destination binding"
+                        .to_owned(),
+                ));
+            }
+            Some(_) | None => {}
+        }
 
         Ok(Self {
             provider_id: parts.provider_id,
             product_id: parts.product_id,
             protocol_id: parts.protocol_id,
             endpoint: parts.endpoint,
-            audience: parts.audience,
+            credential_binding: parts.credential_binding,
             auth: parts.auth,
             client_identity: parts.client_identity,
             provider_headers: parts.provider_headers,
@@ -135,6 +157,7 @@ impl ProviderProfile {
             model_compat: parts.model_compat,
             openrouter_routing: parts.openrouter_routing,
             dialect: parts.dialect,
+            protocol_contract: parts.protocol_contract,
             transport: parts.transport,
             resource_limits: parts.resource_limits,
             sse: parts.sse,
@@ -202,7 +225,7 @@ impl fmt::Debug for ProviderProfile {
             .field("product_id", &self.product_id)
             .field("protocol_id", &self.protocol_id)
             .field("endpoint", &self.endpoint)
-            .field("audience", &self.audience)
+            .field("credential_binding", &self.credential_binding)
             .field("auth", &"[REDACTED]")
             .field("client_identity", &self.client_identity)
             .field("capabilities", &self.capabilities)
@@ -220,7 +243,7 @@ mod tests {
     use crate::provider::auth::{ApiKey, BearerAuth, BearerCredential};
 
     fn official_parts(max_http_error_body_bytes: usize) -> ProviderProfileParts {
-        let audience = CredentialAudience::OfficialOpenAi;
+        let audience = crate::provider::CredentialAudience::OfficialOpenAi;
         ProviderProfileParts {
             provider_id: ProviderId::new("official-openai").unwrap(),
             product_id: ProductId::new("chat-completions").unwrap(),
@@ -234,7 +257,7 @@ mod tests {
                 ApiKey::new("profile-seam-test-key").unwrap(),
                 audience.clone(),
             ))),
-            audience,
+            credential_binding: audience.into(),
             client_identity: ClientIdentity::default(),
             provider_headers: Vec::new(),
             model_headers: Vec::new(),
@@ -246,6 +269,7 @@ mod tests {
             model_compat: BTreeMap::new(),
             openrouter_routing: None,
             dialect: ProtocolDialect::OpenAiChatCompletions,
+            protocol_contract: ResolvedProtocolContract::strict_openai_chat(),
             transport: ProviderTransportOptions::secure_defaults(),
             resource_limits: ResourceLimits::official(),
             sse: SseConfig::default(),
@@ -262,6 +286,10 @@ mod tests {
 
         let mut mismatched = official_parts(16 * 1024);
         mismatched.protocol_id = ProtocolId::new("wrong-protocol").unwrap();
+        assert!(ProviderProfile::from_parts(mismatched).is_err());
+
+        let mut mismatched = official_parts(16 * 1024);
+        mismatched.protocol_contract = ResolvedProtocolContract::strict_anthropic_messages();
         assert!(ProviderProfile::from_parts(mismatched).is_err());
     }
 }

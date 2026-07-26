@@ -7,6 +7,7 @@ use crate::domain::{ProtocolId, ProviderId, ResourceLimits};
 use crate::error::LlmError;
 use crate::transport::SseConfig;
 
+use super::super::ResolvedProtocolContract;
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
 use super::super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
@@ -39,7 +40,7 @@ impl TestOnlyProfile {
                 product_id: ProductId::new("chat-completions")?,
                 protocol_id: ProtocolId::new("openai-chat-completions")?,
                 endpoint,
-                audience,
+                credential_binding: audience.into(),
                 auth: Arc::new(BearerAuth::new(credential)),
                 client_identity: ClientIdentity::default(),
                 provider_headers: Vec::new(),
@@ -54,6 +55,7 @@ impl TestOnlyProfile {
                 model_compat: BTreeMap::new(),
                 openrouter_routing: None,
                 dialect: ProtocolDialect::OpenAiChatCompletions,
+                protocol_contract: ResolvedProtocolContract::strict_openai_chat(),
                 transport: ProviderTransportOptions::secure_defaults(),
                 resource_limits: ResourceLimits::official(),
                 sse: SseConfig::default(),
@@ -82,6 +84,7 @@ impl TestOnlyProfile {
         self.profile.protocol_id =
             ProtocolId::new("anthropic-messages").expect("static protocol ID is valid");
         self.profile.dialect = ProtocolDialect::AnthropicMessages;
+        self.profile.protocol_contract = ResolvedProtocolContract::strict_anthropic_messages();
         self.profile.capabilities = ProviderCapabilities::official_anthropic();
         self
     }

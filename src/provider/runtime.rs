@@ -12,16 +12,14 @@ use std::sync::Arc;
 use http::{HeaderMap, HeaderValue, Method, header};
 
 use crate::domain::{
-    GenerateRequest, HistoryPolicy, LocalRequestId, ModelId, PolicySource, ProtocolId, ProviderId,
+    GenerateRequest, LocalRequestId, ModelId, PolicySource, ProtocolId, ProviderId,
 };
 use crate::error::LlmError;
 use crate::protocol::RequestFacts;
 use crate::transport::{RequestLifecycle, SseConfig};
 
 use super::auth::{AuthContext, AuthProvider, ClientIdentity};
-use super::call_policy::{
-    CallPolicySnapshot, ProtocolKind, ResolvedCompat, ResolvedLimits, ResolvedTarget,
-};
+use super::call_policy::{CallPolicySnapshot, ProtocolKind, ResolvedLimits, ResolvedTarget};
 use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
@@ -40,6 +38,7 @@ use super::headers::{
 };
 use super::profile::ProviderProfile;
 use super::{IdempotencyPolicy, RateLimitPolicy};
+use super::{OpenAiChatContract, ResolvedProtocolContract};
 
 /// Immutable, concurrency-safe provider runtime.
 #[derive(Clone)]
@@ -63,6 +62,7 @@ pub struct ProviderRuntime {
     model_compat: BTreeMap<ModelId, CompatPatch>,
     openrouter_routing: Option<OpenRouterRoutingContract>,
     dialect: ProtocolDialect,
+    protocol_contract: ResolvedProtocolContract,
     transport: ProviderTransportOptions,
     resource_limits: crate::domain::ResourceLimits,
     sse: SseConfig,
@@ -126,6 +126,11 @@ impl ProviderRuntime {
                 ));
             }
         };
+        if !profile.protocol_contract.matches_dialect(profile.dialect) {
+            return Err(LlmError::Configuration(
+                "protocol dialect does not match resolved protocol contract".to_owned(),
+            ));
+        }
         if matches!(profile.dialect, ProtocolDialect::AnthropicMessages)
             && (!profile.provider_compat.is_empty()
                 || profile.model_compat.values().any(|patch| !patch.is_empty())
@@ -138,7 +143,7 @@ impl ProviderRuntime {
         let endpoint_mode = if profile.test_only {
             EndpointMode::TestOnly
         } else {
-            EndpointMode::Official
+            EndpointMode::Production
         };
         let endpoint = if profile.endpoint.requires_mapping() {
             let first = profile.catalog.entries().next().ok_or_else(|| {
@@ -152,11 +157,25 @@ impl ProviderRuntime {
         } else {
             resolve_official(&profile.endpoint)?
         };
-        profile.audience.validate(&endpoint)?;
+        profile.credential_binding.validate(&endpoint)?;
         profile.auth.validate_endpoint(&endpoint)?;
+        match profile.auth.credential_binding() {
+            Some(binding) if binding != &profile.credential_binding => {
+                return Err(LlmError::Configuration(
+                    "authentication binding does not match provider credential binding".to_owned(),
+                ));
+            }
+            None if profile.auth.scheme_kind() != super::auth::AuthSchemeKind::None => {
+                return Err(LlmError::Configuration(
+                    "credential-bearing authentication must expose its destination binding"
+                        .to_owned(),
+                ));
+            }
+            Some(_) | None => {}
+        }
         for entry in profile.catalog.entries() {
             let mapped = resolve_entry_endpoint(&profile.endpoint, endpoint_mode, entry)?;
-            profile.audience.validate(&mapped)?;
+            profile.credential_binding.validate(&mapped)?;
             profile.auth.validate_endpoint(&mapped)?;
         }
         let auth_headers = profile.auth.protected_headers();
@@ -190,6 +209,7 @@ impl ProviderRuntime {
             model_compat: profile.model_compat,
             openrouter_routing: profile.openrouter_routing,
             dialect: profile.dialect,
+            protocol_contract: profile.protocol_contract,
             transport: profile.transport,
             resource_limits: profile.resource_limits,
             sse: profile.sse,
@@ -380,17 +400,16 @@ impl ProviderRuntime {
         if let Some(model) = self.model_compat.get(request.model().model()) {
             compat_layers.push(model.clone());
         }
-        let compat_profile = match self.dialect {
-            ProtocolDialect::OpenAiChatCompletions => Some(resolve_compat(&compat_layers)),
-            ProtocolDialect::AnthropicMessages => None,
+        let protocol = match &self.protocol_contract {
+            ResolvedProtocolContract::OpenAiChat(_) => {
+                let compat = resolve_compat(&compat_layers);
+                validate_compat(&compat, &capabilities)?;
+                ResolvedProtocolContract::OpenAiChat(OpenAiChatContract::from_compat(compat))
+            }
+            ResolvedProtocolContract::AnthropicMessages(contract) => {
+                ResolvedProtocolContract::AnthropicMessages(*contract)
+            }
         };
-        if let Some(profile) = &compat_profile {
-            validate_compat(profile, &capabilities)?;
-        }
-        let dialect = compat_profile.as_ref().map_or_else(
-            crate::domain::DialectPolicy::official_anthropic,
-            super::compat::CompatProfile::dialect_policy,
-        );
         let model_limits = entry.map(|entry| entry.limits).unwrap_or_default();
         let limits = ResolvedLimits::compile(
             model_limits.apply_to(self.resource_limits),
@@ -399,25 +418,8 @@ impl ProviderRuntime {
             model_limits.max_output_tokens,
             entry.and_then(|entry| entry.default_max_output_tokens),
         )?;
-        let history_compat = compat_profile
-            .as_ref()
-            .map(super::compat::CompatProfile::history);
-        let history = HistoryPolicy {
-            missing_tool_result: history_compat
-                .map_or(crate::domain::MissingToolResultPolicy::Reject, |value| {
-                    value.missing_tool_result
-                }),
-            unsupported_content: history_compat
-                .map_or(crate::domain::UnsupportedContentPolicy::Reject, |value| {
-                    value.unsupported_content
-                }),
-            thinking_replay: history_compat.map_or(
-                crate::domain::ThinkingReplayPolicy::SameSourceOnly,
-                |value| value.thinking_replay,
-            ),
-            max_messages: limits.request.max_messages,
-            max_total_text_bytes: limits.request.max_text_bytes,
-        };
+        let history =
+            protocol.history_policy(limits.request.max_messages, limits.request.max_text_bytes);
         let request_routing = provider_options.openrouter_routing();
         let openrouter_routing = match (&self.openrouter_routing, request_routing) {
             (Some(contract), request) => {
@@ -453,10 +455,7 @@ impl ProviderRuntime {
                     .unwrap_or_else(|| request.model().model().clone()),
             },
             capabilities,
-            compat: ResolvedCompat {
-                dialect,
-                profile: compat_profile,
-            },
+            protocol,
             history,
             limits,
             response_format: request.options().response_format().clone(),
@@ -647,7 +646,7 @@ impl ProviderRuntime {
             target.deployment_id.as_ref(),
         );
         match self.endpoint_mode {
-            EndpointMode::Official => resolve_official_for(&self.endpoint_config, values),
+            EndpointMode::Production => resolve_official_for(&self.endpoint_config, values),
             EndpointMode::TestOnly => resolve_test_only_for(&self.endpoint_config, values),
         }
     }
@@ -698,7 +697,7 @@ fn resolve_entry_endpoint(
     let mapping = ResolvedModelMapping::from_entry(entry);
     let values = mapping.endpoint_values();
     match mode {
-        EndpointMode::Official => resolve_official_for(config, values),
+        EndpointMode::Production => resolve_official_for(config, values),
         EndpointMode::TestOnly => resolve_test_only_for(config, values),
     }
 }

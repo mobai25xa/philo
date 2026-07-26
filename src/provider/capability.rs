@@ -52,6 +52,40 @@ pub struct ProviderCapabilities {
 }
 
 impl ProviderCapabilities {
+    /// Returns a conservative custom `OpenAI` Chat declaration.
+    ///
+    /// Only core text generation, token limits, and streaming are declared;
+    /// tools, images, structured output, and reasoning remain unknown.
+    pub fn conservative_chat_completions() -> Self {
+        Self::openai_compatible()
+    }
+
+    /// Returns a conservative custom Anthropic Messages declaration.
+    ///
+    /// Only core text generation, token limits, and streaming are declared;
+    /// tools, images, structured output, and thinking remain unknown.
+    pub fn conservative_messages() -> Self {
+        Self {
+            developer_role: CapabilityStatus::Supported,
+            temperature: CapabilityStatus::Supported,
+            max_completion_tokens: CapabilityStatus::Supported,
+            streaming: CapabilityStatus::Supported,
+            streaming_usage: CapabilityStatus::Supported,
+            function_tools: CapabilityStatus::Unknown,
+            tool_choice_required: CapabilityStatus::Unknown,
+            tool_choice_specific: CapabilityStatus::Unknown,
+            parallel_tool_calls: CapabilityStatus::Unknown,
+            strict_tools: CapabilityStatus::Unknown,
+            vision_input: CapabilityStatus::Unknown,
+            image_detail_original: CapabilityStatus::Unsupported,
+            response_format_json_object: CapabilityStatus::Unknown,
+            response_format_json_schema: CapabilityStatus::Unknown,
+            reasoning_efforts: ReasoningEffortSupport::Unsupported,
+            adaptive_thinking: CapabilityStatus::Unknown,
+            adaptive_thinking_effort: CapabilityStatus::Unknown,
+        }
+    }
+
     /// Returns the subset used by domain request validation.
     pub fn generation_options(&self) -> CapabilitySet {
         CapabilitySet {

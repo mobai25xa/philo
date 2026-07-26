@@ -13,21 +13,18 @@ use crate::error::LlmError;
 use crate::transport::SseConfig;
 
 use super::super::auth::{ApiKey, ApiKeyHeaderAuth, AuthProvider, ClientIdentity};
-use super::super::capability::{
-    ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
-};
+use super::super::capability::{ModelCapabilityProfile, ProviderCapabilities};
 use super::super::catalog::{
     CatalogCapabilities, CatalogSource, CatalogSourceId, ModelCatalog, ModelEntry, ModelKey,
     ModelLimits, ProductId, ProviderModelId, SupportStatus, WireModelValue,
 };
 use super::super::compat::CompatPatch;
+use super::super::definition::{AuthScheme, ProviderDefinition, ResolvedProviderDeployment};
 use super::super::endpoint::{CredentialAudience, EndpointConfig};
 use super::super::headers::{DynamicHeaderPolicy, HeaderOperation};
-use super::super::profile::{ProviderProfile, ProviderProfileParts};
+use super::super::profile::ProviderProfile;
 use super::super::runtime::ProviderRuntime;
-use super::super::{
-    IdempotencyPolicy, RateLimitHeaderKind, RateLimitHeaderSpec, RateLimitPolicy, RateLimitUnit,
-};
+use super::super::{RateLimitHeaderKind, RateLimitHeaderSpec, RateLimitPolicy, RateLimitUnit};
 
 /// Fixed API version sent by the official Anthropic Messages profile.
 pub const OFFICIAL_ANTHROPIC_API_VERSION: &str = "2023-06-01";
@@ -139,38 +136,36 @@ impl OfficialAnthropicProfile {
         let mut resource_limits = self.resource_limits;
         resource_limits.max_request_body_bytes =
             resource_limits.max_request_body_bytes.min(32 * 1024 * 1024);
-        ProviderProfile::from_parts(ProviderProfileParts {
-            provider_id: ProviderId::new("official-anthropic")?,
-            product_id: ProductId::new("messages")?,
-            protocol_id: ProtocolId::new("anthropic-messages")?,
-            endpoint: EndpointConfig::base_and_path("https://api.anthropic.com/v1", "/messages")?,
-            audience: CredentialAudience::OfficialAnthropic,
-            auth: self.auth,
-            client_identity: self.client_identity,
-            provider_headers: vec![
-                HeaderOperation::set(
-                    version,
-                    HeaderValue::from_static(OFFICIAL_ANTHROPIC_API_VERSION),
-                ),
-                HeaderOperation::remove(beta),
-            ],
-            model_headers: Vec::new(),
-            dynamic_header_policy: self.dynamic_header_policy,
-            capabilities: ProviderCapabilities::official_anthropic(),
-            model_capabilities: self.model_capabilities,
-            catalog: self.catalog,
-            provider_compat: CompatPatch::from_source(PolicySource::ProviderProfile),
-            model_compat: BTreeMap::new(),
-            openrouter_routing: None,
-            dialect: ProtocolDialect::AnthropicMessages,
-            transport: ProviderTransportOptions::secure_defaults(),
-            resource_limits,
-            sse: self.sse,
-            max_http_error_body_bytes: self.max_http_error_body_bytes,
-            rate_limit,
-            idempotency: IdempotencyPolicy::unknown(),
-            test_only: false,
-        })
+        let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
+        let mut builder = ProviderDefinition::anthropic_messages(
+            ProviderId::new("official-anthropic")?,
+            ProductId::new("messages")?,
+        )
+        .with_endpoint(EndpointConfig::base_and_path(
+            "https://api.anthropic.com/v1",
+            "/messages",
+        )?)
+        .with_credential_binding(CredentialAudience::OfficialAnthropic.into())
+        .with_auth_scheme(auth_scheme)
+        .with_provider_headers(vec![
+            HeaderOperation::set(
+                version,
+                HeaderValue::from_static(OFFICIAL_ANTHROPIC_API_VERSION),
+            ),
+            HeaderOperation::remove(beta),
+        ])
+        .with_shared_dynamic_header_policy(self.dynamic_header_policy)
+        .with_capabilities(ProviderCapabilities::official_anthropic())
+        .with_catalog(self.catalog)
+        .with_rate_limit_policy(rate_limit);
+        for capability in self.model_capabilities.into_values() {
+            builder = builder.with_model_capabilities(capability);
+        }
+        let deployment = ResolvedProviderDeployment::new(self.auth, self.client_identity)
+            .with_resource_limits(resource_limits)
+            .with_sse_config(self.sse)
+            .with_max_http_error_body_bytes(self.max_http_error_body_bytes)?;
+        builder.build()?.compile_resolved(deployment)
     }
 
     /// Builds the immutable runtime.
@@ -236,6 +231,7 @@ mod tests {
     use http::{HeaderMap, HeaderValue};
 
     use super::*;
+    use crate::provider::ProtocolDialect;
 
     #[test]
     fn official_runtime_freezes_protocol_endpoint_and_catalog() {

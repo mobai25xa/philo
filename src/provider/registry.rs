@@ -5,20 +5,31 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::domain::ProviderId;
+use crate::domain::{ProtocolId, ProviderId};
 use crate::error::{
     LlmError, ProviderConfigError, ProviderConfigFailure, ProviderRegistryError,
     ProviderRegistryFailure,
 };
 
 use super::config::{ProviderConfigField, ProviderConfigSnapshot, SecretResolver};
-use super::factory::{OfficialAnthropicFactory, OfficialOpenAiFactory, ProviderRuntimeFactory};
+use super::factory::{
+    OfficialAnthropicFactory, OfficialOpenAiFactory, ProviderRuntimeFactory, StaticProviderFactory,
+};
 use super::runtime::ProviderRuntime;
+use super::{ProductId, ProviderDefinition, ProviderDeploymentConfig};
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct RegistrationKey {
+    provider_id: ProviderId,
+    product_id: Option<ProductId>,
+}
 
 /// Value-free metadata describing one registered provider factory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderRegistrationMetadata {
     provider_id: ProviderId,
+    product_id: Option<ProductId>,
+    protocol_id: Option<ProtocolId>,
     version: String,
 }
 
@@ -26,6 +37,16 @@ impl ProviderRegistrationMetadata {
     /// Returns the normalized provider identifier.
     pub fn provider_id(&self) -> &ProviderId {
         &self.provider_id
+    }
+
+    /// Returns the product identity for a static definition registration.
+    pub const fn product_id(&self) -> Option<&ProductId> {
+        self.product_id.as_ref()
+    }
+
+    /// Returns the protocol identity for a static definition registration.
+    pub const fn protocol_id(&self) -> Option<&ProtocolId> {
+        self.protocol_id.as_ref()
     }
 
     /// Returns the registration implementation version.
@@ -38,7 +59,13 @@ impl ProviderRegistrationMetadata {
 #[derive(Clone)]
 pub struct ProviderRegistration {
     metadata: ProviderRegistrationMetadata,
-    factory: Arc<dyn ProviderRuntimeFactory>,
+    compiler: RegistrationCompiler,
+}
+
+#[derive(Clone)]
+enum RegistrationCompiler {
+    Factory(Arc<dyn ProviderRuntimeFactory>),
+    Definition(Box<StaticProviderFactory>),
 }
 
 impl ProviderRegistration {
@@ -66,9 +93,31 @@ impl ProviderRegistration {
         Ok(Self {
             metadata: ProviderRegistrationMetadata {
                 provider_id,
+                product_id: None,
+                protocol_id: None,
                 version,
             },
-            factory,
+            compiler: RegistrationCompiler::Factory(factory),
+        })
+    }
+
+    /// Creates a static registration directly from a validated definition.
+    pub fn from_definition(definition: ProviderDefinition) -> Result<Self, ProviderRegistryError> {
+        let provider_id = normalize_provider_id(definition.provider_id().as_str())?;
+        let version = validate_version(
+            crate::PROVIDER_CONFIG_SCHEMA_VERSION.to_owned(),
+            &provider_id,
+        )?;
+        Ok(Self {
+            metadata: ProviderRegistrationMetadata {
+                provider_id,
+                product_id: Some(definition.product_id().clone()),
+                protocol_id: Some(definition.protocol_id().clone()),
+                version,
+            },
+            compiler: RegistrationCompiler::Definition(Box::new(StaticProviderFactory::new(
+                definition,
+            ))),
         })
     }
 
@@ -93,7 +142,7 @@ impl fmt::Debug for ProviderRegistration {
 /// this map and therefore remain unchanged after replacement or removal.
 #[derive(Clone, Default)]
 pub struct ProviderRegistry {
-    registrations: Arc<RwLock<BTreeMap<ProviderId, ProviderRegistration>>>,
+    registrations: Arc<RwLock<BTreeMap<RegistrationKey, ProviderRegistration>>>,
 }
 
 impl ProviderRegistry {
@@ -141,15 +190,16 @@ impl ProviderRegistry {
         registration: ProviderRegistration,
     ) -> Result<ProviderRegistrationMetadata, ProviderRegistryError> {
         let metadata = registration.metadata.clone();
+        let key = registration_key(&metadata);
         let mut registrations = self.write()?;
-        if registrations.contains_key(&metadata.provider_id) {
+        if registrations.contains_key(&key) {
             return Err(ProviderRegistryError::new(
                 ProviderRegistryFailure::DuplicateRegistration,
                 Some(metadata.provider_id.as_str()),
                 "provider ID is already registered; use explicit replace",
             ));
         }
-        registrations.insert(metadata.provider_id.clone(), registration);
+        registrations.insert(key, registration);
         Ok(metadata)
     }
 
@@ -159,8 +209,9 @@ impl ProviderRegistry {
         registration: ProviderRegistration,
     ) -> Result<ProviderRegistrationMetadata, ProviderRegistryError> {
         let provider_id = registration.metadata.provider_id.clone();
+        let key = registration_key(&registration.metadata);
         let mut registrations = self.write()?;
-        if !registrations.contains_key(&provider_id) {
+        if !registrations.contains_key(&key) {
             return Err(ProviderRegistryError::new(
                 ProviderRegistryFailure::RegistrationNotFound,
                 Some(provider_id.as_str()),
@@ -168,7 +219,7 @@ impl ProviderRegistry {
             ));
         }
         let previous = registrations
-            .insert(provider_id, registration)
+            .insert(key, registration)
             .ok_or_else(state_unavailable)?;
         Ok(previous.metadata)
     }
@@ -178,10 +229,23 @@ impl ProviderRegistry {
         &self,
         provider_id: &ProviderId,
     ) -> Result<Option<ProviderRegistrationMetadata>, ProviderRegistryError> {
-        Ok(self
-            .read()?
-            .get(provider_id)
-            .map(|registration| registration.metadata.clone()))
+        let registrations = self.read()?;
+        if let Some(registration) = registrations.get(&RegistrationKey {
+            provider_id: provider_id.clone(),
+            product_id: None,
+        }) {
+            return Ok(Some(registration.metadata.clone()));
+        }
+        let mut matching = registrations
+            .iter()
+            .filter(|(key, _)| &key.provider_id == provider_id)
+            .map(|(_, registration)| registration.metadata.clone());
+        let first = matching.next();
+        Ok(if matching.next().is_none() {
+            first
+        } else {
+            None
+        })
     }
 
     /// Normalizes a textual provider ID and returns its registration metadata.
@@ -192,6 +256,21 @@ impl ProviderRegistry {
         let provider_id = provider_id.into();
         let provider_id = normalize_provider_id(&provider_id)?;
         self.get(&provider_id)
+    }
+
+    /// Returns metadata for one exact static provider product.
+    pub fn get_product(
+        &self,
+        provider_id: &ProviderId,
+        product_id: &ProductId,
+    ) -> Result<Option<ProviderRegistrationMetadata>, ProviderRegistryError> {
+        Ok(self
+            .read()?
+            .get(&RegistrationKey {
+                provider_id: provider_id.clone(),
+                product_id: Some(product_id.clone()),
+            })
+            .map(|registration| registration.metadata.clone()))
     }
 
     /// Lists registrations in deterministic normalized provider-ID order.
@@ -210,7 +289,25 @@ impl ProviderRegistry {
     ) -> Result<Option<ProviderRegistrationMetadata>, ProviderRegistryError> {
         Ok(self
             .write()?
-            .remove(provider_id)
+            .remove(&RegistrationKey {
+                provider_id: provider_id.clone(),
+                product_id: None,
+            })
+            .map(|registration| registration.metadata))
+    }
+
+    /// Removes one static product registration without affecting built runtimes.
+    pub fn remove_product(
+        &self,
+        provider_id: &ProviderId,
+        product_id: &ProductId,
+    ) -> Result<Option<ProviderRegistrationMetadata>, ProviderRegistryError> {
+        Ok(self
+            .write()?
+            .remove(&RegistrationKey {
+                provider_id: provider_id.clone(),
+                product_id: Some(product_id.clone()),
+            })
             .map(|registration| registration.metadata))
     }
 
@@ -223,17 +320,28 @@ impl ProviderRegistry {
     ) -> Result<ProviderRuntime, LlmError> {
         let registration = {
             let registrations = self.read()?;
-            registrations.get(provider_id).cloned().ok_or_else(|| {
-                ProviderRegistryError::new(
-                    ProviderRegistryFailure::RegistrationNotFound,
-                    Some(provider_id.as_str()),
-                    "provider ID is not registered",
-                )
-            })?
+            registrations
+                .get(&RegistrationKey {
+                    provider_id: provider_id.clone(),
+                    product_id: None,
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    ProviderRegistryError::new(
+                        ProviderRegistryFailure::RegistrationNotFound,
+                        Some(provider_id.as_str()),
+                        "provider ID is not registered",
+                    )
+                })?
         };
 
         ensure_config_provider(config, provider_id)?;
-        let runtime = registration.factory.build(config, resolver)?;
+        let RegistrationCompiler::Factory(factory) = registration.compiler else {
+            return Err(LlmError::Configuration(
+                "definition registration requires build_deployment".to_owned(),
+            ));
+        };
+        let runtime = factory.build(config, resolver)?;
         if runtime.provider_id() != provider_id {
             return Err(ProviderRegistryError::new(
                 ProviderRegistryFailure::FactoryProviderMismatch,
@@ -245,10 +353,115 @@ impl ProviderRegistry {
         Ok(runtime)
     }
 
+    /// Builds a runtime from a static definition and deployment configuration.
+    pub fn build_deployment(
+        &self,
+        provider_id: &ProviderId,
+        deployment: &ProviderDeploymentConfig,
+        resolver: &dyn SecretResolver,
+    ) -> Result<ProviderRuntime, LlmError> {
+        if deployment.provider_id() != provider_id {
+            return Err(ProviderRegistryError::new(
+                ProviderRegistryFailure::FactoryProviderMismatch,
+                Some(provider_id.as_str()),
+                "deployment provider identity does not match registry selection",
+            )
+            .into());
+        }
+        let factory = {
+            let registrations = self.read()?;
+            let mut matching = registrations
+                .iter()
+                .filter(|(key, _)| &key.provider_id == provider_id && key.product_id.is_some())
+                .map(|(_, registration)| registration);
+            let registration = matching.next().ok_or_else(|| {
+                ProviderRegistryError::new(
+                    ProviderRegistryFailure::RegistrationNotFound,
+                    Some(provider_id.as_str()),
+                    "provider ID is not registered",
+                )
+            })?;
+            if matching.next().is_some() {
+                return Err(LlmError::Configuration(
+                    "provider has multiple products; select one with build_product_deployment"
+                        .to_owned(),
+                ));
+            }
+            match &registration.compiler {
+                RegistrationCompiler::Definition(factory) => factory.as_ref().clone(),
+                RegistrationCompiler::Factory(_) => {
+                    return Err(LlmError::Configuration(
+                        "factory registration requires the versioned config build path".to_owned(),
+                    ));
+                }
+            }
+        };
+        let definition = factory.definition().clone();
+        let runtime = factory.build_deployment(deployment, resolver)?;
+        if runtime.provider_id() != definition.provider_id()
+            || runtime.product_id() != definition.product_id()
+            || runtime.protocol_id() != definition.protocol_id()
+        {
+            return Err(ProviderRegistryError::new(
+                ProviderRegistryFailure::FactoryProviderMismatch,
+                Some(provider_id.as_str()),
+                "definition compiler returned mismatched runtime identity",
+            )
+            .into());
+        }
+        Ok(runtime)
+    }
+
+    /// Builds one explicitly selected product from a static definition.
+    pub fn build_product_deployment(
+        &self,
+        provider_id: &ProviderId,
+        product_id: &ProductId,
+        deployment: &ProviderDeploymentConfig,
+        resolver: &dyn SecretResolver,
+    ) -> Result<ProviderRuntime, LlmError> {
+        if deployment.provider_id() != provider_id {
+            return Err(ProviderRegistryError::new(
+                ProviderRegistryFailure::FactoryProviderMismatch,
+                Some(provider_id.as_str()),
+                "deployment provider identity does not match registry selection",
+            )
+            .into());
+        }
+        let factory = {
+            let registrations = self.read()?;
+            let key = RegistrationKey {
+                provider_id: provider_id.clone(),
+                product_id: Some(product_id.clone()),
+            };
+            let registration = registrations.get(&key).ok_or_else(|| {
+                ProviderRegistryError::new(
+                    ProviderRegistryFailure::RegistrationNotFound,
+                    Some(provider_id.as_str()),
+                    "provider product is not registered",
+                )
+            })?;
+            match &registration.compiler {
+                RegistrationCompiler::Definition(factory) => factory.as_ref().clone(),
+                RegistrationCompiler::Factory(_) => unreachable!("product keys are definitions"),
+            }
+        };
+        let runtime = factory.build_deployment(deployment, resolver)?;
+        if runtime.provider_id() != provider_id || runtime.product_id() != product_id {
+            return Err(ProviderRegistryError::new(
+                ProviderRegistryFailure::FactoryProviderMismatch,
+                Some(provider_id.as_str()),
+                "definition compiler returned mismatched runtime identity",
+            )
+            .into());
+        }
+        Ok(runtime)
+    }
+
     fn read(
         &self,
     ) -> Result<
-        RwLockReadGuard<'_, BTreeMap<ProviderId, ProviderRegistration>>,
+        RwLockReadGuard<'_, BTreeMap<RegistrationKey, ProviderRegistration>>,
         ProviderRegistryError,
     > {
         self.registrations.read().map_err(|_| state_unavailable())
@@ -257,7 +470,7 @@ impl ProviderRegistry {
     fn write(
         &self,
     ) -> Result<
-        RwLockWriteGuard<'_, BTreeMap<ProviderId, ProviderRegistration>>,
+        RwLockWriteGuard<'_, BTreeMap<RegistrationKey, ProviderRegistration>>,
         ProviderRegistryError,
     > {
         self.registrations.write().map_err(|_| state_unavailable())
@@ -276,6 +489,13 @@ impl fmt::Debug for ProviderRegistry {
                 .field("state", &"unavailable")
                 .finish(),
         }
+    }
+}
+
+fn registration_key(metadata: &ProviderRegistrationMetadata) -> RegistrationKey {
+    RegistrationKey {
+        provider_id: metadata.provider_id.clone(),
+        product_id: metadata.product_id.clone(),
     }
 }
 

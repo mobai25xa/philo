@@ -995,6 +995,128 @@ fn phase_five_protocol_adapters_are_isolated_and_wire_types_remain_private() {
 }
 
 #[test]
+fn protocol_adapters_do_not_read_provider_identity_hostname_or_profile_presets() {
+    for (file, text) in production_sources_under("src/protocol") {
+        for forbidden in [
+            "provider_id",
+            "host_str(",
+            "hostname",
+            "CredentialAudience",
+            "provider::profiles",
+            "profiles::",
+            "OfficialOpenAiProfile",
+            "OfficialAnthropicProfile",
+            "OpenRouterProfile",
+            "DeepSeekProfile",
+            "ZaiStandardProfile",
+            "ZaiCodingProfile",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "protocol adapter reads provider-owned identity in {file}: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn execution_and_transport_do_not_branch_on_provider_brand() {
+    for directory in ["src/execution", "src/transport"] {
+        for (file, text) in production_sources_under(directory) {
+            let normalized = text.to_ascii_lowercase();
+            for forbidden in [
+                "official-openai",
+                "official-anthropic",
+                "openrouter",
+                "deepseek",
+                "zai-standard",
+                "zai-coding",
+                "api.openai.com",
+                "api.anthropic.com",
+            ] {
+                assert!(
+                    !normalized.contains(forbidden),
+                    "shared execution branches on provider brand in {file}: {forbidden}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn provider_definition_builder_is_the_only_production_parts_constructor() {
+    let owners = production_sources_under("src/provider")
+        .into_iter()
+        .filter_map(|(file, text)| {
+            (file != "src/provider/profiles/test_only.rs"
+                && text.contains("ProviderProfile::from_parts(ProviderProfileParts {"))
+            .then_some(file)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        owners,
+        BTreeSet::from(["src/provider/definition.rs".to_owned()])
+    );
+
+    for path in [
+        "src/provider/profiles/official_openai.rs",
+        "src/provider/profiles/official_anthropic.rs",
+        "src/provider/profiles/openrouter.rs",
+        "src/provider/profiles/deepseek.rs",
+        "src/provider/profiles/zai.rs",
+    ] {
+        let profile = production_source(path);
+        assert!(
+            profile.contains("ProviderDefinition"),
+            "{path} skips builder"
+        );
+        assert!(!profile.contains("ProviderProfileParts"));
+        assert!(!profile.contains("ProviderProfile::from_parts"));
+    }
+}
+
+#[test]
+fn protocol_contract_binding_and_public_custom_api_remain_fail_closed() {
+    let definition = production_source("src/provider/definition.rs");
+    let profile = production_source("src/provider/profile.rs");
+    let policy = production_source("src/provider/call_policy.rs");
+    for text in [&definition, &profile, &policy] {
+        assert!(!text.contains("Option<ResolvedProtocolContract>"));
+        assert!(!text.contains("protocol_contract: Option"));
+    }
+    assert!(definition.contains("CredentialBinding::exact_https_origin"));
+    assert!(definition.contains("resolve_definition_endpoint(&endpoint, &catalog)"));
+    assert!(definition.contains("resolve_official(endpoint)"));
+
+    let openai = production_source("src/provider/profiles/official_openai.rs");
+    let anthropic = production_source("src/provider/profiles/official_anthropic.rs");
+    assert!(openai.contains("CredentialAudience::OfficialOpenAi.into()"));
+    assert!(anthropic.contains("CredentialAudience::OfficialAnthropic.into()"));
+
+    let runtime = production_source("src/provider/runtime.rs");
+    assert!(runtime.contains("let protocol_kind = match profile.dialect"));
+    for forbidden in ["host_str()", "EndpointDetection", "detect_protocol"] {
+        assert!(!runtime.contains(forbidden));
+    }
+
+    for facade in ["src/lib.rs", "src/provider/mod.rs"] {
+        let text = production_source(facade);
+        for forbidden in [
+            "OpenAiChatDriver",
+            "AnthropicMessagesDriver",
+            "MessagesStateMachine",
+            "ChatCompletionChunkWire",
+            "MessagesRequestWire",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "custom provider facade leaks protocol implementation in {facade}: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn phase_five_adapters_have_no_network_or_tool_execution_authority() {
     for (file, text) in production_sources_under("src/protocol") {
         for forbidden in [
@@ -1044,12 +1166,14 @@ fn phase_five_official_profiles_use_shared_runtime_pipelines() {
     for path in [
         "src/provider/profiles/official_openai.rs",
         "src/provider/profiles/official_anthropic.rs",
+        "src/provider/profiles/openrouter.rs",
+        "src/provider/profiles/deepseek.rs",
+        "src/provider/profiles/zai.rs",
     ] {
         let profile = production_source(path);
         for required in [
-            "ProviderProfile::from_parts",
-            "ProviderProfileParts",
-            "ProviderTransportOptions::secure_defaults()",
+            "ProviderDefinition",
+            "compile_resolved",
             "CredentialAudience",
         ] {
             assert!(
@@ -1057,7 +1181,13 @@ fn phase_five_official_profiles_use_shared_runtime_pipelines() {
                 "{path} bypasses shared owner: {required}"
             );
         }
-        for forbidden in ["reqwest::Client", "MockTransport", "LlmClient::new"] {
+        for forbidden in [
+            "ProviderProfile::from_parts",
+            "ProviderProfileParts",
+            "reqwest::Client",
+            "MockTransport",
+            "LlmClient::new",
+        ] {
             assert!(
                 !profile.contains(forbidden),
                 "official profile creates execution/transport state in {path}: {forbidden}"

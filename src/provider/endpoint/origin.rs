@@ -17,6 +17,14 @@ pub struct Origin {
 }
 
 impl Origin {
+    pub(crate) fn new(scheme: &str, host: &str, port: u16) -> Self {
+        Self {
+            scheme: scheme.to_ascii_lowercase(),
+            host: host.to_ascii_lowercase(),
+            port,
+        }
+    }
+
     /// Extracts a normalized origin from a URL.
     pub fn from_url(url: &Url) -> Result<Self, LlmError> {
         let host = url

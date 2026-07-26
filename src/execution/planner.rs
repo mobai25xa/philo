@@ -54,11 +54,16 @@ impl CallPlanner {
                 policy.capabilities.developer_role,
                 policy.capabilities.vision_input,
             ),
-            &policy.compat.dialect,
+            &policy.protocol.dialect_policy(),
             &policy.history,
         )?;
         let planned = PlannedRequest {
             model: request.model().clone(),
+            source: crate::domain::SourceIdentity::new(
+                policy.target.provider_id.clone(),
+                request.model().model().clone(),
+                policy.target.protocol_id.clone(),
+            ),
             messages: normalized.messages().to_vec(),
             options: request.options().clone(),
             normalization: NormalizationReport {
@@ -80,13 +85,14 @@ impl CallPlanner {
             planned,
             provenance: PlanProvenance {
                 capability_source,
-                compat_source: policy
-                    .compat
-                    .profile
-                    .as_ref()
-                    .map_or(crate::domain::PolicySource::ProtocolDefault, |profile| {
-                        profile.source(crate::provider::CompatField::RequestMaxOutputTokens)
-                    }),
+                compat_source: policy.protocol.openai_chat().map_or(
+                    crate::domain::PolicySource::ProtocolDefault,
+                    |contract| {
+                        contract
+                            .compat()
+                            .source(crate::provider::CompatField::RequestMaxOutputTokens)
+                    },
+                ),
                 model_override_applied,
             },
             execution: CallExecutionIntent {

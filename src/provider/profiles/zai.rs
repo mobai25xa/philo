@@ -4,15 +4,20 @@ use std::sync::Arc;
 
 use http::{HeaderName, HeaderValue};
 
+use crate::domain::{ModelId, ProtocolId, ProviderId};
 use crate::error::{LlmError, ValidationError, ValidationReason};
 
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
+use super::super::capability::ProviderCapabilities;
+use super::super::catalog::ProductId;
 use super::super::compat::MaxOutputTokensWireFormat;
+use super::super::definition::{AuthScheme, ProviderDefinition};
 use super::super::endpoint::CredentialAudience;
+use super::super::endpoint::EndpointConfig;
 use super::super::headers::{DynamicHeaderPolicy, HeaderOperation};
 use super::super::profile::ProviderProfile;
 use super::super::runtime::ProviderRuntime;
-use super::common::{CompatibleProfileParts, build_compatible_profile, provider_patch};
+use super::common::{compatible_deployment, exact_model_catalog, provider_patch};
 
 fn language_operation(value: Option<HeaderValue>) -> Vec<HeaderOperation> {
     value.map_or_else(Vec::new, |value| {
@@ -115,22 +120,31 @@ macro_rules! zai_profile {
             pub fn profile(self) -> Result<ProviderProfile, LlmError> {
                 let compat =
                     provider_patch().with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens);
-                build_compatible_profile(CompatibleProfileParts {
-                    provider: "zai",
-                    product: $product,
-                    base_url: $base,
-                    endpoint_path: "/chat/completions",
-                    audience: $audience,
-                    auth: self.auth,
-                    client_identity: self.client_identity,
-                    provider_headers: language_operation(self.accept_language),
-                    dynamic_header_policy: self.dynamic_header_policy,
-                    exact_model: $model,
-                    display_name: $display_name,
-                    catalog_source: $source,
-                    provider_compat: compat,
-                    openrouter_routing: None,
-                })
+                let provider_id = ProviderId::new("zai")?;
+                let product_id = ProductId::new($product)?;
+                let protocol_id = ProtocolId::new("openai-chat-completions")?;
+                let model_id = ModelId::new($model)?;
+                let catalog = exact_model_catalog(
+                    provider_id.clone(),
+                    product_id.clone(),
+                    protocol_id,
+                    &model_id,
+                    $display_name,
+                    $source,
+                    compat.clone(),
+                )?;
+                let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
+                let definition = ProviderDefinition::openai_chat(provider_id, product_id)
+                    .with_endpoint(EndpointConfig::base_and_path($base, "/chat/completions")?)
+                    .with_credential_binding($audience.into())
+                    .with_auth_scheme(auth_scheme)
+                    .with_provider_headers(language_operation(self.accept_language))
+                    .with_shared_dynamic_header_policy(self.dynamic_header_policy)
+                    .with_capabilities(ProviderCapabilities::openai_compatible())
+                    .with_catalog(catalog)
+                    .with_provider_compat(compat)
+                    .build()?;
+                definition.compile_resolved(compatible_deployment(self.auth, self.client_identity))
             }
 
             /// Builds the immutable runtime.

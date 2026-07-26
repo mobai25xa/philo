@@ -651,8 +651,8 @@ impl MessagesStateMachine {
         let protocol = ProtocolId::new("anthropic-messages")
             .map_err(|_| Self::protocol("invalid Anthropic protocol identity"))?;
         Ok(SourceIdentity::new(
-            self.context.model.provider().clone(),
-            self.context.model.model().clone(),
+            self.context.source.provider().clone(),
+            self.context.source.model().clone(),
             protocol,
         )
         .with_generation_id(generation_id))

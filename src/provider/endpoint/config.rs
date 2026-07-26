@@ -14,7 +14,7 @@ use super::{
 /// Network mode selected by a trusted provider preset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EndpointMode {
-    Official,
+    Production,
     TestOnly,
 }
 
@@ -160,7 +160,7 @@ impl EndpointConfig {
 
 /// Resolves and validates the official endpoint input.
 pub fn resolve_official(config: &EndpointConfig) -> Result<ResolvedEndpoint, LlmError> {
-    config.resolve(EndpointMode::Official, None)
+    config.resolve(EndpointMode::Production, None)
 }
 
 /// Resolves an official target-aware endpoint.
@@ -168,7 +168,7 @@ pub fn resolve_official_for(
     config: &EndpointConfig,
     values: EndpointValues<'_>,
 ) -> Result<ResolvedEndpoint, LlmError> {
-    config.resolve(EndpointMode::Official, Some(values))
+    config.resolve(EndpointMode::Production, Some(values))
 }
 
 /// Resolves a localhost-only test endpoint.

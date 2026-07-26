@@ -6,7 +6,9 @@ use std::task::{Context, Poll};
 use futures_core::Stream;
 
 use super::machine::MessagesStateMachine;
-use crate::domain::{AssistantEvent, LocalRequestId, ModelRef, ProviderRequestId, ResponseFormat};
+use crate::domain::{
+    AssistantEvent, LocalRequestId, ProviderRequestId, ResponseFormat, SourceIdentity,
+};
 use crate::error::LlmError;
 use crate::provider::call_policy::ResponseLimits;
 use crate::transport::{ByteStream, SseConfig, SseDecoder};
@@ -15,19 +17,19 @@ use crate::transport::{ByteStream, SseConfig, SseDecoder};
 pub(crate) struct AnthropicMessagesStreamContext {
     pub(super) local_request_id: LocalRequestId,
     pub(super) provider_request_id: Option<ProviderRequestId>,
-    pub(super) model: ModelRef,
+    pub(super) source: SourceIdentity,
 }
 
 impl AnthropicMessagesStreamContext {
     pub(crate) fn new(
         local_request_id: LocalRequestId,
         provider_request_id: Option<ProviderRequestId>,
-        model: ModelRef,
+        source: SourceIdentity,
     ) -> Self {
         Self {
             local_request_id,
             provider_request_id,
-            model,
+            source,
         }
     }
 }
@@ -127,8 +129,8 @@ mod tests {
     use futures_util::{StreamExt as _, stream};
 
     use crate::domain::{
-        AssistantEvent, LocalRequestId, ModelRef, ProviderRequestId, ResourceLimits,
-        ResponseFormat, TokenCount,
+        AssistantEvent, LocalRequestId, ModelId, ProtocolId, ProviderId, ProviderRequestId,
+        ResourceLimits, ResponseFormat, SourceIdentity, TokenCount,
     };
     use crate::error::LlmError;
     use crate::provider::call_policy::ResponseLimits;
@@ -175,7 +177,11 @@ mod tests {
             AnthropicMessagesStreamContext::new(
                 LocalRequestId::new("anthropic-stream-test").unwrap(),
                 Some(ProviderRequestId::new("req_stream_test").unwrap()),
-                ModelRef::new("test-only", "claude-test").unwrap(),
+                SourceIdentity::new(
+                    ProviderId::new("test-only").unwrap(),
+                    ModelId::new("claude-test").unwrap(),
+                    ProtocolId::new("anthropic-messages").unwrap(),
+                ),
             ),
             ResponseFormat::Text,
             SseConfig::default(),

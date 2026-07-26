@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::domain::{ModelId, PolicySource, ProtocolId, ProviderId, ResourceLimits};
@@ -6,81 +5,25 @@ use crate::error::LlmError;
 use crate::transport::SseConfig;
 
 use super::super::auth::{AuthProvider, ClientIdentity};
-use super::super::capability::{
-    ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
-};
+use std::collections::BTreeMap;
+
 use super::super::catalog::{
     CatalogCapabilities, CatalogSource, CatalogSourceId, ModelCatalog, ModelEntry, ModelKey,
     ModelLimits, ProductId, ProviderModelId, SupportStatus, WireModelValue,
 };
-use super::super::compat::{CompatPatch, OpenRouterRoutingContract};
-use super::super::endpoint::{CredentialAudience, EndpointConfig};
-use super::super::headers::{DynamicHeaderPolicy, HeaderOperation};
-use super::super::profile::{ProviderProfile, ProviderProfileParts};
-use super::super::{IdempotencyPolicy, RateLimitPolicy};
+use super::super::compat::CompatPatch;
+use super::super::definition::ResolvedProviderDeployment;
 
-pub(super) struct CompatibleProfileParts {
-    pub provider: &'static str,
-    pub product: &'static str,
-    pub base_url: &'static str,
-    pub endpoint_path: &'static str,
-    pub audience: CredentialAudience,
-    pub auth: Arc<dyn AuthProvider>,
-    pub client_identity: ClientIdentity,
-    pub provider_headers: Vec<HeaderOperation>,
-    pub dynamic_header_policy: Option<Arc<DynamicHeaderPolicy>>,
-    pub exact_model: &'static str,
-    pub display_name: &'static str,
-    pub catalog_source: &'static str,
-    pub provider_compat: CompatPatch,
-    pub openrouter_routing: Option<OpenRouterRoutingContract>,
+pub(super) fn compatible_deployment(
+    auth: Arc<dyn AuthProvider>,
+    client_identity: ClientIdentity,
+) -> ResolvedProviderDeployment {
+    ResolvedProviderDeployment::new(auth, client_identity)
+        .with_resource_limits(ResourceLimits::official())
+        .with_sse_config(SseConfig::default())
 }
 
-pub(super) fn build_compatible_profile(
-    parts: CompatibleProfileParts,
-) -> Result<ProviderProfile, LlmError> {
-    let provider_id = ProviderId::new(parts.provider)?;
-    let product_id = ProductId::new(parts.product)?;
-    let protocol_id = ProtocolId::new("openai-chat-completions")?;
-    let model_id = ModelId::new(parts.exact_model)?;
-    let catalog = exact_model_catalog(
-        provider_id.clone(),
-        product_id.clone(),
-        protocol_id.clone(),
-        &model_id,
-        parts.display_name,
-        parts.catalog_source,
-        parts.provider_compat.clone(),
-    )?;
-    ProviderProfile::from_parts(ProviderProfileParts {
-        provider_id,
-        product_id,
-        protocol_id,
-        endpoint: EndpointConfig::base_and_path(parts.base_url, parts.endpoint_path)?,
-        audience: parts.audience,
-        auth: parts.auth,
-        client_identity: parts.client_identity,
-        provider_headers: parts.provider_headers,
-        model_headers: Vec::new(),
-        dynamic_header_policy: parts.dynamic_header_policy,
-        capabilities: ProviderCapabilities::openai_compatible(),
-        model_capabilities: BTreeMap::<ModelId, ModelCapabilityProfile>::new(),
-        catalog,
-        provider_compat: parts.provider_compat,
-        model_compat: BTreeMap::new(),
-        openrouter_routing: parts.openrouter_routing,
-        dialect: ProtocolDialect::OpenAiChatCompletions,
-        transport: ProviderTransportOptions::secure_defaults(),
-        resource_limits: ResourceLimits::official(),
-        sse: SseConfig::default(),
-        max_http_error_body_bytes: 16 * 1024,
-        rate_limit: RateLimitPolicy::standard_only(),
-        idempotency: IdempotencyPolicy::unknown(),
-        test_only: false,
-    })
-}
-
-fn exact_model_catalog(
+pub(super) fn exact_model_catalog(
     provider_id: ProviderId,
     product_id: ProductId,
     protocol_id: ProtocolId,

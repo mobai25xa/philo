@@ -21,9 +21,14 @@ use super::wire::{
 
 /// Encodes an already planned request without resolving policy or normalizing history.
 pub(super) fn encode_planned_request(plan: &ResolvedCallPlan) -> Result<Bytes, LlmError> {
-    let compat = plan.policy.compat.profile.as_ref().ok_or_else(|| {
-        ProtocolError::new("OpenAI Chat request requires an OpenAI compatibility profile")
-    })?;
+    let compat = plan
+        .policy
+        .protocol
+        .openai_chat()
+        .ok_or_else(|| {
+            ProtocolError::new("OpenAI Chat request requires an OpenAI compatibility profile")
+        })?
+        .compat();
     let planned = &plan.planned;
     encode_request_parts(RequestEncodingContext {
         model: match compat.request().model_body {

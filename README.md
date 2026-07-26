@@ -9,6 +9,11 @@ client and reliability pipeline. Anthropic request/stream wire types remain
 private; typed protocol options expose adaptive thinking and effort without
 adding provider fields to the common domain.
 
+The provider-definition correction adds a public, fail-closed way to bind either
+implemented protocol to a caller-declared public HTTPS origin. Built-in profiles
+and custom definitions now compile through the same typed definition path;
+provider identity never selects a protocol adapter.
+
 Behavior contracts:
 
 - `philo/openai-chat-p1` version `1.0.0` for the text stream foundation
@@ -73,8 +78,13 @@ Examples:
   and `slow_consumer_drop.rs`; the offline soak lives in
   `benches/phase4_client_soak.rs`
 - phase five: `anthropic_messages.rs`
+- custom provider definitions: `custom_openai_chat_provider.rs`,
+  `custom_anthropic_messages_provider.rs`, `multi_provider_same_protocol.rs`,
+  and `one_provider_multiple_protocols.rs`
 
 Provider guides live in the workspace under `docs/philo/stage/guide/providers/`.
+Start with `custom-provider-definitions.md` for the public definition API and
+`provider-definition-migration.md` for compatibility notes.
 The standalone repository keeps its checked support declaration in
 [`support/provider-support-matrix.md`](./support/provider-support-matrix.md),
 with [`provider-support-matrix.toml`](./support/provider-support-matrix.toml) as

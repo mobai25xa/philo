@@ -3,7 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crate::domain::content::decode_validated_data_url;
 use crate::domain::{
     ContentPart, DiagnosticCode, ImageDetail, ImageSource, Message, MessageRole,
-    NormalizationDiagnostic, ProtocolId, SourceIdentity, ThinkingContent, ThinkingReplayPolicy,
+    NormalizationDiagnostic, SourceIdentity, ThinkingContent, ThinkingReplayPolicy,
 };
 use crate::error::{LlmError, ProtocolError};
 use crate::execution::contract::ResolvedCallPlan;
@@ -29,12 +29,7 @@ pub(super) fn plan_history(plan: &ResolvedCallPlan) -> Result<AnthropicHistoryPl
     let mut messages = Vec::new();
     let mut diagnostics = Vec::new();
     let mut image_count = 0usize;
-    let target = SourceIdentity::new(
-        plan.policy.target.provider_id.clone(),
-        plan.planned.model.model().clone(),
-        ProtocolId::new("anthropic-messages")
-            .map_err(|_| ProtocolError::new("invalid Anthropic protocol identity"))?,
-    );
+    let target = plan.planned.source.clone();
 
     for message in &plan.planned.messages {
         match message.role() {

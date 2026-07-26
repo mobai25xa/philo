@@ -68,7 +68,7 @@ fn open_anthropic_messages(
     let context = AnthropicMessagesStreamContext::new(
         meta.local_request_id,
         meta.provider_request_id,
-        plan.model,
+        plan.source,
     );
     Box::pin(decode_anthropic_messages_stream(
         body,
@@ -92,12 +92,7 @@ fn open_openai_chat(
         plan.response_format,
         plan.sse,
         plan.limits,
-        *plan
-            .compat
-            .profile
-            .as_ref()
-            .expect("OpenAI response plans always carry compatibility policy")
-            .response(),
+        *plan.contract.compat().response(),
     ))
 }
 
@@ -118,13 +113,16 @@ mod tests {
     use futures_util::{StreamExt as _, stream};
     use http::StatusCode;
 
-    use crate::domain::{DialectPolicy, LocalRequestId, ModelRef, ResourceLimits, ResponseFormat};
+    use crate::domain::{
+        LocalRequestId, ModelId, ModelRef, ProtocolId, ProviderId, ResourceLimits, ResponseFormat,
+        SourceIdentity,
+    };
     use crate::execution::executor::{AttemptResponse, AttemptResponseBody};
     use crate::protocol::{
         AnthropicMessagesResponsePlan, ExpectedContentType, HttpResponseRequirements,
         OpenAiChatResponsePlan, ProtocolResponsePlan, ResponseMeta, ResponsePlan,
     };
-    use crate::provider::call_policy::{ResolvedCompat, ResponseLimits};
+    use crate::provider::call_policy::ResponseLimits;
     use crate::transport::LimitedBody;
     use crate::transport::{ByteStream, SseConfig};
 
@@ -141,10 +139,7 @@ mod tests {
                 protocol: ProtocolResponsePlan::OpenAiChat(OpenAiChatResponsePlan {
                     model: ModelRef::new("test-only", "gpt-test").unwrap(),
                     response_format: format,
-                    compat: ResolvedCompat {
-                        dialect: DialectPolicy::official_openai(),
-                        profile: Some(crate::provider::CompatProfile::openai_chat_default()),
-                    },
+                    contract: crate::provider::OpenAiChatContract::strict(),
                     limits: ResponseLimits::from(ResourceLimits::official()),
                     sse: SseConfig::default(),
                 }),
@@ -176,8 +171,13 @@ mod tests {
                     max_error_body_bytes: 64,
                 },
                 protocol: ProtocolResponsePlan::AnthropicMessages(AnthropicMessagesResponsePlan {
-                    model: ModelRef::new("test-only", "claude-test").unwrap(),
+                    source: SourceIdentity::new(
+                        ProviderId::new("test-only").unwrap(),
+                        ModelId::new("claude-test").unwrap(),
+                        ProtocolId::new("anthropic-messages").unwrap(),
+                    ),
                     response_format: ResponseFormat::Text,
+                    contract: crate::provider::AnthropicMessagesContract::strict_official(),
                     limits: ResponseLimits::from(ResourceLimits::official()),
                     sse: SseConfig::default(),
                 }),

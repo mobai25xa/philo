@@ -7,7 +7,7 @@ use url::{Host, Url};
 
 use crate::error::LlmError;
 
-use super::{CredentialAudience, EndpointMode, EndpointResolutionDiagnostics, ResolvedEndpoint};
+use super::{CredentialBinding, EndpointMode, EndpointResolutionDiagnostics, ResolvedEndpoint};
 
 /// Endpoint network class and optional exact-host allowlist.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,7 +21,7 @@ impl EndpointNetworkPolicy {
     #[must_use]
     pub const fn public_https() -> Self {
         Self {
-            mode: EndpointMode::Official,
+            mode: EndpointMode::Production,
             allowed_hosts: BTreeSet::new(),
         }
     }
@@ -47,7 +47,7 @@ impl EndpointNetworkPolicy {
 
     pub(crate) fn for_mode(mode: EndpointMode) -> Self {
         match mode {
-            EndpointMode::Official => Self::public_https(),
+            EndpointMode::Production => Self::public_https(),
             EndpointMode::TestOnly => Self::test_loopback(),
         }
     }
@@ -59,9 +59,9 @@ impl EndpointNetworkPolicy {
             .host()
             .ok_or_else(|| configuration("endpoint must include a host"))?;
         match self.mode {
-            EndpointMode::Official => {
+            EndpointMode::Production => {
                 if url.scheme() != "https" {
-                    return Err(configuration("official endpoint requires HTTPS"));
+                    return Err(configuration("production endpoint requires HTTPS"));
                 }
                 validate_public_host(&host)?;
             }
@@ -92,7 +92,7 @@ impl EndpointNetworkPolicy {
             return Err(configuration("DNS resolution returned no addresses"));
         }
         let allowed = addresses.into_iter().all(|address| match self.mode {
-            EndpointMode::Official => match address {
+            EndpointMode::Production => match address {
                 IpAddr::V4(address) => is_public_ipv4(address),
                 IpAddr::V6(address) => is_public_ipv6(address),
             },
@@ -129,16 +129,17 @@ impl RedirectPolicy {
         self,
         from: &ResolvedEndpoint,
         to: &Url,
-        audience: &CredentialAudience,
+        binding: impl Into<CredentialBinding>,
     ) -> Result<ResolvedEndpoint, LlmError> {
-        self.validate_inner(from, to, Some(audience))
+        let binding = binding.into();
+        self.validate_inner(from, to, Some(&binding))
     }
 
     fn validate_inner(
         self,
         from: &ResolvedEndpoint,
         to: &Url,
-        audience: Option<&CredentialAudience>,
+        binding: Option<&CredentialBinding>,
     ) -> Result<ResolvedEndpoint, LlmError> {
         if self == Self::Disabled {
             return Err(configuration("redirects are disabled"));
@@ -159,8 +160,8 @@ impl RedirectPolicy {
         if from.origin().scheme() == "https" && target.origin().scheme() != "https" {
             return Err(configuration("HTTPS redirect downgrade is forbidden"));
         }
-        if let Some(audience) = audience {
-            audience.validate(&target)?;
+        if let Some(binding) = binding {
+            binding.validate(&target)?;
         }
         Ok(target)
     }

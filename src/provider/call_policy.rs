@@ -5,15 +5,15 @@
 use std::fmt;
 
 use crate::domain::{
-    DialectPolicy, HistoryPolicy, ModelId, ProtocolId, ProviderId, RequestValidationLimits,
-    ResourceLimits, ResponseFormat,
+    HistoryPolicy, ModelId, ProtocolId, ProviderId, RequestValidationLimits, ResourceLimits,
+    ResponseFormat,
 };
 use crate::error::{ValidationError, ValidationReason};
 use crate::transport::SseConfig;
 
 use super::ProviderCapabilities;
+use super::ResolvedProtocolContract;
 use super::catalog::{DeploymentId, ProductId, ProviderModelId};
-use super::compat::CompatProfile;
 use super::compat::ResolvedProviderRouting;
 
 /// Provider and protocol policy resolved before request preparation.
@@ -21,7 +21,7 @@ use super::compat::ResolvedProviderRouting;
 pub(crate) struct CallPolicySnapshot {
     pub(crate) target: ResolvedTarget,
     pub(crate) capabilities: ProviderCapabilities,
-    pub(crate) compat: ResolvedCompat,
+    pub(crate) protocol: ResolvedProtocolContract,
     pub(crate) history: HistoryPolicy,
     pub(crate) limits: ResolvedLimits,
     pub(crate) response_format: ResponseFormat,
@@ -34,7 +34,7 @@ impl fmt::Debug for CallPolicySnapshot {
             .debug_struct("CallPolicySnapshot")
             .field("target", &self.target)
             .field("capabilities", &self.capabilities)
-            .field("compat", &self.compat)
+            .field("protocol", &self.protocol)
             .field("history", &self.history)
             .field("limits", &self.limits)
             .field(
@@ -64,13 +64,6 @@ pub(crate) struct ResolvedTarget {
 pub(crate) enum ProtocolKind {
     OpenAiChatCompletions,
     AnthropicMessages,
-}
-
-/// Protocol compatibility policy compiled from the provider dialect.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedCompat {
-    pub(crate) dialect: DialectPolicy,
-    pub(crate) profile: Option<CompatProfile>,
 }
 
 /// Complete request, response, and transport limits for one logical call.
@@ -186,10 +179,10 @@ fn response_format_name(response_format: &ResponseFormat) -> &'static str {
 mod tests {
     use serde_json::json;
 
-    use super::{CallPolicySnapshot, ResolvedCompat, ResolvedLimits, ResolvedTarget};
+    use super::{CallPolicySnapshot, ResolvedLimits, ResolvedTarget};
     use crate::domain::{
-        DialectPolicy, HistoryPolicy, ModelId, ProtocolId, ProviderId, ResourceLimits,
-        ResponseFormat, StructuredSchema, ToolSchema,
+        HistoryPolicy, ModelId, ProtocolId, ProviderId, ResourceLimits, ResponseFormat,
+        StructuredSchema, ToolSchema,
     };
     use crate::provider::{ProductId, ProviderCapabilities, ProviderModelId};
     use crate::transport::SseConfig;
@@ -233,10 +226,7 @@ mod tests {
                 wire_model: ModelId::new("gpt-test").unwrap(),
             },
             capabilities: ProviderCapabilities::official_openai(),
-            compat: ResolvedCompat {
-                dialect: DialectPolicy::official_openai(),
-                profile: Some(crate::provider::CompatProfile::openai_chat_default()),
-            },
+            protocol: crate::provider::ResolvedProtocolContract::strict_openai_chat(),
             history: HistoryPolicy::official_openai(),
             limits: ResolvedLimits::compile(
                 ResourceLimits::official(),

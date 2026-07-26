@@ -19,6 +19,11 @@ pub(crate) struct AnthropicMessagesDriver;
 
 impl AnthropicMessagesDriver {
     pub(crate) fn prepare(&self, plan: &ResolvedCallPlan) -> Result<PreparedCall, LlmError> {
+        let contract = plan.policy.protocol.anthropic_messages().ok_or_else(|| {
+            crate::error::ProtocolError::new(
+                "Anthropic Messages driver requires an Anthropic Messages protocol contract",
+            )
+        })?;
         let body = encode_planned_request(plan)?;
         let protocol_headers = vec![
             HeaderOperation::set(
@@ -50,8 +55,9 @@ impl AnthropicMessagesDriver {
                     max_error_body_bytes: plan.policy.limits.transport.max_http_error_body_bytes,
                 },
                 protocol: ProtocolResponsePlan::AnthropicMessages(AnthropicMessagesResponsePlan {
-                    model: plan.planned.model.clone(),
+                    source: plan.planned.source.clone(),
                     response_format: plan.policy.response_format.clone(),
+                    contract: *contract,
                     limits: plan.policy.limits.response,
                     sse: plan.policy.limits.transport.sse,
                 }),
