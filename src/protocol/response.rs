@@ -76,6 +76,7 @@ fn open_anthropic_messages(
         plan.response_format,
         plan.sse,
         plan.limits,
+        plan.contract,
     ))
 }
 

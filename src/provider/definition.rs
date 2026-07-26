@@ -19,7 +19,7 @@ use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::catalog::{ModelCatalog, ProductId};
-use super::compat::{CompatPatch, OpenRouterRoutingContract};
+use super::compat::{AnthropicUsageCompat, CompatPatch, OpenRouterRoutingContract};
 use super::config::{SecretReference, SecretResolver};
 use super::endpoint::{
     CredentialBinding, EndpointConfig, ResolvedModelMapping, resolve_official, resolve_official_for,
@@ -725,6 +725,26 @@ impl ProviderDefinitionBuilder {
             .push(HeaderOperation::remove(HeaderName::from_static(
                 "anthropic-beta",
             )));
+        Ok(self)
+    }
+
+    /// Selects reviewed Anthropic Messages usage snapshot compatibility.
+    ///
+    /// Official Anthropic definitions should retain
+    /// [`AnthropicUsageCompat::StrictStableFields`]. Compatible providers may
+    /// opt into a narrower monotonic policy when their usage counters evolve
+    /// across the same stream.
+    pub fn with_anthropic_usage_compat(
+        mut self,
+        usage: AnthropicUsageCompat,
+    ) -> Result<Self, LlmError> {
+        let ResolvedProtocolContract::AnthropicMessages(contract) = self.protocol_contract else {
+            return Err(configuration(
+                "Anthropic usage compatibility requires an Anthropic Messages definition",
+            ));
+        };
+        self.protocol_contract =
+            ResolvedProtocolContract::AnthropicMessages(contract.with_usage_compat(usage));
         Ok(self)
     }
 

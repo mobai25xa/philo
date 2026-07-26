@@ -14,6 +14,7 @@ use crate::error::{
     ErrorStage, LlmError, ProtocolError, RetriableHint, TruncatedStreamError, UnknownFinishReason,
     UnsupportedResponseSemantics,
 };
+use crate::provider::AnthropicUsageCompat;
 use crate::provider::call_policy::ResponseLimits;
 use crate::transport::SseEvent;
 
@@ -101,6 +102,7 @@ pub(super) struct MessagesStateMachine {
     thinking_text_bytes: usize,
     opaque_thinking_bytes: usize,
     usage_snapshot: Option<UsageWire>,
+    usage_compat: AnthropicUsageCompat,
     usage_emitted: bool,
     finish_reason: Option<FinishReason>,
     generation_id: Option<GenerationId>,
@@ -133,6 +135,7 @@ impl MessagesStateMachine {
         context: AnthropicMessagesStreamContext,
         response_format: ResponseFormat,
         limits: ResponseLimits,
+        usage_compat: AnthropicUsageCompat,
     ) -> Self {
         Self {
             context,
@@ -149,6 +152,7 @@ impl MessagesStateMachine {
             thinking_text_bytes: 0,
             opaque_thinking_bytes: 0,
             usage_snapshot: None,
+            usage_compat,
             usage_emitted: false,
             finish_reason: None,
             generation_id: None,
@@ -516,8 +520,11 @@ impl MessagesStateMachine {
                 "Anthropic message_delta received before all content blocks stopped",
             ));
         }
-        let merged_usage =
-            merge_usage_snapshot(self.usage_snapshot.unwrap_or_default(), wire.usage)?;
+        let merged_usage = merge_usage_snapshot(
+            self.usage_snapshot.unwrap_or_default(),
+            wire.usage,
+            self.usage_compat,
+        )?;
         self.usage_snapshot = Some(merged_usage);
         let Some(raw_reason) = wire.delta.stop_reason else {
             return Ok(Vec::new());
@@ -767,24 +774,40 @@ fn usage_details(snapshot: UsageWire) -> Result<UsageDetails, LlmError> {
     Ok(details)
 }
 
-fn merge_usage_snapshot(previous: UsageWire, next: UsageWire) -> Result<UsageWire, LlmError> {
+fn merge_usage_snapshot(
+    previous: UsageWire,
+    next: UsageWire,
+    compat: AnthropicUsageCompat,
+) -> Result<UsageWire, LlmError> {
     Ok(UsageWire {
-        input_tokens: merge_stable_count(previous.input_tokens, next.input_tokens)?,
+        input_tokens: merge_stable_count(previous.input_tokens, next.input_tokens, compat)?,
         output_tokens: merge_cumulative_count(previous.output_tokens, next.output_tokens)?,
         cache_creation_input_tokens: merge_stable_count(
             previous.cache_creation_input_tokens,
             next.cache_creation_input_tokens,
+            compat,
         )?,
         cache_read_input_tokens: merge_stable_count(
             previous.cache_read_input_tokens,
             next.cache_read_input_tokens,
+            compat,
         )?,
         thinking_tokens: merge_cumulative_count(previous.thinking_tokens, next.thinking_tokens)?,
     })
 }
 
-fn merge_stable_count(previous: Option<u64>, next: Option<u64>) -> Result<Option<u64>, LlmError> {
+fn merge_stable_count(
+    previous: Option<u64>,
+    next: Option<u64>,
+    compat: AnthropicUsageCompat,
+) -> Result<Option<u64>, LlmError> {
     match (previous, next) {
+        (Some(left), Some(right))
+            if right > left
+                && matches!(compat, AnthropicUsageCompat::AllowMonotonicStableFields) =>
+        {
+            Ok(Some(right))
+        }
         (Some(left), Some(right)) if left != right => Err(MessagesStateMachine::protocol(
             "Anthropic stable usage field changed within one stream",
         )),

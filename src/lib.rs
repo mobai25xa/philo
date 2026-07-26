@@ -103,8 +103,8 @@ pub use observability::{
     LifecycleIdentity, LifecycleObserver, RetryStopReason,
 };
 pub use provider::{
-    ApiKey, ApiKeyHeaderAuth, AuthContext, AuthDiagnostics, AuthProvider, AuthScheme,
-    AuthSchemeKind, BearerAuth, BearerCredential, CatalogCapabilities, CatalogDefaults,
+    AnthropicUsageCompat, ApiKey, ApiKeyHeaderAuth, AuthContext, AuthDiagnostics, AuthProvider,
+    AuthScheme, AuthSchemeKind, BearerAuth, BearerCredential, CatalogCapabilities, CatalogDefaults,
     CatalogSource, CatalogSourceId, ClientIdentity, ClientIdentityConfig, ClientIdentityFragment,
     CompatDiagnostic, CompatField, CompatPatch, CompatProfile, ConfigSchemaVersion, ConfigSource,
     ConfigSourceId, ConfigSourceKind, ConfigSourceLocation, ConfigValue, ConstraintStrength,

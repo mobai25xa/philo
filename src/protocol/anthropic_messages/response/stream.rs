@@ -10,6 +10,7 @@ use crate::domain::{
     AssistantEvent, LocalRequestId, ProviderRequestId, ResponseFormat, SourceIdentity,
 };
 use crate::error::LlmError;
+use crate::provider::AnthropicMessagesContract;
 use crate::provider::call_policy::ResponseLimits;
 use crate::transport::{ByteStream, SseConfig, SseDecoder};
 
@@ -40,11 +41,12 @@ pub(crate) fn decode_anthropic_messages_stream(
     response_format: ResponseFormat,
     sse: SseConfig,
     limits: ResponseLimits,
+    contract: AnthropicMessagesContract,
 ) -> AnthropicMessagesEventStream {
     let max_events_per_poll = sse.max_events_per_poll();
     AnthropicMessagesEventStream {
         source: SseDecoder::with_config(body, sse),
-        machine: MessagesStateMachine::new(context, response_format, limits),
+        machine: MessagesStateMachine::new(context, response_format, limits, contract.usage),
         pending: VecDeque::new(),
         max_events_per_poll,
         terminal: false,
@@ -133,6 +135,7 @@ mod tests {
         ResourceLimits, ResponseFormat, SourceIdentity, TokenCount,
     };
     use crate::error::LlmError;
+    use crate::provider::AnthropicUsageCompat;
     use crate::provider::call_policy::ResponseLimits;
     use crate::transport::{ByteStream, SseConfig};
 
@@ -172,6 +175,14 @@ mod tests {
         chunks: Vec<Bytes>,
         limits: ResponseLimits,
     ) -> Vec<Result<AssistantEvent, LlmError>> {
+        decode_with_usage_compat(chunks, limits, AnthropicUsageCompat::StrictStableFields).await
+    }
+
+    async fn decode_with_usage_compat(
+        chunks: Vec<Bytes>,
+        limits: ResponseLimits,
+        usage_compat: AnthropicUsageCompat,
+    ) -> Vec<Result<AssistantEvent, LlmError>> {
         decode_anthropic_messages_stream(
             body(chunks),
             AnthropicMessagesStreamContext::new(
@@ -186,6 +197,8 @@ mod tests {
             ResponseFormat::Text,
             SseConfig::default(),
             limits,
+            crate::provider::AnthropicMessagesContract::strict_official()
+                .with_usage_compat(usage_compat),
         )
         .collect()
         .await
@@ -388,6 +401,49 @@ mod tests {
             .replace("\"output_tokens\":5", "\"output_tokens\":1");
         assert!(matches!(
             decode(vec![Bytes::from(regression)]).await.last(),
+            Some(Err(LlmError::Protocol(_)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn compatible_usage_may_increase_stable_fields_but_never_decrease() {
+        let evolving = String::from_utf8(USAGE_FINISH.to_vec()).unwrap().replace(
+            "\"usage\":{\"output_tokens\":5,\"thinking_tokens\":2}",
+            "\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"cache_creation_input_tokens\":4,\"cache_read_input_tokens\":3,\"thinking_tokens\":2}",
+        );
+        assert!(matches!(
+            decode(vec![Bytes::from(evolving.clone())]).await.last(),
+            Some(Err(LlmError::Protocol(_)))
+        ));
+
+        let events = decode_with_usage_compat(
+            vec![Bytes::from(evolving)],
+            ResponseLimits::from(ResourceLimits::official()),
+            AnthropicUsageCompat::AllowMonotonicStableFields,
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+        let details = events.iter().find_map(|event| match event {
+            AssistantEvent::DetailedUsage(details) => Some(*details),
+            _ => None,
+        });
+        let details = details.expect("terminal compatible usage snapshot");
+        assert_eq!(details.input_tokens(), TokenCount::Known(19));
+
+        let decreasing = String::from_utf8(USAGE_FINISH.to_vec()).unwrap().replace(
+            "\"usage\":{\"output_tokens\":5,\"thinking_tokens\":2}",
+            "\"usage\":{\"input_tokens\":9,\"output_tokens\":5,\"thinking_tokens\":2}",
+        );
+        assert!(matches!(
+            decode_with_usage_compat(
+                vec![Bytes::from(decreasing)],
+                ResponseLimits::from(ResourceLimits::official()),
+                AnthropicUsageCompat::AllowMonotonicStableFields,
+            )
+            .await
+            .last(),
             Some(Err(LlmError::Protocol(_)))
         ));
     }

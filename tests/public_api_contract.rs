@@ -370,8 +370,8 @@ fn model_catalog_and_typed_compat_have_root_and_deep_public_paths() {
         ModelCatalog as DeepModelCatalog, ProductId as DeepProductId,
     };
     use philo::provider::compat::{
-        CompatPatch as DeepCompatPatch, MaxOutputTokensWireFormat as DeepTokenFormat,
-        resolve_compat as deep_resolve_compat,
+        AnthropicUsageCompat as DeepAnthropicUsageCompat, CompatPatch as DeepCompatPatch,
+        MaxOutputTokensWireFormat as DeepTokenFormat, resolve_compat as deep_resolve_compat,
     };
 
     let _: philo::ProductId = DeepProductId::new("chat-completions").unwrap();
@@ -391,6 +391,7 @@ fn model_catalog_and_typed_compat_have_root_and_deep_public_paths() {
         resolved.request().max_output_tokens,
         philo::MaxOutputTokensWireFormat::MaxTokens
     );
+    let _: philo::AnthropicUsageCompat = DeepAnthropicUsageCompat::AllowMonotonicStableFields;
 }
 
 #[test]

@@ -37,12 +37,12 @@ pub use catalog::{
     SupportStatus, WireModelValue,
 };
 pub use compat::{
-    CompatField, CompatPatch, CompatProfile, ConstraintStrength, DataRetention, FallbackDimension,
-    FinishReasonCompat, HistoryCompat, InlineErrorCompat, MaxOutputTokensWireFormat,
-    ModelBodyWireFormat, OpenRouterRoutingContract, OpenRouterRoutingPatch, ProviderRequestOptions,
-    RequestCompat, ResolvedProviderRouting, ResponseCompat, RoutingFallback, RoutingField,
-    RoutingRegion, RoutingSort, ToolArgumentsCompat, UpstreamId, UsageCompat, resolve_compat,
-    validate_compat,
+    AnthropicUsageCompat, CompatField, CompatPatch, CompatProfile, ConstraintStrength,
+    DataRetention, FallbackDimension, FinishReasonCompat, HistoryCompat, InlineErrorCompat,
+    MaxOutputTokensWireFormat, ModelBodyWireFormat, OpenRouterRoutingContract,
+    OpenRouterRoutingPatch, ProviderRequestOptions, RequestCompat, ResolvedProviderRouting,
+    ResponseCompat, RoutingFallback, RoutingField, RoutingRegion, RoutingSort, ToolArgumentsCompat,
+    UpstreamId, UsageCompat, resolve_compat, validate_compat,
 };
 pub use config::{
     ClientIdentityConfig, ConfigSchemaVersion, ConfigSource, ConfigSourceId, ConfigSourceKind,

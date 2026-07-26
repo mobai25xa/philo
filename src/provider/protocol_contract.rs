@@ -8,7 +8,7 @@ use crate::domain::{
 };
 
 use super::capability::ProtocolDialect;
-use super::compat::CompatProfile;
+use super::compat::{AnthropicUsageCompat, CompatProfile};
 
 /// Closed, strongly typed protocol contract selected by a provider profile.
 #[derive(Clone, Eq, PartialEq)]
@@ -153,13 +153,6 @@ pub(crate) enum AnthropicEventPolicy {
     IgnoreUnknownRejectMismatch,
 }
 
-/// Usage aggregation behavior across Messages events.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AnthropicUsagePolicy {
-    /// Merge cumulative start/delta snapshots and reject regressions.
-    MonotonicSnapshots,
-}
-
 /// Tool input block completion behavior.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AnthropicToolBlockPolicy {
@@ -195,7 +188,7 @@ pub(crate) struct AnthropicMessagesContract {
     pub(crate) beta_header: AnthropicBetaHeaderPolicy,
     pub(crate) terminal: AnthropicTerminalPolicy,
     pub(crate) events: AnthropicEventPolicy,
-    pub(crate) usage: AnthropicUsagePolicy,
+    pub(crate) usage: AnthropicUsageCompat,
     pub(crate) tool_blocks: AnthropicToolBlockPolicy,
     pub(crate) thinking: AnthropicThinkingPolicy,
     pub(crate) error_envelope: AnthropicErrorEnvelopePolicy,
@@ -212,7 +205,7 @@ impl AnthropicMessagesContract {
             beta_header: AnthropicBetaHeaderPolicy::ProviderControlled,
             terminal: AnthropicTerminalPolicy::RequireMessageStop,
             events: AnthropicEventPolicy::IgnoreUnknownRejectMismatch,
-            usage: AnthropicUsagePolicy::MonotonicSnapshots,
+            usage: AnthropicUsageCompat::StrictStableFields,
             tool_blocks: AnthropicToolBlockPolicy::RequireCompleteJson,
             thinking: AnthropicThinkingPolicy::SameSourceOpaque,
             error_envelope: AnthropicErrorEnvelopePolicy::TypedOfficial,
@@ -225,5 +218,10 @@ impl AnthropicMessagesContract {
 
     pub(crate) const fn dialect_policy() -> DialectPolicy {
         DialectPolicy::official_anthropic()
+    }
+
+    pub(crate) const fn with_usage_compat(mut self, usage: AnthropicUsageCompat) -> Self {
+        self.usage = usage;
+        self
     }
 }

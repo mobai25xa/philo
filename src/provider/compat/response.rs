@@ -35,6 +35,18 @@ pub enum UsageCompat {
     OpenAiDropInconsistentReasoning,
 }
 
+/// Anthropic Messages usage snapshot interpretation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AnthropicUsageCompat {
+    /// Require input and cache counters to remain stable after first becoming known.
+    StrictStableFields,
+    /// Permit input and cache counters to increase across cumulative snapshots.
+    ///
+    /// Decreases remain protocol errors. This is intended for reviewed compatible
+    /// providers that initially emit placeholder or partial usage counters.
+    AllowMonotonicStableFields,
+}
+
 /// In-stream provider error handling.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InlineErrorCompat {

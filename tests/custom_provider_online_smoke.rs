@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use futures_util::StreamExt as _;
 use philo::{
-    ApiKey, AssistantEvent, AuthScheme, CompatPatch, EndpointConfig, EnvironmentSecretResolver,
-    FinishReason, FinishReasonCompat, GenerateRequest, GenerationOptions, LlmClient, LlmError,
-    MaxOutputTokensWireFormat, Message, ModelRef, PolicySource, ProductId, ProviderCapabilities,
-    ProviderConfigError, ProviderDefinition, ProviderDeploymentConfig, ProviderId, ProviderRuntime,
-    RequestControl, SecretReference, SecretResolver, StaticProviderFactory, UsageCompat,
+    AnthropicUsageCompat, ApiKey, AssistantEvent, AuthScheme, CompatPatch, EndpointConfig,
+    EnvironmentSecretResolver, FinishReason, FinishReasonCompat, GenerateRequest,
+    GenerationOptions, LlmClient, LlmError, MaxOutputTokensWireFormat, Message, ModelRef,
+    PolicySource, ProductId, ProviderCapabilities, ProviderConfigError, ProviderDefinition,
+    ProviderDeploymentConfig, ProviderId, ProviderRuntime, RequestControl, SecretReference,
+    SecretResolver, StaticProviderFactory, UsageCompat,
 };
 
 const CREDENTIAL_ENV: &str = "PHILO_PROVIDER_CREDENTIAL";
@@ -96,6 +97,7 @@ impl CustomTarget {
                 )?)
                 .bind_credential_to_endpoint_origin()
                 .with_auth_scheme(AuthScheme::bearer())
+                .with_anthropic_usage_compat(AnthropicUsageCompat::AllowMonotonicStableFields)?
                 .with_anthropic_version("2023-06-01")?
                 .with_capabilities(ProviderCapabilities::conservative_messages())
                 .allow_unregistered_models()
