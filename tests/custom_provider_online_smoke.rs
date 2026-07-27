@@ -5,9 +5,14 @@ use std::time::Duration;
 
 use futures_util::StreamExt as _;
 use philo::domain::history::PolicySource;
+use philo::domain::ids::ToolName;
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::{ToolChoice, ToolDefinition};
 use philo::error::ProviderConfigError;
+use philo::protocol_options::{AnthropicMessagesOptions, AnthropicThinkingDisplay};
 use philo::provider::auth::ApiKey;
-use philo::provider::capability::ProviderCapabilities;
+use philo::provider::capability::{ModelCapabilityProfile, ProviderCapabilities};
 use philo::provider::catalog::ProductId;
 use philo::provider::definition::AuthScheme;
 use philo::provider::endpoint::EndpointConfig;
@@ -18,10 +23,11 @@ use philo::provider::protocol_contract::{
 use philo::provider::secret::{EnvironmentSecretResolver, SecretReference, SecretResolver};
 use philo::transport::CancellationToken;
 use philo::{
-    AssistantEvent, AssistantStream, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
-    LlmError, Message, ModelRef, ProviderDefinition, ProviderDeploymentConfig, ProviderId,
-    ProviderRuntime, RequestControl,
+    AssistantEvent, AssistantMessage, AssistantStream, ContentPart, FinishReason, GenerateRequest,
+    GenerationOptions, LlmClient, LlmError, Message, ModelId, ModelRef, ProviderDefinition,
+    ProviderDeploymentConfig, ProviderId, ProviderRuntime, RequestControl,
 };
+use serde_json::json;
 
 const CREDENTIAL_ENV: &str = "PHILO_PROVIDER_CREDENTIAL";
 const OPENROUTER_TARGET: &str = "custom-openrouter-definition";
@@ -121,6 +127,12 @@ impl CustomTarget {
                 .with_anthropic_usage_compat(AnthropicUsageCompat::AllowMonotonicStableFields)?
                 .with_anthropic_version("2023-06-01")?
                 .with_capabilities(ProviderCapabilities::conservative_messages())
+                .with_model_capabilities(
+                    ModelCapabilityProfile::new(ModelId::new(ZAI_ANTHROPIC_MODEL)?)
+                        .with_function_tools(CapabilityStatus::Supported)
+                        .with_tool_choice_required(CapabilityStatus::Supported)
+                        .with_adaptive_thinking(CapabilityStatus::Supported),
+                )
                 .allow_unregistered_models()
                 .build(),
         }
@@ -164,14 +176,27 @@ impl StreamObservation {
 }
 
 fn request(target: CustomTarget, model: &str, prompt: &str, max_tokens: u32) -> GenerateRequest {
+    request_with_options(
+        target,
+        model,
+        prompt,
+        GenerationOptions::new().with_max_output_tokens(max_tokens),
+    )
+}
+
+fn request_with_options(
+    target: CustomTarget,
+    model: &str,
+    prompt: &str,
+    options: GenerationOptions,
+) -> GenerateRequest {
     GenerateRequest::new(
         ModelRef::new(target.provider_id(), model)
             .expect("reviewed model identifier must be valid"),
         vec![Message::user(prompt)],
     )
     .with_options(
-        GenerationOptions::new()
-            .with_max_output_tokens(max_tokens)
+        options
             .with_timeout(REQUEST_TIMEOUT)
             .expect("static request timeout must be valid"),
     )
@@ -262,6 +287,89 @@ async fn start_controlled_stream_with_retry(
 async fn pace_between_cases(target: CustomTarget) {
     if !target.inter_case_delay().is_zero() {
         tokio::time::sleep(target.inter_case_delay()).await;
+    }
+}
+
+async fn complete_with_retry(
+    client: &LlmClient,
+    target: CustomTarget,
+    request: GenerateRequest,
+    failure_label: &str,
+) -> AssistantMessage {
+    for attempt in 0..=MAX_TRANSIENT_START_RETRIES {
+        match client.complete(request.clone()).await {
+            Ok(message) => return message,
+            Err(error)
+                if target == CustomTarget::ZaiAnthropic
+                    && is_transient_capacity_error(&error)
+                    && attempt < MAX_TRANSIENT_START_RETRIES =>
+            {
+                transient_backoff(target, attempt + 1).await;
+            }
+            Err(error) => panic!("{failure_label}: {}", redacted_failure_category(&error)),
+        }
+    }
+    unreachable!("bounded transient retry loop must return or panic")
+}
+
+async fn run_anthropic_tool_call(client: &LlmClient, target: CustomTarget, model: &str) {
+    let schema = ToolSchema::new(json!({
+        "type": "object",
+        "properties": { "value": { "type": "string" } },
+        "required": ["value"],
+        "additionalProperties": false
+    }))
+    .expect("reviewed tool schema must be valid");
+    let options = GenerationOptions::new()
+        .with_max_output_tokens(128)
+        .with_tools(vec![ToolDefinition::new(
+            ToolName::new("echo_value").expect("reviewed tool name must be valid"),
+            schema,
+        )])
+        .with_tool_choice(ToolChoice::Required);
+    let message = complete_with_retry(
+        client,
+        target,
+        request_with_options(
+            target,
+            model,
+            "Call the declared tool with a short harmless value.",
+            options,
+        ),
+        "custom provider tool call failed",
+    )
+    .await;
+    assert_eq!(message.finish_reason(), &FinishReason::ToolCalls);
+    assert!(
+        message
+            .content()
+            .iter()
+            .any(|part| matches!(part, ContentPart::ToolCall(_)))
+    );
+}
+
+async fn run_anthropic_thinking_displays(client: &LlmClient, target: CustomTarget, model: &str) {
+    for display in [
+        AnthropicThinkingDisplay::Omitted,
+        AnthropicThinkingDisplay::Summarized,
+    ] {
+        let options = GenerationOptions::new()
+            .with_max_output_tokens(256)
+            .with_protocol_options(AnthropicMessagesOptions::new().with_adaptive_thinking(display));
+        let message = complete_with_retry(
+            client,
+            target,
+            request_with_options(
+                target,
+                model,
+                "Return one short answer after reasoning.",
+                options,
+            ),
+            "custom provider thinking display failed",
+        )
+        .await;
+        assert!(!message.text().is_empty());
+        pace_between_cases(target).await;
     }
 }
 
@@ -434,6 +542,12 @@ async fn protected_custom_provider_definition_smoke() {
     let client = LlmClient::with_reqwest(runtime).expect("reviewed HTTPS transport must build");
 
     let observation = run_text_stream(&client, target, &model).await;
+    if target == CustomTarget::ZaiAnthropic {
+        pace_between_cases(target).await;
+        run_anthropic_tool_call(&client, target, &model).await;
+        pace_between_cases(target).await;
+        run_anthropic_thinking_displays(&client, target, &model).await;
+    }
     pace_between_cases(target).await;
     run_safe_4xx(&client, target).await;
     pace_between_cases(target).await;
@@ -442,7 +556,7 @@ async fn protected_custom_provider_definition_smoke() {
     run_drop_cancellation(&client, target, &model).await;
 
     println!(
-        "custom_provider_smoke_status=passed target={} protocol={} candidate_sha={} model={} text_present={} usage_present={} finish_present={} provider_request_id_present={} generation_id_present={} safe_4xx=passed cancellation=passed drop=passed",
+        "custom_provider_smoke_status=passed target={} protocol={} candidate_sha={} model={} text_present={} usage_present={} finish_present={} provider_request_id_present={} generation_id_present={} tool_call={} thinking_omitted={} thinking_summarized={} safe_4xx=passed cancellation=passed drop=passed",
         target.workflow_id(),
         target.protocol_id(),
         candidate_sha,
@@ -452,6 +566,9 @@ async fn protected_custom_provider_definition_smoke() {
         observation.saw(StreamSignal::Finish),
         observation.saw(StreamSignal::ProviderRequestId),
         observation.saw(StreamSignal::GenerationId),
+        target == CustomTarget::ZaiAnthropic,
+        target == CustomTarget::ZaiAnthropic,
+        target == CustomTarget::ZaiAnthropic,
     );
 }
 
