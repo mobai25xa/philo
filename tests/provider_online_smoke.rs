@@ -4,9 +4,13 @@ mod support;
 
 use std::time::Duration;
 
-use philo::{GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef};
+use philo::protocol_options::{OpenAiChatOptions, OpenAiChatRawExtension};
+use philo::{
+    AssistantMessage, GenerateRequest, GenerationOptions, LlmClient, LlmError, Message, ModelRef,
+};
+use serde_json::json;
 use support::conformance::{
-    CaseResult, CaseStatus, OnlineCase, conformance_cases, plan_online_for_model,
+    CaseResult, CaseStatus, ConformanceCase, OnlineCase, conformance_cases, plan_online_for_model,
 };
 
 #[tokio::test]
@@ -35,20 +39,14 @@ async fn protected_provider_conformance_smoke() {
 
     let runtime = descriptor.profile.build(&key);
     let client = LlmClient::with_reqwest(runtime).expect("HTTPS transport must build");
+    let (options, raw_routing_enabled) =
+        online_options(&descriptor, &workflow_id, plan.timeout_seconds);
     let request = GenerateRequest::new(
         ModelRef::new(descriptor.provider, model).unwrap(),
         vec![Message::user("Reply with one short word.")],
     )
-    .with_options(
-        GenerationOptions::new()
-            .with_max_output_tokens(16)
-            .with_timeout(Duration::from_secs(plan.timeout_seconds))
-            .unwrap(),
-    );
-    let message = client
-        .complete(request)
-        .await
-        .expect("online text case failed");
+    .with_options(options);
+    let message = complete_with_retry(&client, &descriptor, request).await;
     if descriptor.request_id_expected {
         assert!(
             message.provider_request_id().is_some(),
@@ -85,13 +83,84 @@ async fn protected_provider_conformance_smoke() {
         ],
     );
     println!(
-        "provider_conformance_status=passed provider={} candidate_sha={} case=text_stream request_id_present={} generation_id_present={} report={}",
+        "provider_conformance_status=passed provider={} candidate_sha={} case=text_stream request_id_present={} generation_id_present={} raw_routing_accepted={} attribution_headers_accepted={} report={}",
         descriptor.provider,
         candidate_sha,
         request_id_present,
         generation_id_present,
+        raw_routing_enabled,
+        raw_routing_enabled,
         report.to_json()
     );
+}
+
+fn online_options(
+    descriptor: &ConformanceCase,
+    workflow_id: &str,
+    timeout_seconds: u64,
+) -> (GenerationOptions, bool) {
+    let mut options = GenerationOptions::new()
+        .with_max_output_tokens(16)
+        .with_timeout(Duration::from_secs(timeout_seconds))
+        .unwrap();
+    let raw_routing_enabled = workflow_id == "openrouter";
+    if raw_routing_enabled {
+        let routing = OpenAiChatRawExtension::dangerous_from_object(json!({
+            "provider": { "sort": "throughput" }
+        }))
+        .expect("reviewed OpenRouter routing extension must remain valid");
+        options =
+            options.with_protocol_options(OpenAiChatOptions::new().with_raw_extension(routing));
+        assert!(
+            descriptor
+                .expected_headers
+                .iter()
+                .any(|(name, _)| *name == "http-referer")
+        );
+    }
+    (options, raw_routing_enabled)
+}
+
+async fn complete_with_retry(
+    client: &LlmClient,
+    descriptor: &ConformanceCase,
+    request: GenerateRequest,
+) -> AssistantMessage {
+    let mut attempt = 0;
+    loop {
+        match client.complete(request.clone()).await {
+            Ok(message) => return message,
+            Err(error)
+                if descriptor.provider == "zai"
+                    && transient_capacity_error(&error)
+                    && attempt < 2 =>
+            {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_secs(10 * attempt)).await;
+            }
+            Err(error) => panic!(
+                "online text case failed: {}",
+                redacted_failure_category(&error)
+            ),
+        }
+    }
+}
+
+fn transient_capacity_error(error: &LlmError) -> bool {
+    matches!(error, LlmError::HttpStatus(error) if matches!(error.status(), 429 | 529))
+}
+
+fn redacted_failure_category(error: &LlmError) -> &'static str {
+    match error {
+        LlmError::HttpStatus(error) if error.status() == 429 => "http-rate-limited",
+        LlmError::HttpStatus(error) if error.status() == 529 => "http-overloaded",
+        LlmError::HttpStatus(_) => "http-status",
+        LlmError::Protocol(_) => "protocol",
+        LlmError::Transport(_) => "transport",
+        LlmError::Timeout(_) => "timeout",
+        LlmError::Cancelled => "cancelled",
+        _ => "other",
+    }
 }
 
 fn safe_model(name: &str) -> String {
