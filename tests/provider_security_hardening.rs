@@ -3,12 +3,10 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use http::{HeaderName, HeaderValue};
-use philo::{
-    ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, CredentialAudience,
-    EndpointNetworkPolicy, HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource,
-    OpenRouterProfile, ProviderConfigDocument, RedirectPolicy, ZaiCodingProfile,
-    ZaiStandardProfile,
-};
+use philo::provider::auth::{ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential};
+use philo::provider::endpoint::{CredentialAudience, EndpointNetworkPolicy, RedirectPolicy};
+use philo::provider::headers::{HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource};
+use philo_presets::{OpenRouterProfile, ZaiCodingProfile, ZaiStandardProfile};
 use url::Url;
 
 const CANARY: &str = "security-hardening-credential-canary";
@@ -173,19 +171,4 @@ fn hosted_workflow_exposes_only_the_selected_secret_to_the_test_process() {
     assert!(workflow.contains("nvidia/nemotron-3-ultra-550b-a55b:free"));
     assert!(workflow.contains("glm-4.7-flash"));
     assert!(workflow.contains("--test custom_provider_online_smoke"));
-}
-
-#[test]
-fn oversized_and_unknown_configuration_fail_before_resolution() {
-    let oversized = format!(
-        "{{\"schema_version\":{{\"major\":1,\"minor\":0}},\"padding\":\"{}\"}}",
-        "x".repeat(64 * 1024)
-    );
-    assert!(ProviderConfigDocument::from_json(&oversized).is_err());
-    assert!(
-        ProviderConfigDocument::from_json(
-            r#"{"schema_version":{"major":1,"minor":0},"unexpected":true}"#,
-        )
-        .is_err()
-    );
 }

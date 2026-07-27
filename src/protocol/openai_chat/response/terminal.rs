@@ -8,7 +8,7 @@ use crate::error::{
     LlmError, StructuredOutputError, StructuredOutputFailure, UnknownFinishReason,
     UnsupportedResponseSemantics,
 };
-use crate::provider::call_policy::ResponseLimits;
+use crate::plan::ResponseLimits;
 use crate::provider::{FinishReasonCompat, UsageCompat};
 
 const MAX_RECORDED_UNKNOWN_FIELDS: usize = 256;

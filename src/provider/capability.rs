@@ -104,7 +104,7 @@ impl ProviderCapabilities {
         }
     }
 
-    pub(super) fn official_openai() -> Self {
+    pub(crate) fn official_openai() -> Self {
         Self {
             developer_role: CapabilityStatus::Supported,
             temperature: CapabilityStatus::Supported,

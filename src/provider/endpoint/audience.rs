@@ -44,7 +44,7 @@ pub struct CredentialBinding {
 impl CredentialBinding {
     /// Binds a credential to the exact origin of a validated production HTTPS endpoint.
     pub fn exact_https_origin(endpoint: &ResolvedEndpoint) -> Result<Self, LlmError> {
-        if endpoint.origin().scheme() != "https" {
+        if endpoint.origin().scheme() != crate::protected::REQUIRED_ENDPOINT_SCHEME {
             return Err(LlmError::Configuration(
                 "production credential binding requires an HTTPS endpoint".to_owned(),
             ));

@@ -3,12 +3,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use philo::{
-    CapabilityStatus, ContentPart, DialectPolicy, HistoryCapabilities, HistoryFailure,
-    HistoryPolicy, ImageContent, ImageDetail, Message, MessageRole, SchemaFailure, SchemaLimits,
-    ToolArguments, ToolCall, ToolCallId, ToolName, ToolResultMessage, ToolSchema, ValidationReason,
-    normalize_history,
-};
+use philo::domain::content::{ImageContent, ImageDetail};
+use philo::domain::history::normalize_history;
+use philo::domain::history::{DialectPolicy, HistoryCapabilities, HistoryPolicy};
+use philo::domain::ids::{ToolCallId, ToolName};
+use philo::domain::message::ToolResultMessage;
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::{SchemaLimits, ToolSchema};
+use philo::domain::tools::{ToolArguments, ToolCall};
+use philo::error::{HistoryFailure, SchemaFailure, ValidationReason};
+use philo::{ContentPart, Message, MessageRole};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -39,7 +43,9 @@ fn result(id: &str, name: &str) -> Message {
     )
 }
 
-fn normalize(messages: &[Message]) -> Result<philo::NormalizedContext, philo::HistoryError> {
+fn normalize(
+    messages: &[Message],
+) -> Result<philo::domain::history::NormalizedContext, philo::error::HistoryError> {
     normalize_history(
         messages,
         &HistoryCapabilities::new(CapabilityStatus::Supported, CapabilityStatus::Supported),

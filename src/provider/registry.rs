@@ -6,16 +6,12 @@ use std::fmt;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::domain::{ProtocolId, ProviderId};
-use crate::error::{
-    LlmError, ProviderConfigError, ProviderConfigFailure, ProviderRegistryError,
-    ProviderRegistryFailure,
-};
+use crate::error::{LlmError, ProviderRegistryError, ProviderRegistryFailure};
 
-use super::config::{ProviderConfigField, ProviderConfigSnapshot, SecretResolver};
-use super::factory::{
-    OfficialAnthropicFactory, OfficialOpenAiFactory, ProviderRuntimeFactory, StaticProviderFactory,
-};
+use super::factory::StaticProviderFactory;
+use super::profiles::{OfficialAnthropicProfile, OfficialOpenAiProfile};
 use super::runtime::ProviderRuntime;
+use super::secret::SecretResolver;
 use super::{ProductId, ProviderDefinition, ProviderDeploymentConfig};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -55,52 +51,14 @@ impl ProviderRegistrationMetadata {
     }
 }
 
-/// One immutable provider factory registration.
+/// One immutable provider definition registration.
 #[derive(Clone)]
 pub struct ProviderRegistration {
     metadata: ProviderRegistrationMetadata,
-    compiler: RegistrationCompiler,
-}
-
-#[derive(Clone)]
-enum RegistrationCompiler {
-    Factory(Arc<dyn ProviderRuntimeFactory>),
-    Definition(Box<StaticProviderFactory>),
+    compiler: Box<StaticProviderFactory>,
 }
 
 impl ProviderRegistration {
-    /// Creates a registration and normalizes its provider ID to lowercase ASCII.
-    pub fn new<F>(
-        provider_id: impl Into<String>,
-        version: impl Into<String>,
-        factory: F,
-    ) -> Result<Self, ProviderRegistryError>
-    where
-        F: ProviderRuntimeFactory + 'static,
-    {
-        Self::from_shared(provider_id, version, Arc::new(factory))
-    }
-
-    /// Creates a registration from an already shared factory.
-    pub fn from_shared(
-        provider_id: impl Into<String>,
-        version: impl Into<String>,
-        factory: Arc<dyn ProviderRuntimeFactory>,
-    ) -> Result<Self, ProviderRegistryError> {
-        let provider_id = provider_id.into();
-        let provider_id = normalize_provider_id(&provider_id)?;
-        let version = validate_version(version.into(), &provider_id)?;
-        Ok(Self {
-            metadata: ProviderRegistrationMetadata {
-                provider_id,
-                product_id: None,
-                protocol_id: None,
-                version,
-            },
-            compiler: RegistrationCompiler::Factory(factory),
-        })
-    }
-
     /// Creates a static registration directly from a validated definition.
     pub fn from_definition(definition: ProviderDefinition) -> Result<Self, ProviderRegistryError> {
         let provider_id = normalize_provider_id(definition.provider_id().as_str())?;
@@ -115,9 +73,7 @@ impl ProviderRegistration {
                 protocol_id: Some(definition.protocol_id().clone()),
                 version,
             },
-            compiler: RegistrationCompiler::Definition(Box::new(StaticProviderFactory::new(
-                definition,
-            ))),
+            compiler: Box::new(StaticProviderFactory::new(definition)),
         })
     }
 
@@ -151,35 +107,29 @@ impl ProviderRegistry {
         Self::default()
     }
 
-    /// Creates a registry containing the official `OpenAI` built-in factory.
+    /// Creates a registry containing the official `OpenAI` definition.
     pub fn with_official_openai() -> Result<Self, ProviderRegistryError> {
         let registry = Self::new();
-        registry.register(ProviderRegistration::new(
-            "official-openai",
-            crate::PROVIDER_CONFIG_SCHEMA_VERSION,
-            OfficialOpenAiFactory,
+        registry.register(ProviderRegistration::from_definition(
+            OfficialOpenAiProfile::definition().map_err(official_definition_unavailable)?,
         )?)?;
         Ok(registry)
     }
 
-    /// Creates a registry containing the official Anthropic built-in factory.
+    /// Creates a registry containing the official Anthropic definition.
     pub fn with_official_anthropic() -> Result<Self, ProviderRegistryError> {
         let registry = Self::new();
-        registry.register(ProviderRegistration::new(
-            "official-anthropic",
-            crate::PROVIDER_CONFIG_SCHEMA_VERSION,
-            OfficialAnthropicFactory,
+        registry.register(ProviderRegistration::from_definition(
+            OfficialAnthropicProfile::definition().map_err(official_definition_unavailable)?,
         )?)?;
         Ok(registry)
     }
 
-    /// Creates a registry containing all official built-in factories.
+    /// Creates a registry containing both official definitions.
     pub fn with_official_profiles() -> Result<Self, ProviderRegistryError> {
         let registry = Self::with_official_openai()?;
-        registry.register(ProviderRegistration::new(
-            "official-anthropic",
-            crate::PROVIDER_CONFIG_SCHEMA_VERSION,
-            OfficialAnthropicFactory,
+        registry.register(ProviderRegistration::from_definition(
+            OfficialAnthropicProfile::definition().map_err(official_definition_unavailable)?,
         )?)?;
         Ok(registry)
     }
@@ -283,16 +233,27 @@ impl ProviderRegistry {
     }
 
     /// Removes one registration without affecting runtimes already built from it.
+    ///
+    /// Mirrors [`Self::get`]: a provider with exactly one registered product is
+    /// removable by provider ID alone; a provider with several requires
+    /// [`Self::remove_product`].
     pub fn remove(
         &self,
         provider_id: &ProviderId,
     ) -> Result<Option<ProviderRegistrationMetadata>, ProviderRegistryError> {
-        Ok(self
-            .write()?
-            .remove(&RegistrationKey {
-                provider_id: provider_id.clone(),
-                product_id: None,
-            })
+        let mut registrations = self.write()?;
+        let mut matching = registrations
+            .keys()
+            .filter(|key| &key.provider_id == provider_id)
+            .cloned();
+        let Some(key) = matching.next() else {
+            return Ok(None);
+        };
+        if matching.next().is_some() {
+            return Ok(None);
+        }
+        Ok(registrations
+            .remove(&key)
             .map(|registration| registration.metadata))
     }
 
@@ -309,48 +270,6 @@ impl ProviderRegistry {
                 product_id: Some(product_id.clone()),
             })
             .map(|registration| registration.metadata))
-    }
-
-    /// Builds a runtime using a registration snapshot captured before factory execution.
-    pub fn build(
-        &self,
-        provider_id: &ProviderId,
-        config: &ProviderConfigSnapshot,
-        resolver: &dyn SecretResolver,
-    ) -> Result<ProviderRuntime, LlmError> {
-        let registration = {
-            let registrations = self.read()?;
-            registrations
-                .get(&RegistrationKey {
-                    provider_id: provider_id.clone(),
-                    product_id: None,
-                })
-                .cloned()
-                .ok_or_else(|| {
-                    ProviderRegistryError::new(
-                        ProviderRegistryFailure::RegistrationNotFound,
-                        Some(provider_id.as_str()),
-                        "provider ID is not registered",
-                    )
-                })?
-        };
-
-        ensure_config_provider(config, provider_id)?;
-        let RegistrationCompiler::Factory(factory) = registration.compiler else {
-            return Err(LlmError::Configuration(
-                "definition registration requires build_deployment".to_owned(),
-            ));
-        };
-        let runtime = factory.build(config, resolver)?;
-        if runtime.provider_id() != provider_id {
-            return Err(ProviderRegistryError::new(
-                ProviderRegistryFailure::FactoryProviderMismatch,
-                Some(provider_id.as_str()),
-                "factory returned a runtime for a different provider ID",
-            )
-            .into());
-        }
-        Ok(runtime)
     }
 
     /// Builds a runtime from a static definition and deployment configuration.
@@ -387,14 +306,7 @@ impl ProviderRegistry {
                         .to_owned(),
                 ));
             }
-            match &registration.compiler {
-                RegistrationCompiler::Definition(factory) => factory.as_ref().clone(),
-                RegistrationCompiler::Factory(_) => {
-                    return Err(LlmError::Configuration(
-                        "factory registration requires the versioned config build path".to_owned(),
-                    ));
-                }
-            }
+            registration.compiler.as_ref().clone()
         };
         let definition = factory.definition().clone();
         let runtime = factory.build_deployment(deployment, resolver)?;
@@ -441,10 +353,7 @@ impl ProviderRegistry {
                     "provider product is not registered",
                 )
             })?;
-            match &registration.compiler {
-                RegistrationCompiler::Definition(factory) => factory.as_ref().clone(),
-                RegistrationCompiler::Factory(_) => unreachable!("product keys are definitions"),
-            }
+            registration.compiler.as_ref().clone()
         };
         let runtime = factory.build_deployment(deployment, resolver)?;
         if runtime.provider_id() != provider_id || runtime.product_id() != product_id {
@@ -551,22 +460,14 @@ fn validate_version(
     }
 }
 
-fn ensure_config_provider(
-    config: &ProviderConfigSnapshot,
-    provider_id: &ProviderId,
-) -> Result<(), ProviderConfigError> {
-    if config.provider_id() == Some(provider_id.as_str()) {
-        return Ok(());
-    }
-    let error = ProviderConfigError::new(
-        "provider_id",
-        ProviderConfigFailure::InvalidValue,
-        "configuration provider does not match the selected registration",
-    );
-    Err(match config.provenance(ProviderConfigField::ProviderId) {
-        Some(provenance) => error.with_source(provenance.source().id().as_str()),
-        None => error,
-    })
+/// The built-in official definitions are assembled from compiled-in constants,
+/// so this can only fire if one of those constants stops being valid.
+fn official_definition_unavailable(_: LlmError) -> ProviderRegistryError {
+    ProviderRegistryError::new(
+        ProviderRegistryFailure::InvalidProviderId,
+        None,
+        "built-in official definition failed to compile",
+    )
 }
 
 fn state_unavailable() -> ProviderRegistryError {

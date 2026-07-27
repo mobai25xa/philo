@@ -9,13 +9,14 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::StreamExt as _;
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use philo::domain::ids::LocalRequestId;
+use philo::error::{ErrorStage, RetriableHint, TransportError};
 use philo::provider::TestOnlyProfile;
+use philo::provider::endpoint::RedirectPolicy;
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
-use philo::{
-    CancellationToken, ErrorStage, HttpRequest, LlmError, LocalRequestId, RedirectPolicy,
-    RequestLifecycle, ReqwestTransport, RetriableHint, Transport, TransportContext, TransportError,
-    read_body_limited,
-};
+use philo::transport::read_body_limited;
+use philo::transport::{CancellationToken, HttpRequest, RequestLifecycle, TransportContext};
+use philo::{LlmError, ReqwestTransport, Transport};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;

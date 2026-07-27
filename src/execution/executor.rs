@@ -174,11 +174,11 @@ impl AttemptExecutor {
                 attempt: context.attempt.clone(),
             },
         );
-        let (headers, trace) = resolved.into_parts();
+        let (headers, steps) = resolved.into_parts();
         emit(
             &context,
             LifecycleEventKind::HeadersResolved {
-                trace: trace.into(),
+                steps: steps.into(),
             },
         );
 

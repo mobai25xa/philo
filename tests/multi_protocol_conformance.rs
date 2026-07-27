@@ -2,12 +2,17 @@
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::content::{ImageContent, ImageDetail};
+use philo::domain::ids::ToolName;
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::ToolDefinition;
 use philo::provider::TestOnlyProfile;
+use philo::provider::capability::ModelCapabilityProfile;
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    AssistantMessage, CapabilityStatus, ContentPart, FinishReason, GenerateRequest,
-    GenerationOptions, ImageContent, ImageDetail, LlmClient, Message, MessageRole,
-    ModelCapabilityProfile, ModelId, ModelRef, ToolDefinition, ToolName, ToolSchema,
+    AssistantMessage, ContentPart, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
+    Message, MessageRole, ModelId, ModelRef,
 };
 use serde_json::json;
 
@@ -206,7 +211,7 @@ async fn one_tool_call_preserves_common_name_arguments_and_finish() {
     assert_eq!(right.finish_reason(), &FinishReason::ToolCalls);
 }
 
-fn tool_call(message: &AssistantMessage) -> &philo::ToolCall {
+fn tool_call(message: &AssistantMessage) -> &philo::domain::tools::ToolCall {
     match &message.content()[0] {
         ContentPart::ToolCall(call) => call,
         other => panic!("expected tool call, got {other:?}"),

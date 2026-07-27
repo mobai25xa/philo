@@ -1,30 +1,63 @@
-//! Provider-scoped routing merge, capability, wire, and fail-closed contracts.
+//! Gateway routing is declared through the bounded body axis, not a first-class SDK type.
+//!
+//! `provider/compat/routing.rs` used to model one aggregation gateway's product
+//! parameters as SDK types (FR-003). Those parameters are unknown top-level fields of
+//! an `OpenAI` Chat request body, which is exactly what the bounded raw extension
+//! already admits. This file is the migration evidence: the body the extension
+//! produces is the body the retired encoder produced.
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::request::GenerationOptions;
+use philo::error::ValidationReason;
+use philo::protocol_options::{
+    AnthropicMessagesOptions, OpenAiChatOptions, OpenAiChatRawExtension, ProtocolOptionDiagnostic,
+};
 use philo::provider::TestOnlyProfile;
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
-use philo::{
-    ConstraintStrength, DataRetention, FallbackDimension, GenerateRequest, LlmClient, Message,
-    ModelRef, OpenRouterRoutingContract, OpenRouterRoutingPatch, PolicySource,
-    ProviderRequestOptions, RequestControl, RoutingFallback, RoutingField, RoutingRegion,
-    RoutingSort, UpstreamId, ValidationReason,
-};
+use philo::{GenerateRequest, LlmClient, Message, ModelRef};
 use serde_json::json;
 
 const ENDPOINT: &str = "http://127.0.0.1:41993/v1/chat/completions";
-const ROUTING_FIXTURE: &str =
+
+/// The golden produced by the retired typed encoder. It is unchanged by FR-003:
+/// the migration must reproduce it byte-for-byte in JSON value terms.
+const LEGACY_ROUTING_FIXTURE: &str =
     include_str!("fixtures/provider-compat/openrouter/routing-request.json");
 
-fn upstream(value: &str) -> UpstreamId {
-    UpstreamId::new(value).unwrap()
-}
+/// The exact bytes an `OpenAI` Chat request carries when no extension is used.
+///
+/// Retiring the typed `provider` field could not change these bytes — it was
+/// `Option` + `skip_serializing_if`, so it never serialized for a caller that did
+/// not opt in. This golden keeps that true: it turns red if the SDK-owned field
+/// order or content ever shifts.
+const NO_EXTENSION_BODY: &str = concat!(
+    r#"{"model":"routing-model","messages":[{"role":"user","content":"hello"}],"#,
+    r#""stream":true,"stream_options":{"include_usage":true},"n":1}"#
+);
 
 fn request() -> GenerateRequest {
     GenerateRequest::new(
         ModelRef::new("test-only", "routing-model").unwrap(),
         vec![Message::user("hello")],
     )
+}
+
+/// The routing preferences the retired `OpenRouterRoutingPatch` builder expressed,
+/// written directly as the gateway's documented wire object.
+fn legacy_equivalent_routing() -> OpenAiChatRawExtension {
+    OpenAiChatRawExtension::dangerous_from_object(json!({
+        "provider": {
+            "only": ["alpha", "beta"],
+            "ignore": ["blocked"],
+            "order": ["beta", "alpha"],
+            "allow_fallbacks": false,
+            "data_collection": "deny",
+            "zdr": true,
+            "sort": "latency"
+        }
+    }))
+    .unwrap()
 }
 
 fn success() -> MockResponse {
@@ -52,132 +85,120 @@ fn success() -> MockResponse {
     )
 }
 
-#[test]
-fn allow_and_deny_conflicts_fail_before_transport() {
-    let contract = OpenRouterRoutingContract::new(
-        OpenRouterRoutingPatch::from_source(PolicySource::ProviderProfile)
-            .with_allowed([upstream("alpha"), upstream("beta")]),
-    );
-    let request = OpenRouterRoutingPatch::from_source(PolicySource::Request)
-        .with_allowed([upstream("beta")])
-        .with_denied([upstream("beta")]);
-    let error = contract.resolve(Some(&request)).unwrap_err();
-    assert!(matches!(
-        error,
-        philo::LlmError::Validation(ref error)
-            if error.reason() == ValidationReason::Conflict
-    ));
-}
-
-#[test]
-fn hard_region_and_retention_constraints_cannot_be_relaxed_by_fallback() {
-    let contract = OpenRouterRoutingContract::new(
-        OpenRouterRoutingPatch::from_source(PolicySource::ProviderProfile)
-            .with_region(
-                RoutingRegion::new("us-east").unwrap(),
-                ConstraintStrength::Hard,
-            )
-            .with_data_retention(DataRetention::ZeroDataRetention, ConstraintStrength::Hard)
-            .with_fallback(RoutingFallback::new(true, [FallbackDimension::Latency])),
-    )
-    .with_region_wire_support(true);
-    let request = OpenRouterRoutingPatch::from_source(PolicySource::Request)
-        .with_region(
-            RoutingRegion::new("eu-west").unwrap(),
-            ConstraintStrength::Preferred,
-        )
-        .with_data_retention(DataRetention::Allowed, ConstraintStrength::Preferred);
-    assert!(contract.resolve(Some(&request)).is_err());
+async fn captured_body(request: GenerateRequest) -> Bytes {
+    let runtime = TestOnlyProfile::localhost(ENDPOINT, "routing-key")
+        .unwrap()
+        .build()
+        .unwrap();
+    let mock = MockTransport::scripted([MockExchange::response(success())]);
+    LlmClient::new(runtime, mock.clone())
+        .complete(request)
+        .await
+        .unwrap();
+    mock.captured_requests()[0].body().clone()
 }
 
 #[tokio::test]
-async fn routing_is_only_encoded_for_declared_supported_profiles() {
+async fn migrated_routing_reproduces_the_retired_encoder_body() {
+    let migrated = request().with_options(GenerationOptions::new().with_protocol_options(
+        OpenAiChatOptions::new().with_raw_extension(legacy_equivalent_routing()),
+    ));
+    let body: serde_json::Value = serde_json::from_slice(&captured_body(migrated).await).unwrap();
+    let legacy: serde_json::Value = serde_json::from_str(LEGACY_ROUTING_FIXTURE).unwrap();
+
+    assert_eq!(body["provider"], legacy);
+    assert_eq!(body["provider"].as_object().unwrap().len(), 7);
+}
+
+#[tokio::test]
+async fn each_retired_routing_dimension_survives_the_migration() {
+    // sort / upstream allow-deny-order / data-retention / fallback: the four families
+    // the retired `OpenRouterRoutingPatch` could express.
+    for (dimension, value) in [
+        ("sort", json!({"sort": "throughput"})),
+        (
+            "upstreams",
+            json!({"only": ["alpha"], "ignore": ["blocked"], "order": ["alpha"]}),
+        ),
+        (
+            "data_retention",
+            json!({"data_collection": "deny", "zdr": true}),
+        ),
+        ("fallback", json!({"allow_fallbacks": false})),
+    ] {
+        let raw =
+            OpenAiChatRawExtension::dangerous_from_object(json!({ "provider": value.clone() }))
+                .unwrap();
+        let migrated = request().with_options(
+            GenerationOptions::new()
+                .with_protocol_options(OpenAiChatOptions::new().with_raw_extension(raw)),
+        );
+        let body: serde_json::Value =
+            serde_json::from_slice(&captured_body(migrated).await).unwrap();
+        assert_eq!(body["provider"], value, "dimension lost: {dimension}");
+    }
+}
+
+#[tokio::test]
+async fn a_request_without_the_extension_is_byte_identical_to_the_pre_migration_body() {
+    let body = captured_body(request()).await;
+    assert_eq!(String::from_utf8(body.to_vec()).unwrap(), NO_EXTENSION_BODY);
+
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(value.get("provider").is_none());
+    assert!(value.get("extra_body").is_none());
+}
+
+#[test]
+fn the_body_axis_still_refuses_sdk_owned_fields_and_credential_shapes() {
+    for value in [
+        json!({"model": "canary-secret-value"}),
+        json!({"messages": "canary-secret-value"}),
+        json!({"stream": false}),
+        json!({"tools": []}),
+        json!({"response_format": {"type": "json_object"}}),
+        json!({"authorization": "canary-secret-value"}),
+        json!({"x-api-key": "canary-secret-value"}),
+    ] {
+        let error = OpenAiChatRawExtension::dangerous_from_object(value).unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::Conflict);
+        assert!(!error.to_string().contains("canary-secret-value"));
+    }
+}
+
+#[test]
+fn using_the_body_axis_is_reported_as_non_portable_without_leaking_values() {
+    let raw = legacy_equivalent_routing();
+    assert_eq!(
+        raw.diagnostic(),
+        ProtocolOptionDiagnostic::NonPortableExtensionUsed
+    );
+    let options = OpenAiChatOptions::new().with_raw_extension(raw);
+    assert_eq!(
+        options.diagnostics(),
+        vec![ProtocolOptionDiagnostic::NonPortableExtensionUsed]
+    );
+    assert!(!format!("{options:?}").contains("alpha"));
+}
+
+#[tokio::test]
+async fn options_for_another_protocol_fail_before_transport() {
     let mock = MockTransport::default();
     let runtime = TestOnlyProfile::localhost(ENDPOINT, "routing-key")
         .unwrap()
         .build()
         .unwrap();
-    let control = RequestControl::new().with_provider_options(
-        ProviderRequestOptions::new().with_openrouter_routing(
-            OpenRouterRoutingPatch::from_source(PolicySource::Request)
-                .with_sort(RoutingSort::Latency),
-        ),
+    let mismatched = request().with_options(
+        GenerationOptions::new().with_protocol_options(AnthropicMessagesOptions::new()),
     );
     let error = LlmClient::new(runtime, mock.clone())
-        .stream_with_control(request(), control)
+        .stream(mismatched)
         .await
         .unwrap_err();
     assert!(matches!(
         error,
         philo::LlmError::Validation(ref error)
-            if error.reason() == ValidationReason::CapabilityUnsupported
+            if error.reason() == ValidationReason::Conflict
     ));
     assert!(mock.captured_requests().is_empty());
-}
-
-#[test]
-fn routing_merge_is_deterministic_and_source_traced() {
-    let contract = OpenRouterRoutingContract::new(
-        OpenRouterRoutingPatch::from_source(PolicySource::ProviderProfile)
-            .with_allowed([upstream("alpha"), upstream("beta")])
-            .with_sort(RoutingSort::Price),
-    );
-    let request = OpenRouterRoutingPatch::from_source(PolicySource::Request)
-        .with_allowed([upstream("beta"), upstream("gamma")])
-        .with_sort(RoutingSort::Throughput);
-    let first = contract.resolve(Some(&request)).unwrap();
-    let second = contract.resolve(Some(&request)).unwrap();
-    assert_eq!(first, second);
-    assert_eq!(
-        first.source(RoutingField::AllowedUpstreams),
-        Some(PolicySource::Request)
-    );
-    assert_eq!(
-        first.source(RoutingField::Sort),
-        Some(PolicySource::Request)
-    );
-}
-
-#[tokio::test]
-async fn private_encoder_emits_only_registered_fields() {
-    let defaults = OpenRouterRoutingPatch::from_source(PolicySource::ProviderProfile)
-        .with_allowed([upstream("alpha"), upstream("beta")])
-        .with_denied([upstream("blocked")])
-        .with_order([upstream("beta"), upstream("alpha")])
-        .with_data_retention(DataRetention::ZeroDataRetention, ConstraintStrength::Hard)
-        .with_fallback(RoutingFallback::new(false, []))
-        .with_sort(RoutingSort::Latency);
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "routing-key")
-        .unwrap()
-        .with_openrouter_routing(OpenRouterRoutingContract::new(defaults))
-        .build()
-        .unwrap();
-    let mock = MockTransport::scripted([MockExchange::response(success())]);
-    LlmClient::new(runtime, mock.clone())
-        .complete(request())
-        .await
-        .unwrap();
-    let body: serde_json::Value =
-        serde_json::from_slice(mock.captured_requests()[0].body()).unwrap();
-    let expected: serde_json::Value = serde_json::from_str(ROUTING_FIXTURE).unwrap();
-    assert_eq!(body["provider"], expected);
-    let keys = body["provider"].as_object().unwrap();
-    assert_eq!(keys.len(), 7);
-}
-
-#[tokio::test]
-async fn provider_scoped_routing_does_not_change_official_payloads() {
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "routing-key")
-        .unwrap()
-        .build()
-        .unwrap();
-    let mock = MockTransport::scripted([MockExchange::response(success())]);
-    LlmClient::new(runtime, mock.clone())
-        .complete(request())
-        .await
-        .unwrap();
-    let body: serde_json::Value =
-        serde_json::from_slice(mock.captured_requests()[0].body()).unwrap();
-    assert!(body.get("provider").is_none());
-    assert!(body.get("extra_body").is_none());
 }

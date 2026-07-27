@@ -60,7 +60,7 @@ impl EndpointNetworkPolicy {
             .ok_or_else(|| configuration("endpoint must include a host"))?;
         match self.mode {
             EndpointMode::Production => {
-                if url.scheme() != "https" {
+                if url.scheme() != crate::protected::REQUIRED_ENDPOINT_SCHEME {
                     return Err(configuration("production endpoint requires HTTPS"));
                 }
                 validate_public_host(&host)?;

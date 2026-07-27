@@ -6,8 +6,7 @@ use std::sync::Arc;
 use http::{HeaderName, HeaderValue};
 
 use crate::domain::{
-    CapabilityStatus, ModelId, PolicySource, ProtocolId, ProviderId, ReasoningEffortSupport,
-    ResourceLimits,
+    CapabilityStatus, ModelId, ProtocolId, ProviderId, ReasoningEffortSupport, ResourceLimits,
 };
 use crate::error::LlmError;
 use crate::transport::SseConfig;
@@ -16,10 +15,11 @@ use super::super::auth::{ApiKey, ApiKeyHeaderAuth, AuthProvider, ClientIdentity}
 use super::super::capability::{ModelCapabilityProfile, ProviderCapabilities};
 use super::super::catalog::{
     CatalogCapabilities, CatalogSource, CatalogSourceId, ModelCatalog, ModelEntry, ModelKey,
-    ModelLimits, ProductId, ProviderModelId, SupportStatus, WireModelValue,
+    ModelLimits, ProductId, ProviderModelId, WireModelValue,
 };
-use super::super::compat::CompatPatch;
-use super::super::definition::{AuthScheme, ProviderDefinition, ResolvedProviderDeployment};
+use super::super::definition::{
+    AuthScheme, ProviderDefinition, ProviderDefinitionBuilder, ResolvedProviderDeployment,
+};
 use super::super::endpoint::{CredentialAudience, EndpointConfig};
 use super::super::headers::{DynamicHeaderPolicy, HeaderOperation};
 use super::super::profile::ProviderProfile;
@@ -120,44 +120,30 @@ impl OfficialAnthropicProfile {
         Ok(self)
     }
 
+    /// Returns the secret-free official definition.
+    ///
+    /// This is the single construction input: pair it with a
+    /// [`ProviderDeploymentConfig`](crate::provider::ProviderDeploymentConfig)
+    /// that names the credential, and compile. The official origin, credential
+    /// audience, `anthropic-version` ownership, and protocol contract are fixed
+    /// here and cannot be widened.
+    pub fn definition() -> Result<ProviderDefinition, LlmError> {
+        official_anthropic_builder(
+            AuthScheme::api_key_header(HeaderName::from_static("x-api-key"))?,
+            None,
+        )?
+        .with_catalog(official_catalog()?)
+        .build()
+    }
+
     /// Produces the declarative profile.
     pub fn profile(self) -> Result<ProviderProfile, LlmError> {
-        let version = HeaderName::from_static("anthropic-version");
-        let beta = HeaderName::from_static("anthropic-beta");
-        let rate_limit = RateLimitPolicy::standard_only()
-            .with_header(RateLimitHeaderSpec::new(
-                HeaderName::from_static("anthropic-ratelimit-requests-remaining"),
-                RateLimitHeaderKind::RemainingRequests,
-            ))?
-            .with_header(RateLimitHeaderSpec::new(
-                HeaderName::from_static("anthropic-ratelimit-tokens-remaining"),
-                RateLimitHeaderKind::RemainingUnits(RateLimitUnit::Tokens),
-            ))?;
         let mut resource_limits = self.resource_limits;
         resource_limits.max_request_body_bytes =
             resource_limits.max_request_body_bytes.min(32 * 1024 * 1024);
         let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
-        let mut builder = ProviderDefinition::anthropic_messages(
-            ProviderId::new("official-anthropic")?,
-            ProductId::new("messages")?,
-        )
-        .with_endpoint(EndpointConfig::base_and_path(
-            "https://api.anthropic.com/v1",
-            "/messages",
-        )?)
-        .with_credential_binding(CredentialAudience::OfficialAnthropic.into())
-        .with_auth_scheme(auth_scheme)
-        .with_provider_headers(vec![
-            HeaderOperation::set(
-                version,
-                HeaderValue::from_static(OFFICIAL_ANTHROPIC_API_VERSION),
-            ),
-            HeaderOperation::remove(beta),
-        ])
-        .with_shared_dynamic_header_policy(self.dynamic_header_policy)
-        .with_capabilities(ProviderCapabilities::official_anthropic())
-        .with_catalog(self.catalog)
-        .with_rate_limit_policy(rate_limit);
+        let mut builder = official_anthropic_builder(auth_scheme, self.dynamic_header_policy)?
+            .with_catalog(self.catalog);
         for capability in self.model_capabilities.into_values() {
             builder = builder.with_model_capabilities(capability);
         }
@@ -172,6 +158,43 @@ impl OfficialAnthropicProfile {
     pub fn build(self) -> Result<ProviderRuntime, LlmError> {
         ProviderRuntime::build(self.profile()?)
     }
+}
+
+/// The one place the official Anthropic identity, origin, audience, and
+/// protected version header are fixed.
+fn official_anthropic_builder(
+    auth_scheme: AuthScheme,
+    dynamic_header_policy: Option<Arc<DynamicHeaderPolicy>>,
+) -> Result<ProviderDefinitionBuilder, LlmError> {
+    let rate_limit = RateLimitPolicy::standard_only()
+        .with_header(RateLimitHeaderSpec::new(
+            HeaderName::from_static("anthropic-ratelimit-requests-remaining"),
+            RateLimitHeaderKind::RemainingRequests,
+        ))?
+        .with_header(RateLimitHeaderSpec::new(
+            HeaderName::from_static("anthropic-ratelimit-tokens-remaining"),
+            RateLimitHeaderKind::RemainingUnits(RateLimitUnit::Tokens),
+        ))?;
+    Ok(ProviderDefinition::anthropic_messages(
+        ProviderId::new("official-anthropic")?,
+        ProductId::new("messages")?,
+    )
+    .with_endpoint(EndpointConfig::base_and_path(
+        "https://api.anthropic.com/v1",
+        "/messages",
+    )?)
+    .with_credential_binding(CredentialAudience::OfficialAnthropic.into())
+    .with_auth_scheme(auth_scheme)
+    .with_provider_headers(vec![
+        HeaderOperation::set(
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static(OFFICIAL_ANTHROPIC_API_VERSION),
+        ),
+        HeaderOperation::remove(HeaderName::from_static("anthropic-beta")),
+    ])
+    .with_shared_dynamic_header_policy(dynamic_header_policy)
+    .with_capabilities(ProviderCapabilities::official_anthropic())
+    .with_rate_limit_policy(rate_limit))
 }
 
 fn official_catalog() -> Result<ModelCatalog, LlmError> {
@@ -215,10 +238,9 @@ fn official_catalog() -> Result<ModelCatalog, LlmError> {
                     capabilities: capabilities.clone(),
                     limits: ModelLimits::default(),
                     default_max_output_tokens: Some(4096),
-                    compat_overrides: CompatPatch::from_source(PolicySource::ModelProfile),
                     pricing: None,
                     source: source.clone(),
-                    support_status: SupportStatus::Experimental,
+                    support_status: CapabilityStatus::Supported,
                     provenance: BTreeMap::new(),
                 })
             })

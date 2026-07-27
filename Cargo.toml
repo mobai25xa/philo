@@ -1,3 +1,20 @@
+# The core crate is also the workspace root. Everything under `crates/` is a
+# responsibility that was adjudicated *out* of the core. Production dependency
+# edges point from those crates to philo; root dev-dependencies compose them only
+# for integration tests and test-only feature activation.
+[workspace]
+members = ["crates/*"]
+
+[workspace.lints.rust]
+missing_docs = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
 [package]
 name = "philo"
 version = "0.1.0-alpha.1"
@@ -9,6 +26,7 @@ readme = "README.md"
 keywords = ["llm", "openai", "sdk", "streaming"]
 categories = ["api-bindings", "asynchronous"]
 publish = false
+exclude = ["src/provider/profiles/test_only.rs"]
 
 [[bench]]
 name = "phase4_sdk"
@@ -21,6 +39,7 @@ harness = false
 [features]
 default = ["rustls-tls"]
 rustls-tls = ["reqwest/rustls-tls", "dep:rustls"]
+test-util = []
 tracing = ["dep:tracing"]
 
 [dependencies]
@@ -43,16 +62,13 @@ url = { version = "2.5", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+philo-compat = { path = "crates/philo-compat" }
+philo-config = { path = "crates/philo-config" }
+philo-presets = { path = "crates/philo-presets" }
+philo-test-support = { path = "crates/philo-test-support" }
 proptest = "1.6"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "test-util", "time"] }
 toml = "0.8"
 
-[lints.rust]
-missing_docs = "deny"
-rust_2018_idioms = { level = "deny", priority = -1 }
-unsafe_code = "forbid"
-unreachable_pub = "warn"
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
+[lints]
+workspace = true

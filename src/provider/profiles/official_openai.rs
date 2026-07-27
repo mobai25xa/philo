@@ -10,11 +10,13 @@ use crate::transport::SseConfig;
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
 use super::super::capability::{ModelCapabilityProfile, ProviderCapabilities};
 use super::super::catalog::{ModelCatalog, ProductId};
-use super::super::compat::CompatPatch;
-use super::super::definition::{AuthScheme, ProviderDefinition, ResolvedProviderDeployment};
+use super::super::definition::{
+    AuthScheme, ProviderDefinition, ProviderDefinitionBuilder, ResolvedProviderDeployment,
+};
 use super::super::endpoint::{CredentialAudience, EndpointConfig};
 use super::super::headers::DynamicHeaderPolicy;
 use super::super::profile::ProviderProfile;
+use super::super::protocol_contract::CompatProfile;
 use super::super::runtime::ProviderRuntime;
 
 /// Stable phase-one official `OpenAI` profile constructor.
@@ -24,8 +26,8 @@ pub struct OfficialOpenAiProfile {
     client_identity: ClientIdentity,
     model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     catalog: ModelCatalog,
-    provider_compat: CompatPatch,
-    model_compat: BTreeMap<ModelId, CompatPatch>,
+    provider_compat: CompatProfile,
+    model_compat: BTreeMap<ModelId, CompatProfile>,
     resource_limits: ResourceLimits,
     sse: SseConfig,
     max_http_error_body_bytes: usize,
@@ -41,7 +43,7 @@ impl OfficialOpenAiProfile {
             client_identity: ClientIdentity::default(),
             model_capabilities: BTreeMap::new(),
             catalog: ModelCatalog::default(),
-            provider_compat: CompatPatch::from_source(crate::domain::PolicySource::ProviderProfile),
+            provider_compat: CompatProfile::openai_chat_default(),
             model_compat: BTreeMap::new(),
             resource_limits: ResourceLimits::official(),
             sse: SseConfig::default(),
@@ -94,16 +96,16 @@ impl OfficialOpenAiProfile {
         self
     }
 
-    /// Replaces provider-level typed compatibility overrides.
+    /// Replaces the resolved provider-level compatibility contract.
     #[must_use]
-    pub fn with_compat(mut self, compat: CompatPatch) -> Self {
+    pub fn with_compat(mut self, compat: CompatProfile) -> Self {
         self.provider_compat = compat;
         self
     }
 
-    /// Adds exact-model typed compatibility overrides.
+    /// Adds a resolved compatibility contract for one exact model.
     #[must_use]
-    pub fn with_model_compat(mut self, model: ModelId, compat: CompatPatch) -> Self {
+    pub fn with_model_compat(mut self, model: ModelId, compat: CompatProfile) -> Self {
         self.model_compat.insert(model, compat);
         self
     }
@@ -133,28 +135,29 @@ impl OfficialOpenAiProfile {
         Ok(self)
     }
 
+    /// Returns the secret-free official definition.
+    ///
+    /// This is the single construction input: pair it with a
+    /// [`ProviderDeploymentConfig`](crate::provider::ProviderDeploymentConfig)
+    /// that names the credential, and compile. The official origin, credential
+    /// audience, and protocol contract are fixed here and cannot be widened.
+    pub fn definition() -> Result<ProviderDefinition, LlmError> {
+        official_openai_builder(AuthScheme::bearer(), None)?
+            .with_catalog(ModelCatalog::default())
+            .build()
+    }
+
     /// Produces the declarative profile.
     pub fn profile(self) -> Result<ProviderProfile, LlmError> {
         let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
-        let mut builder = ProviderDefinition::openai_chat(
-            ProviderId::new("official-openai")?,
-            ProductId::new("chat-completions")?,
-        )
-        .with_endpoint(EndpointConfig::base_and_path(
-            "https://api.openai.com/v1",
-            "/chat/completions",
-        )?)
-        .with_credential_binding(CredentialAudience::OfficialOpenAi.into())
-        .with_auth_scheme(auth_scheme)
-        .with_shared_dynamic_header_policy(self.dynamic_header_policy)
-        .with_capabilities(ProviderCapabilities::official_openai())
-        .with_catalog(self.catalog)
-        .with_provider_compat(self.provider_compat);
+        let mut builder = official_openai_builder(auth_scheme, self.dynamic_header_policy)?
+            .with_catalog(self.catalog)
+            .with_openai_chat_compat(self.provider_compat);
         for capability in self.model_capabilities.into_values() {
             builder = builder.with_model_capabilities(capability);
         }
         for (model, compat) in self.model_compat {
-            builder = builder.with_model_compat(model, compat);
+            builder = builder.with_model_openai_chat_compat(model, compat);
         }
         let deployment = ResolvedProviderDeployment::new(self.auth, self.client_identity)
             .with_resource_limits(self.resource_limits)
@@ -167,4 +170,23 @@ impl OfficialOpenAiProfile {
     pub fn build(self) -> Result<ProviderRuntime, LlmError> {
         ProviderRuntime::build(self.profile()?)
     }
+}
+
+/// The one place the official `OpenAI` identity, origin, and audience are fixed.
+fn official_openai_builder(
+    auth_scheme: AuthScheme,
+    dynamic_header_policy: Option<Arc<DynamicHeaderPolicy>>,
+) -> Result<ProviderDefinitionBuilder, LlmError> {
+    Ok(ProviderDefinition::openai_chat(
+        ProviderId::new("official-openai")?,
+        ProductId::new("chat-completions")?,
+    )
+    .with_endpoint(EndpointConfig::base_and_path(
+        "https://api.openai.com/v1",
+        "/chat/completions",
+    )?)
+    .with_credential_binding(CredentialAudience::OfficialOpenAi.into())
+    .with_auth_scheme(auth_scheme)
+    .with_shared_dynamic_header_policy(dynamic_header_policy)
+    .with_capabilities(ProviderCapabilities::official_openai()))
 }

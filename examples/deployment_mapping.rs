@@ -2,11 +2,9 @@
 
 use std::error::Error;
 
+use philo::provider::catalog::{DeploymentId, ProductId, ProviderModelId};
 use philo::provider::endpoint::resolve_official_for;
-use philo::{
-    DeploymentId, EndpointConfig, EndpointQuery, EndpointTemplate, EndpointValues, ProductId,
-    ProviderModelId,
-};
+use philo::provider::endpoint::{EndpointConfig, EndpointQuery, EndpointTemplate, EndpointValues};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let config = EndpointConfig::base_and_template(

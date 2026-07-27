@@ -5,13 +5,20 @@ use std::collections::{BTreeSet, HashSet};
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
+use philo::domain::content::{ImageContent, ImageDetail};
+use philo::domain::ids::ToolName;
+use philo::domain::request::{
+    CapabilityStatus, ReasoningEffort, ReasoningEffortSupport, ThinkingRequest,
+};
+use philo::domain::schema::ToolSchema;
+use philo::domain::structured::{ResponseFormat, StructuredSchema};
+use philo::domain::tools::{ParallelToolCalls, ToolChoice, ToolDefinition};
+use philo::provider::capability::{ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE};
+use philo::provider::profiles::OfficialOpenAiProfile;
 use philo::{
-    AssistantEvent, CapabilityStatus, ContentPart, FinishReason, GenerateRequest,
-    GenerationOptions, ImageContent, ImageDetail, LlmClient, Message, MessageRole,
-    ModelCapabilityProfile, ModelId, ModelRef, OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE,
-    OfficialOpenAiProfile, PHASE_TWO_CONTRACT_ID, PHASE_TWO_CONTRACT_VERSION, ParallelToolCalls,
-    ReasoningEffort, ReasoningEffortSupport, ResponseFormat, StructuredSchema, ThinkingRequest,
-    TokenCount, ToolChoice, ToolDefinition, ToolName, ToolSchema,
+    AssistantEvent, ContentPart, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
+    Message, MessageRole, ModelId, ModelRef, PHASE_TWO_CONTRACT_ID, PHASE_TWO_CONTRACT_VERSION,
+    TokenCount,
 };
 use serde_json::json;
 

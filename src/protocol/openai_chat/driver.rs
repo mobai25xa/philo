@@ -5,7 +5,7 @@ use http::{HeaderValue, Method, header};
 
 use crate::domain::{ContentPart, MessageRole, ThinkingRequest};
 use crate::error::LlmError;
-use crate::execution::contract::ResolvedCallPlan;
+use crate::plan::ResolvedCallPlan;
 use crate::provider::HeaderOperation;
 
 use super::request::encode_planned_request;
@@ -104,6 +104,8 @@ mod tests {
 
     use super::OpenAiChatDriver;
 
+    fn assert_static<T: 'static>(_: &T) {}
+
     #[test]
     fn prepare_emits_owned_openai_request_parts() {
         let runtime =
@@ -117,6 +119,9 @@ mod tests {
         );
         let plan = CallPlanner::plan(&runtime, &request).unwrap();
         let prepared = OpenAiChatDriver.prepare(&plan).unwrap();
+        drop(plan);
+        drop(request);
+        assert_static(&prepared);
         let body: Value = serde_json::from_slice(&prepared.request.body).unwrap();
         assert_eq!(body["model"], "gpt-test");
         assert_eq!(body["stream"], true);

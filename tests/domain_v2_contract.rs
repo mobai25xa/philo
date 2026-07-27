@@ -4,13 +4,20 @@ use std::collections::BTreeSet;
 
 use bytes::Bytes;
 use futures_util::stream;
-use philo::{
-    AssistantEvent, CapabilitySet, CapabilityStatus, ContentIndex, ContentPart, FinishReason,
-    ImageMime, ImageSource, LlmError, LocalRequestId, ModelCapabilityProfile, ModelId,
-    OfficialOpenAiProfile, OpaqueReasoning, ProtocolId, ProviderId, ReasoningEffort,
-    ReasoningEffortSupport, SourceIdentity, ThinkingContent, ToolArguments, ToolCall, ToolCallId,
-    ToolName, Usage, WireToolIndex, collect_assistant_message,
+use philo::domain::content::{
+    ImageMime, ImageSource, OpaqueReasoning, SourceIdentity, ThinkingContent,
 };
+use philo::domain::event::collect_assistant_message;
+use philo::domain::ids::{
+    ContentIndex, LocalRequestId, ProtocolId, ToolCallId, ToolName, WireToolIndex,
+};
+use philo::domain::request::{
+    CapabilitySet, CapabilityStatus, ReasoningEffort, ReasoningEffortSupport,
+};
+use philo::domain::tools::{ToolArguments, ToolCall};
+use philo::provider::capability::ModelCapabilityProfile;
+use philo::provider::profiles::OfficialOpenAiProfile;
+use philo::{AssistantEvent, ContentPart, FinishReason, LlmError, ModelId, ProviderId, Usage};
 
 fn index(value: u32) -> ContentIndex {
     ContentIndex::new(value)

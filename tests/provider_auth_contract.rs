@@ -5,16 +5,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use philo::error::{CredentialError, CredentialFailure};
 use philo::provider::TestOnlyProfile;
-use philo::transport::mock::{MockExchange, MockResponse, MockTransport};
-use philo::{
+use philo::provider::auth::{
     ApiKey, ApiKeyHeaderAuth, AuthContext, AuthProvider, BearerAuth, BearerCredential,
-    CredentialError, CredentialFailure, CredentialFuture, CredentialIdentity, DynamicAuth,
-    DynamicCredential, DynamicCredentialCache, DynamicCredentialContext, DynamicCredentialSource,
-    GenerateRequest, HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource, LlmClient,
-    LlmError, Message, ModelRef, MultiHeaderAuth, NoAuth, OfficialOpenAiProfile, RequestControl,
-    TenantId,
+    CredentialFuture, CredentialIdentity, DynamicAuth, DynamicCredential, DynamicCredentialCache,
+    DynamicCredentialContext, DynamicCredentialSource, MultiHeaderAuth, NoAuth, TenantId,
 };
+use philo::provider::headers::{HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource};
+use philo::provider::profiles::OfficialOpenAiProfile;
+use philo::transport::mock::{MockExchange, MockResponse, MockTransport};
+use philo::{GenerateRequest, LlmClient, LlmError, Message, ModelRef, RequestControl};
 use tokio::time::Instant;
 
 const ENDPOINT: &str = "http://127.0.0.1:42006/v1/chat/completions";
@@ -36,12 +37,14 @@ fn response() -> MockExchange {
     MockExchange::response(MockResponse::new(StatusCode::OK, headers, Vec::new()))
 }
 
-fn test_audience() -> philo::CredentialAudience {
+fn test_audience() -> philo::provider::endpoint::CredentialAudience {
     let runtime = TestOnlyProfile::localhost(ENDPOINT, "bootstrap")
         .unwrap()
         .build()
         .unwrap();
-    philo::CredentialAudience::TestOnlyExactOrigin(runtime.endpoint().origin().clone())
+    philo::provider::endpoint::CredentialAudience::TestOnlyExactOrigin(
+        runtime.endpoint().origin().clone(),
+    )
 }
 
 #[test]
@@ -50,7 +53,7 @@ fn bearer_api_key_multi_header_and_no_auth_have_explicit_shapes() {
         .unwrap()
         .build()
         .unwrap();
-    let audience = philo::CredentialAudience::OfficialOpenAi;
+    let audience = philo::provider::endpoint::CredentialAudience::OfficialOpenAi;
     let context = AuthContext::new(runtime.endpoint());
 
     let bearer = BearerAuth::new(BearerCredential::new(
@@ -123,7 +126,7 @@ fn auth_header_names_are_registered_and_ordinary_layers_cannot_write_them() {
         ApiKeyHeaderAuth::new(
             header::CONTENT_TYPE,
             ApiKey::new("secret").unwrap(),
-            philo::CredentialAudience::OfficialOpenAi,
+            philo::provider::endpoint::CredentialAudience::OfficialOpenAi,
         )
         .is_err()
     );

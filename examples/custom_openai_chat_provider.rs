@@ -2,10 +2,13 @@
 
 use std::error::Error;
 
-use philo::{
-    AuthScheme, EndpointConfig, ProductId, ProviderCapabilities, ProviderDefinition,
-    ProviderDeploymentConfig, ProviderId, ProviderRegistration, ProviderRegistry, SecretReference,
-};
+use philo::provider::capability::ProviderCapabilities;
+use philo::provider::catalog::ProductId;
+use philo::provider::definition::AuthScheme;
+use philo::provider::endpoint::EndpointConfig;
+use philo::provider::registry::{ProviderRegistration, ProviderRegistry};
+use philo::provider::secret::SecretReference;
+use philo::{ProviderDefinition, ProviderDeploymentConfig, ProviderId};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let provider = ProviderId::new("example-openai-compatible")?;

@@ -4,11 +4,15 @@ mod support;
 
 use std::collections::BTreeMap;
 
-use philo::{
-    CapabilityStatus, ContentPart, DialectPolicy, HistoryCapabilities, HistoryPolicy, Message,
-    MessageRole, ParallelToolCalls, ToolArguments, ToolCall, ToolCallId, ToolDefinition, ToolName,
-    ToolResultMessage, ToolSchema, normalize_history, validate_tool_call,
-};
+use philo::domain::history::normalize_history;
+use philo::domain::history::{DialectPolicy, HistoryCapabilities, HistoryPolicy};
+use philo::domain::ids::{ToolCallId, ToolName};
+use philo::domain::message::ToolResultMessage;
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::validate_tool_call;
+use philo::domain::tools::{ParallelToolCalls, ToolArguments, ToolCall, ToolDefinition};
+use philo::{ContentPart, Message, MessageRole};
 use serde_json::json;
 use support::ExampleResult;
 

@@ -7,23 +7,9 @@ use crate::domain::{
     ResourceLimits,
 };
 use crate::error::LlmError;
-use crate::provider::compat::CompatPatch;
 
 use super::ids::{DeploymentId, ProductId, ProviderModelId, WireModelValue};
 use super::source::CatalogSource;
-
-/// Catalog support tier independent from runtime capability facts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SupportStatus {
-    /// Verified and suitable for default examples.
-    Supported,
-    /// Verified with a known limitation or changing surface.
-    Experimental,
-    /// Explicitly not available for the selected product/model.
-    Unsupported,
-    /// No current support claim.
-    Unknown,
-}
 
 /// Model-specific limits; absent fields remain unknown rather than zero.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -188,14 +174,15 @@ pub struct ModelEntry {
     pub limits: ModelLimits,
     /// Default options that are safe to apply.
     pub default_max_output_tokens: Option<u32>,
-    /// Typed model-level compatibility overrides.
-    pub compat_overrides: CompatPatch,
     /// Optional explicit local pricing.
     pub pricing: Option<PriceProfile>,
     /// Evidence/source.
     pub source: CatalogSource,
-    /// Support tier.
-    pub support_status: SupportStatus,
+    /// Three-state overall availability decision.
+    ///
+    /// Evidence maturity and freshness remain independent in [`Self::source`]
+    /// and the checked support matrix; they never add decision variants here.
+    pub support_status: CapabilityStatus,
     /// Field-level provenance labels.
     pub provenance: BTreeMap<String, CatalogSource>,
 }

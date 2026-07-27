@@ -1,0 +1,16 @@
+[package]
+name = "philo-presets"
+version = "0.1.0-alpha.1"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Declarative third-party provider presets for philo"
+license = "MIT"
+publish = false
+
+[dependencies]
+http = "1.3"
+philo = { version = "=0.1.0-alpha.1", path = "../.." }
+url = "2.5"
+
+[lints]
+workspace = true

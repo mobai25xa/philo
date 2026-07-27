@@ -31,6 +31,17 @@ fn rust_sources(directory: &Path, output: &mut Vec<PathBuf>) {
     }
 }
 
+fn markdown_sources(directory: &Path, output: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            markdown_sources(&path, output);
+        } else if path.extension().is_some_and(|extension| extension == "md") {
+            output.push(path);
+        }
+    }
+}
+
 fn production_sources_under(directory: &str) -> Vec<(String, String)> {
     let mut files = Vec::new();
     rust_sources(&crate_root().join(directory), &mut files);
@@ -71,6 +82,80 @@ fn assert_production_file(path: &str) {
     );
 }
 
+fn root_export_names(root: &str) -> BTreeSet<String> {
+    root.split("pub use ")
+        .skip(1)
+        .flat_map(|item| {
+            let item = item.split(';').next().unwrap_or_default();
+            let names = item.split_once('{').map_or_else(
+                || item.rsplit("::").next().unwrap_or_default(),
+                |(_, rest)| rest,
+            );
+            names
+                .trim_end_matches('}')
+                .split(',')
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty())
+        })
+        .collect()
+}
+
+fn root_export_allowlist() -> BTreeSet<String> {
+    source("tests/public-root-exports.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn validate_root_exports(root: &str, allowed: &BTreeSet<String>) -> Result<(), String> {
+    let exported = root_export_names(root);
+    if exported != *allowed {
+        return Err("crate root re-export set drifted".to_owned());
+    }
+    if exported.len() > 30 {
+        return Err("crate root exceeds the 30-item budget".to_owned());
+    }
+    if root.contains("#[doc(hidden)]") || root.contains("pub mod prelude") {
+        return Err("crate root hides or aliases exports".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_core_dependencies(manifest: &str) -> Result<(), String> {
+    let document = manifest
+        .parse::<toml::Value>()
+        .map_err(|error| format!("invalid Cargo.toml: {error}"))?;
+    let dependencies = document
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "missing [dependencies]".to_owned())?;
+    for sibling in ["philo-config", "philo-compat", "philo-presets"] {
+        if dependencies.contains_key(sibling) {
+            return Err(format!("core production dependency includes {sibling}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_closed_protocol_options(module: &str) -> Result<(), String> {
+    if !module.contains("pub enum ProtocolOptions") {
+        return Err("ProtocolOptions is not a closed enum".to_owned());
+    }
+    for forbidden in [
+        "Box<dyn",
+        "BTreeMap<String",
+        "HashMap<String",
+        "serde(flatten)",
+    ] {
+        if module.contains(forbidden) {
+            return Err(format!("ProtocolOptions uses open shape: {forbidden}"));
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn planner_is_the_only_production_history_normalization_owner() {
     let mut files = Vec::new();
@@ -79,12 +164,16 @@ fn planner_is_the_only_production_history_normalization_owner() {
     let mut calls = 0usize;
     for file in files {
         let relative = file.strip_prefix(crate_root()).unwrap();
+        if relative == Path::new("src/domain/history/normalize.rs") {
+            continue;
+        }
         let text = fs::read_to_string(&file).unwrap();
         let production = text.split("#[cfg(test)]").next().unwrap_or_default();
         let count = production
             .lines()
             .filter(|line| {
-                line.contains("normalize_history(") && !line.contains("fn normalize_history(")
+                line.contains("normalize_history_with_limits(")
+                    && !line.contains("fn normalize_history_with_limits(")
             })
             .count();
         if count > 0 {
@@ -257,7 +346,11 @@ fn openai_response_uses_one_private_module_tree() {
 #[test]
 fn domain_is_provider_protocol_and_transport_independent() {
     for (file, text) in production_sources_under("src/domain") {
-        for forbidden in ["crate::provider", "crate::protocol", "crate::transport"] {
+        for forbidden in [
+            "crate::provider::",
+            "crate::protocol::",
+            "crate::transport::",
+        ] {
             assert!(
                 !text.contains(forbidden),
                 "domain dependency leak in {file}: {forbidden}"
@@ -313,11 +406,32 @@ fn provider_generic_contract_and_presets_are_physically_separate() {
         "src/provider/profile.rs",
         "src/provider/profiles/mod.rs",
         "src/provider/profiles/official_openai.rs",
-        "src/provider/profiles/test_only.rs",
     ] {
         assert!(
             root.join(path).is_file(),
             "missing provider profile module: {path}"
+        );
+    }
+    for path in [
+        "crates/philo-presets/src/lib.rs",
+        "crates/philo-presets/src/openrouter.rs",
+        "crates/philo-presets/src/deepseek.rs",
+        "crates/philo-presets/src/zai.rs",
+    ] {
+        assert!(
+            root.join(path).is_file(),
+            "missing extracted preset: {path}"
+        );
+    }
+    for path in [
+        "src/provider/profiles/openrouter.rs",
+        "src/provider/profiles/deepseek.rs",
+        "src/provider/profiles/zai.rs",
+        "src/provider/profiles/common.rs",
+    ] {
+        assert!(
+            !root.join(path).exists(),
+            "third-party preset remains in core: {path}"
         );
     }
 
@@ -352,7 +466,7 @@ fn production_default_limit_lookups_have_an_explicit_file_allowlist() {
         "src/domain/request.rs".to_owned(),
         "src/domain/schema/budget.rs".to_owned(),
         "src/domain/tools.rs".to_owned(),
-        "src/provider/profiles/common.rs".to_owned(),
+        "src/domain/history/normalize.rs".to_owned(),
         "src/provider/profiles/official_openai.rs".to_owned(),
         "src/provider/profiles/test_only.rs".to_owned(),
     ]);
@@ -397,7 +511,7 @@ fn public_request_api_has_no_untyped_wire_extension_escape_hatch() {
 }
 
 #[test]
-fn catalog_and_typed_compat_have_single_owners_and_no_provider_brand_branches() {
+fn catalog_and_protocol_contract_have_single_owners_and_no_provider_brand_branches() {
     for path in [
         "src/provider/catalog/mod.rs",
         "src/provider/catalog/entry.rs",
@@ -405,29 +519,32 @@ fn catalog_and_typed_compat_have_single_owners_and_no_provider_brand_branches() 
         "src/provider/catalog/source.rs",
         "src/provider/catalog/merge.rs",
         "src/provider/catalog/validate.rs",
-        "src/provider/compat/mod.rs",
-        "src/provider/compat/profile.rs",
-        "src/provider/compat/request.rs",
-        "src/provider/compat/response.rs",
-        "src/provider/compat/history.rs",
-        "src/provider/compat/merge.rs",
-        "src/provider/compat/validate.rs",
+        "src/provider/protocol_contract/mod.rs",
+        "src/provider/protocol_contract/profile.rs",
+        "src/provider/protocol_contract/request.rs",
+        "src/provider/protocol_contract/response.rs",
+        "src/provider/protocol_contract/history.rs",
         "src/protocol/openai_chat/compat/mod.rs",
         "src/protocol/openai_chat/compat/request.rs",
         "src/protocol/openai_chat/compat/response.rs",
         "src/protocol/openai_chat/compat/error.rs",
+        "crates/philo-compat/src/lib.rs",
+        "crates/philo-compat/src/merge.rs",
     ] {
         assert_production_file(path);
     }
 
-    for directory in ["src/provider/catalog", "src/provider/compat"] {
+    assert!(
+        !crate_root().join("src/provider/compat").exists(),
+        "the extracted compatibility merge layer reappeared in the core"
+    );
+
+    for directory in [
+        "src/provider/catalog",
+        "src/provider/protocol_contract",
+        "crates/philo-compat/src",
+    ] {
         for (file, text) in production_sources_under(directory) {
-            if matches!(
-                file.as_str(),
-                "src/provider/compat/mod.rs" | "src/provider/compat/routing.rs"
-            ) {
-                continue;
-            }
             for forbidden in [
                 "official-openai",
                 "test-only",
@@ -443,6 +560,20 @@ fn catalog_and_typed_compat_have_single_owners_and_no_provider_brand_branches() 
         }
     }
 
+    for (file, text) in production_sources_under("src") {
+        for forbidden in ["CompatPatch", "resolve_compat("] {
+            assert!(
+                !text.contains(forbidden),
+                "compatibility merge policy reappeared in the core at {file}: {forbidden}"
+            );
+        }
+    }
+
+    let compat_manifest = source("crates/philo-compat/Cargo.toml");
+    assert!(compat_manifest.contains("path = \"../..\""));
+    let core_manifest = source("Cargo.toml");
+    validate_core_dependencies(&core_manifest).unwrap();
+
     let driver = production_source("src/protocol/openai_chat/driver.rs");
     assert!(!driver.contains("MaxOutputTokensWireFormat"));
     assert!(!driver.contains("ToolArgumentsCompat"));
@@ -451,11 +582,8 @@ fn catalog_and_typed_compat_have_single_owners_and_no_provider_brand_branches() 
 #[test]
 fn routing_detection_and_conformance_keep_bounded_owners() {
     for path in [
-        "src/provider/compat/routing.rs",
-        "src/protocol/openai_chat/compat/routing.rs",
-        "src/provider/detection.rs",
         "tests/provider_routing_contract.rs",
-        "tests/provider_detection_contract.rs",
+        "tests/provider_selection_contract.rs",
         "tests/provider_conformance.rs",
         "tests/support/conformance/case.rs",
         "tests/support/conformance/offline.rs",
@@ -466,77 +594,117 @@ fn routing_detection_and_conformance_keep_bounded_owners() {
         assert_production_file(path);
     }
 
-    for (file, text) in production_sources_under("src/domain") {
+    // FR-003: gateway routing is expressed through the bounded body axis, so no
+    // production file may reintroduce a first-class routing type anywhere.
+    for path in [
+        "src/provider/compat/routing.rs",
+        "src/protocol/openai_chat/compat/routing.rs",
+    ] {
+        assert!(
+            !crate_root().join(path).exists(),
+            "retired routing owner reappeared: {path}"
+        );
+    }
+    for (file, text) in production_sources_under("src") {
         for forbidden in [
             "OpenRouterRouting",
             "ProviderRequestOptions",
-            "EndpointDetector",
+            "ResolvedProviderRouting",
+            "ProviderRoutingWire",
+            "RoutingSort",
+            "UpstreamId",
         ] {
             assert!(
                 !text.contains(forbidden),
-                "provider-scoped routing/detection leaked into domain {file}: {forbidden}"
+                "first-class gateway routing type reappeared in {file}: {forbidden}"
             );
         }
     }
 
-    let wire = production_source("src/protocol/openai_chat/compat/routing.rs");
-    assert!(!wire.contains("BTreeMap<String"));
-    assert!(!wire.contains("serde(flatten)"));
-    assert!(!wire.contains("extra_body"));
-
-    let detection = production_source("src/provider/detection.rs");
-    for forbidden in [
-        "reqwest",
-        "Transport",
-        "SecretResolver",
-        "std::net::ToSocketAddrs",
-    ] {
-        assert!(
-            !detection.contains(forbidden),
-            "endpoint detection gained I/O/secret authority: {forbidden}"
-        );
+    // FR-006: provider identity is declared, never inferred. The detector and
+    // every type that carried a guess are gone, and no production file may
+    // reintroduce endpoint-shaped inference under any name.
+    assert!(
+        !crate_root().join("src/provider/detection.rs").exists(),
+        "retired endpoint detection owner reappeared"
+    );
+    for (file, text) in production_sources_under("src") {
+        for forbidden in [
+            "EndpointDetector",
+            "EndpointDetection",
+            "DetectionSuggestion",
+            "DetectionExplanation",
+            "DetectionConfidence",
+            "NormalizedEndpointFacts",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "endpoint inference type reappeared in {file}: {forbidden}"
+            );
+        }
     }
     let factory = production_source("src/provider/factory.rs");
     assert!(factory.contains("ProviderSelector"));
-    assert!(factory.contains("EndpointDetector::detect_with_policy"));
+    assert!(
+        factory.contains("ProviderSelectionSource::Undeclared"),
+        "the selector must name an undeclared outcome instead of a fallback"
+    );
 }
 
 #[test]
-fn provider_diagnostics_are_value_free_and_cannot_resolve_or_send() {
-    for path in [
-        "src/provider/diagnostics.rs",
-        "tests/provider_diagnostics_contract.rs",
-    ] {
-        assert_production_file(path);
+fn provider_diagnostics_are_split_by_ownership() {
+    assert!(
+        !crate_root().join("src/provider/diagnostics.rs").exists(),
+        "provider diagnostics catch-all remains"
+    );
+    let provider = production_source("src/provider/mod.rs");
+    assert!(!provider.contains("mod diagnostics"));
+
+    for (file, source) in production_sources_under("src") {
+        for removed in [
+            "SupportStatus",
+            "EffectiveSupportStatus",
+            "SupportDiagnostics",
+            "ProviderDiagnostics",
+            "EvidenceVerification",
+            "HeaderTraceEntry",
+            "TraceDecision",
+            "TraceOperation",
+            "DetectionConfidence",
+            "EndpointDetection",
+            "FallbackDimension",
+            "RoutingFallback",
+        ] {
+            assert!(
+                !source.contains(removed),
+                "retired diagnostics symbol remains in {file}: {removed}"
+            );
+        }
     }
 
-    let diagnostics = production_source("src/provider/diagnostics.rs");
+    let catalog = production_source("src/provider/catalog/entry.rs");
+    assert!(catalog.contains("pub support_status: CapabilityStatus"));
     for forbidden in [
-        "SecretString",
-        "ExposeSecret",
-        "SecretResolver",
-        "CredentialContext",
-        "AuthContext",
-        "HeaderValue",
-        "GenerateRequest",
-        "Message",
-        "RequestMetadata",
-        "HttpRequest",
-        "Transport",
-        "reqwest",
-        "std::env",
-        "tokio::",
+        "enum SupportStatus",
+        "EffectiveSupportStatus",
+        "SupportDiagnostics",
+        "EvidenceVerification",
     ] {
-        assert!(
-            !diagnostics.contains(forbidden),
-            "diagnostics gained value or I/O authority: {forbidden}"
-        );
+        assert!(!catalog.contains(forbidden));
     }
 
-    assert!(diagnostics.contains("HeaderName"));
-    assert!(diagnostics.contains("PolicySource"));
-    assert!(diagnostics.contains("EvidenceVerification"));
-    assert!(!diagnostics.contains("url().query"));
+    let headers = production_source("src/provider/headers.rs");
+    for removed in ["HeaderTraceEntry", "TraceDecision", "TraceOperation"] {
+        assert!(!headers.contains(removed));
+    }
+    let observability = production_source("src/observability/trace.rs");
+    assert!(observability.contains("HeadersResolved"));
+    assert!(observability.contains("steps: Arc<[(HeaderName, HeaderSource, bool, bool, bool)]>"));
+
+    let endpoint = production_source("src/provider/endpoint/origin.rs");
+    let query = production_source("src/provider/endpoint/template.rs");
+    assert!(endpoint.contains("impl fmt::Debug for EndpointResolutionDiagnostics"));
+    assert!(query.contains("impl fmt::Debug for EndpointQueryDiagnostic"));
 
     let contract = source("tests/provider_diagnostics_contract.rs");
     assert!(contract.contains("support/provider-support-matrix.toml"));
@@ -566,7 +734,6 @@ fn completed_phase_2_5_layout_exists_and_legacy_files_are_absent() {
         "src/domain/history/replay.rs",
         "src/provider/profiles/mod.rs",
         "src/provider/profiles/official_openai.rs",
-        "src/provider/profiles/test_only.rs",
     ] {
         assert_production_file(path);
     }
@@ -703,6 +870,11 @@ fn schema_and_history_stay_pure_domain_without_remote_resolvers() {
 #[test]
 fn provider_runtime_and_core_pipeline_are_preset_independent() {
     let runtime = production_source("src/provider/runtime.rs");
+    let runtime_without_comments = runtime
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
     for forbidden in [
         "profiles::",
         "OfficialOpenAiProfile",
@@ -711,7 +883,7 @@ fn provider_runtime_and_core_pipeline_are_preset_independent() {
         "test-only",
     ] {
         assert!(
-            !runtime.contains(forbidden),
+            !runtime_without_comments.contains(forbidden),
             "generic runtime depends on preset: {forbidden}"
         );
     }
@@ -792,55 +964,67 @@ fn private_migration_types_are_not_reexported() {
 }
 
 #[test]
-fn provider_config_has_one_network_free_versioned_module_tree() {
+fn the_core_keeps_only_the_secret_boundary_not_a_configuration_framework() {
+    // FR-005: versioned documents, layered merge, and source provenance are
+    // outside the core. What stays is the reference/resolver pair, because a
+    // credential the core cannot distinguish from a plain string is a leak
+    // waiting to happen.
+    assert_production_file("src/provider/secret.rs");
     for path in [
         "src/provider/config/mod.rs",
         "src/provider/config/schema.rs",
         "src/provider/config/source.rs",
         "src/provider/config/merge.rs",
-        "src/provider/config/secret_ref.rs",
         "src/provider/config/validate.rs",
     ] {
-        assert_production_file(path);
+        assert!(
+            !crate_root().join(path).exists(),
+            "configuration framework reappeared in the core: {path}"
+        );
     }
 
     let module = production_source("src/provider/mod.rs");
-    assert!(module.contains("pub mod config;"));
-    let config = production_sources_under("src/provider/config");
-    for (file, text) in &config {
+    assert!(!module.contains("pub mod config;"));
+    assert!(module.contains("pub mod secret;"));
+
+    for (file, text) in production_sources_under("src") {
         for forbidden in [
-            "crate::client",
-            "crate::execution",
-            "crate::protocol",
-            "crate::transport",
-            "reqwest",
-            "std::env::vars(",
-            "std::env::vars_os(",
-            "serde(flatten)",
-            "extra_body",
-            "extra_headers",
+            "ProviderConfigSnapshot",
+            "ProviderConfigLayer",
+            "ProviderConfigDocument",
+            "ConfigSchemaVersion",
+            "FieldProvenance",
         ] {
             assert!(
                 !text.contains(forbidden),
-                "provider config dependency or escape-hatch leak in {file}: {forbidden}"
+                "configuration framework type reappeared in {file}: {forbidden}"
             );
         }
     }
 
-    let secret = production_source("src/provider/config/secret_ref.rs");
+    let secret = production_source("src/provider/secret.rs");
     assert_eq!(secret.matches("std::env::var(").count(), 1);
     assert!(!secret.contains("std::env::vars("));
     assert!(!secret.contains("std::env::vars_os("));
+    assert!(secret.contains("pub enum SecretReference"));
+    assert!(secret.contains("pub trait SecretResolver"));
+    for forbidden in ["crate::client", "crate::execution", "crate::transport"] {
+        assert!(
+            !secret.contains(forbidden),
+            "secret boundary gained a downstream dependency: {forbidden}"
+        );
+    }
 
-    let merge = production_source("src/provider/config/merge.rs");
-    assert!(merge.contains("pub struct ProviderConfigSnapshot"));
-    assert!(merge.contains("pub fn merge_layers"));
-    assert!(!merge.contains("ApiKey"));
-    assert!(!merge.contains("SecretString"));
+    // The extracted crate must still exist, still depend on the core, and the
+    // core must not depend back on it.
+    let manifest = fs::read_to_string(crate_root().join("crates/philo-config/Cargo.toml")).unwrap();
+    assert!(manifest.contains("path = \"../..\""));
+    let core_manifest = fs::read_to_string(crate_root().join("Cargo.toml")).unwrap();
+    validate_core_dependencies(&core_manifest).unwrap();
 }
 
 #[test]
-fn provider_registry_keeps_factory_and_runtime_snapshot_boundaries() {
+fn provider_registry_keeps_definition_and_runtime_snapshot_boundaries() {
     for path in [
         "src/provider/registry.rs",
         "src/provider/factory.rs",
@@ -850,11 +1034,9 @@ fn provider_registry_keeps_factory_and_runtime_snapshot_boundaries() {
     }
     let registry = production_source("src/provider/registry.rs");
     assert!(registry.contains("Arc<RwLock<BTreeMap"));
-    assert!(
-        registry.contains("registration.factory.build(config, resolver)")
-            || registry.contains("factory.build(config, resolver)")
-    );
-    assert!(registry.contains("let registration = {"));
+    // The compiler is cloned out of the map, then run with no lock held.
+    assert!(registry.contains("factory.build_deployment(deployment, resolver)"));
+    assert!(registry.contains("let factory = {"));
     for forbidden in [
         "tokio::sync",
         "std::env::vars",
@@ -867,7 +1049,13 @@ fn provider_registry_keeps_factory_and_runtime_snapshot_boundaries() {
         );
     }
     let factory = production_source("src/provider/factory.rs");
-    assert!(factory.contains("pub trait ProviderRuntimeFactory"));
+    // FR-005: one construction path. The configuration-snapshot factory trait
+    // and its two built-in implementations are gone.
+    assert!(!factory.contains("pub trait ProviderRuntimeFactory"));
+    assert!(!factory.contains("OfficialOpenAiFactory"));
+    assert!(!factory.contains("OfficialAnthropicFactory"));
+    assert!(factory.contains("pub struct StaticProviderFactory"));
+    assert!(factory.contains("self.definition.compile(deployment, resolver)"));
     assert!(!factory.contains("crate::client"));
     let runtime = production_source("src/provider/runtime.rs");
     assert!(runtime.contains("pub struct ProviderRuntime"));
@@ -1061,9 +1249,9 @@ fn provider_definition_builder_is_the_only_production_parts_constructor() {
     for path in [
         "src/provider/profiles/official_openai.rs",
         "src/provider/profiles/official_anthropic.rs",
-        "src/provider/profiles/openrouter.rs",
-        "src/provider/profiles/deepseek.rs",
-        "src/provider/profiles/zai.rs",
+        "crates/philo-presets/src/openrouter.rs",
+        "crates/philo-presets/src/deepseek.rs",
+        "crates/philo-presets/src/zai.rs",
     ] {
         let profile = production_source(path);
         assert!(
@@ -1076,10 +1264,16 @@ fn provider_definition_builder_is_the_only_production_parts_constructor() {
 }
 
 #[test]
+fn extracted_presets_are_not_core_production_dependencies() {
+    let manifest = source("Cargo.toml");
+    validate_core_dependencies(&manifest).unwrap();
+}
+
+#[test]
 fn protocol_contract_binding_and_public_custom_api_remain_fail_closed() {
     let definition = production_source("src/provider/definition.rs");
     let profile = production_source("src/provider/profile.rs");
-    let policy = production_source("src/provider/call_policy.rs");
+    let policy = production_source("src/plan/policy.rs");
     for text in [&definition, &profile, &policy] {
         assert!(!text.contains("Option<ResolvedProtocolContract>"));
         assert!(!text.contains("protocol_contract: Option"));
@@ -1166,9 +1360,6 @@ fn phase_five_official_profiles_use_shared_runtime_pipelines() {
     for path in [
         "src/provider/profiles/official_openai.rs",
         "src/provider/profiles/official_anthropic.rs",
-        "src/provider/profiles/openrouter.rs",
-        "src/provider/profiles/deepseek.rs",
-        "src/provider/profiles/zai.rs",
     ] {
         let profile = production_source(path);
         for required in [
@@ -1194,6 +1385,54 @@ fn phase_five_official_profiles_use_shared_runtime_pipelines() {
             );
         }
     }
+
+    for path in [
+        "crates/philo-presets/src/openrouter.rs",
+        "crates/philo-presets/src/deepseek.rs",
+        "crates/philo-presets/src/zai.rs",
+    ] {
+        let preset = production_source(path);
+        assert!(preset.contains("ProviderDefinition"));
+        assert!(preset.contains("definition.compile(&deployment"));
+        assert!(!preset.contains("compile_resolved"));
+    }
+}
+
+#[test]
+fn history_policy_contains_legality_only_and_resource_limits_fail_closed_elsewhere() {
+    let policy = production_source("src/domain/history/policy.rs");
+    assert!(!policy.contains("max_messages"));
+    assert!(!policy.contains("max_total_text_bytes"));
+    assert!(!policy.contains("SynthesizeError"));
+    assert!(!policy.contains("Defer"));
+    assert!(policy.contains("DropWithDiagnostic"));
+
+    let normalize = production_source("src/domain/history/normalize.rs");
+    assert!(normalize.contains("normalize_history_with_limits"));
+    assert!(normalize.contains("HistoryFailure::TooManyMessages"));
+    assert!(normalize.contains("HistoryFailure::TextTooLarge"));
+}
+
+#[test]
+fn call_plan_has_one_private_owner() {
+    let root = crate_root();
+    for path in [
+        "src/plan/mod.rs",
+        "src/plan/contract.rs",
+        "src/plan/policy.rs",
+    ] {
+        assert!(root.join(path).is_file(), "missing plan owner: {path}");
+    }
+    for path in ["src/provider/call_policy.rs", "src/execution/contract.rs"] {
+        assert!(
+            !root.join(path).exists(),
+            "legacy plan owner remains: {path}"
+        );
+    }
+    let protocol = production_source("src/protocol/mod.rs");
+    assert!(protocol.contains("crate::plan::"));
+    assert!(!protocol.contains("crate::execution::"));
+    assert!(!production_source("src/lib.rs").contains("pub mod plan"));
 }
 
 #[test]
@@ -1226,4 +1465,134 @@ fn phase_five_protocol_accumulators_use_typed_resource_limits() {
     }
     assert!(anthropic_stream.contains("SseConfig"));
     assert!(anthropic_stream.contains("ResponseLimits"));
+}
+
+#[test]
+fn the_four_extension_axes_share_one_protection_table_owner() {
+    assert_production_file("src/protected.rs");
+
+    let owner = production_source("src/protected.rs");
+    for required in [
+        "PROTECTED_HEADERS",
+        "AUTH_INELIGIBLE_HEADERS",
+        "PROTECTED_BODY_KEY_SHAPES",
+        "ANTHROPIC_MESSAGES_PROTECTED_BODY_FIELDS",
+        "OPENAI_CHAT_PROTECTED_BODY_FIELDS",
+        "REQUIRED_ENDPOINT_SCHEME",
+    ] {
+        assert!(
+            owner.contains(required),
+            "missing protection table: {required}"
+        );
+    }
+
+    // No axis may keep a private copy of the decision. A file may still name headers
+    // for a different rule — `HeaderPolicy::allows` routes each one to its owner — but
+    // if it names a protected header it must take the protection verdict from here.
+    for (file, text) in production_sources_under("src") {
+        if file == "src/protected.rs" || !text.contains("\"proxy-authorization\"") {
+            continue;
+        }
+        assert!(
+            text.contains("crate::protected::"),
+            "{file} names protected headers without deferring to the single owner"
+        );
+    }
+}
+
+#[test]
+fn both_protocols_share_one_bounded_raw_body_extension_implementation() {
+    for path in [
+        "src/protocol_options/mod.rs",
+        "src/protocol_options/raw.rs",
+        "src/protocol_options/anthropic.rs",
+        "src/protocol_options/openai.rs",
+    ] {
+        assert_production_file(path);
+    }
+    assert!(
+        !crate_root().join("src/extensions.rs").exists(),
+        "legacy extensions.rs remains"
+    );
+
+    // The budget and shape rules exist once, in `raw.rs`.
+    let raw = production_source("src/protocol_options/raw.rs");
+    for required in [
+        "MAX_RAW_BYTES",
+        "MAX_RAW_KEYS",
+        "MAX_RAW_ARRAY_ITEMS",
+        "MAX_RAW_DEPTH",
+        "MAX_RAW_KEY_BYTES",
+    ] {
+        assert!(raw.contains(required), "missing raw budget: {required}");
+    }
+    for protocol in ["anthropic", "openai"] {
+        let text = production_source(&format!("src/protocol_options/{protocol}.rs"));
+        assert!(
+            text.contains("RawFields::parse"),
+            "{protocol} raw extension does not reuse the shared core"
+        );
+        assert!(
+            text.contains("dangerous_from_object"),
+            "{protocol} raw extension drops the explicit dangerous name"
+        );
+        for forbidden in ["MAX_RAW_BYTES", "MAX_RAW_DEPTH", "fn validate_raw_value"] {
+            assert!(
+                !text.contains(forbidden),
+                "{protocol} raw extension re-implements the bounded core: {forbidden}"
+            );
+        }
+    }
+
+    // The container stays a closed protocol-keyed enum.
+    let module = production_source("src/protocol_options/mod.rs");
+    validate_closed_protocol_options(&module).unwrap();
+}
+
+#[test]
+fn the_crate_root_exports_only_the_first_request_whitelist() {
+    let root = production_source("src/lib.rs");
+    validate_root_exports(&root, &root_export_allowlist()).unwrap();
+}
+
+#[test]
+fn deliberate_extra_root_export_is_rejected() {
+    let mut mutated = production_source("src/lib.rs");
+    mutated.push_str("\npub use domain::request::CapabilityStatus;\n");
+    assert!(validate_root_exports(&mutated, &root_export_allowlist()).is_err());
+}
+
+#[test]
+fn deliberate_sibling_dependency_is_rejected() {
+    let mutated = "[dependencies]\nphilo-config = { path = \"crates/philo-config\" }\n";
+    assert!(validate_core_dependencies(mutated).is_err());
+}
+
+#[test]
+fn deliberate_open_protocol_options_container_is_rejected() {
+    let mutated = "pub enum ProtocolOptions { Custom(HashMap<String, serde_json::Value>) }";
+    assert!(validate_closed_protocol_options(mutated).is_err());
+}
+
+#[test]
+fn current_user_docs_do_not_reintroduce_removed_rust_paths() {
+    let mut files = vec![crate_root().join("README.md")];
+    markdown_sources(&crate_root().join("docs"), &mut files);
+    files.sort();
+
+    for file in files {
+        let text = fs::read_to_string(&file).unwrap();
+        for removed in [
+            "philo::provider::config",
+            "philo::provider::compat",
+            "philo::provider::detection",
+            "philo::provider::diagnostics",
+        ] {
+            assert!(
+                !text.contains(removed),
+                "removed Rust path returned in {}: {removed}",
+                file.display()
+            );
+        }
+    }
 }

@@ -110,13 +110,12 @@ fn merge_entry(base: &mut ModelEntry, overlay: &ModelEntry) {
         base.default_max_output_tokens = overlay.default_max_output_tokens;
         copy_source(base, overlay, "default_max_output_tokens");
     }
-    base.compat_overrides.overlay(&overlay.compat_overrides);
     if overlay.pricing.is_some() {
         base.pricing.clone_from(&overlay.pricing);
         copy_source(base, overlay, "pricing");
     }
     base.source = overlay.source.clone();
-    if !matches!(overlay.support_status, super::entry::SupportStatus::Unknown) {
+    if !matches!(overlay.support_status, CapabilityStatus::Unknown) {
         base.support_status = overlay.support_status;
         copy_source(base, overlay, "support_status");
     }

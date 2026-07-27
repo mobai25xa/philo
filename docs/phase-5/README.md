@@ -11,10 +11,9 @@ guess a protocol and never falls back to another provider or protocol.
 Use a named secret reference so configuration contains no credential value:
 
 ```rust,no_run
-use philo::{
-    ConfigSource, ConfigValue, EnvironmentSecretResolver, ProviderConfigLayer,
-    ProviderConfigSnapshot, ProviderId, ProviderRegistry, SecretReference,
-};
+use philo::ProviderRuntime;
+use philo::provider::secret::{EnvironmentSecretResolver, SecretReference};
+use philo_config::{ConfigSource, ConfigValue, ProviderConfigLayer, ProviderConfigSnapshot};
 
 # fn build() -> Result<philo::ProviderRuntime, philo::LlmError> {
 let credential = ProviderConfigLayer::new(ConfigSource::environment_secret(
@@ -24,12 +23,9 @@ let credential = ProviderConfigLayer::new(ConfigSource::environment_secret(
     "ANTHROPIC_API_KEY",
 )?));
 let config = ProviderConfigSnapshot::official_anthropic()?.merge_layers([credential])?;
-let provider = ProviderId::new("official-anthropic")?;
-let runtime = ProviderRegistry::with_official_anthropic()?.build(
-    &provider,
-    &config,
-    &EnvironmentSecretResolver,
-)?;
+let (definition, deployment) = config.official_anthropic_inputs()?;
+let profile = definition.compile(&deployment, &EnvironmentSecretResolver)?;
+let runtime = ProviderRuntime::build(profile)?;
 # Ok(runtime)
 # }
 ```
@@ -73,10 +69,8 @@ Use common `GenerationOptions` for shared intent. Use
 `AnthropicMessagesOptions` for stable Anthropic-only behavior:
 
 ```rust
-use philo::{
-    AnthropicEffort, AnthropicMessagesOptions, AnthropicThinkingDisplay,
-    GenerationOptions,
-};
+use philo::GenerationOptions;
+use philo::protocol_options::{AnthropicEffort, AnthropicMessagesOptions, AnthropicThinkingDisplay};
 
 let options = GenerationOptions::new()
     .with_max_output_tokens(1024)

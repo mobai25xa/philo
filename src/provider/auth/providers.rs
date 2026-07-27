@@ -265,20 +265,7 @@ impl AuthProvider for NoAuth {
 }
 
 pub(super) fn validate_auth_name(name: &HeaderName) -> Result<(), LlmError> {
-    if name.as_str().len() > 128
-        || matches!(
-            name.as_str(),
-            "host"
-                | "content-length"
-                | "content-type"
-                | "accept"
-                | "transfer-encoding"
-                | "connection"
-                | "cookie"
-                | "set-cookie"
-                | "user-agent"
-        )
-    {
+    if name.as_str().len() > 128 || crate::protected::is_auth_ineligible_header(name) {
         Err(ValidationError::new(
             "auth.header_name",
             ValidationReason::ProtectedHeader,

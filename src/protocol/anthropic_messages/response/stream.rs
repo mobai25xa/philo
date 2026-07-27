@@ -10,8 +10,8 @@ use crate::domain::{
     AssistantEvent, LocalRequestId, ProviderRequestId, ResponseFormat, SourceIdentity,
 };
 use crate::error::LlmError;
+use crate::plan::ResponseLimits;
 use crate::provider::AnthropicMessagesContract;
-use crate::provider::call_policy::ResponseLimits;
 use crate::transport::{ByteStream, SseConfig, SseDecoder};
 
 #[derive(Clone, Debug)]
@@ -135,8 +135,8 @@ mod tests {
         ResourceLimits, ResponseFormat, SourceIdentity, TokenCount,
     };
     use crate::error::LlmError;
+    use crate::plan::ResponseLimits;
     use crate::provider::AnthropicUsageCompat;
-    use crate::provider::call_policy::ResponseLimits;
     use crate::transport::{ByteStream, SseConfig};
 
     use super::{AnthropicMessagesStreamContext, decode_anthropic_messages_stream};

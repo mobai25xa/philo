@@ -7,11 +7,10 @@ use crate::domain::{
     ReasoningEffort, StreamUsagePolicy, ThinkingRequest, ToolCall, ToolResultNamePolicy, content,
 };
 use crate::error::{LlmError, ProtocolError, ValidationError, ValidationReason};
-use crate::execution::contract::ResolvedCallPlan;
-use crate::provider::compat::ResolvedProviderRouting;
+use crate::plan::ResolvedCallPlan;
+use crate::protocol_options::{OpenAiChatOptions, OpenAiChatRawExtension, ProtocolOptions};
 use crate::provider::{ModelBodyWireFormat, ProviderCapabilities, RequestCompat};
 
-use super::compat::routing::ProviderRoutingWire;
 use super::structured_wire::ResponseFormatWire;
 use super::tool_wire::{encode_parallel_tool_calls, encode_tool_choice, encode_tools};
 use super::wire::{
@@ -42,7 +41,11 @@ pub(super) fn encode_planned_request(plan: &ResolvedCallPlan) -> Result<Bytes, L
         tool_result_name: compat.history().tool_result_name,
         default_max_output_tokens: plan.policy.limits.model.default_max_output_tokens,
         max_body_bytes: plan.policy.limits.request.max_body_bytes,
-        provider_routing: plan.policy.provider_routing.as_ref(),
+        raw_extension: planned
+            .options
+            .protocol_options()
+            .and_then(ProtocolOptions::openai_chat)
+            .and_then(OpenAiChatOptions::raw),
     })
 }
 
@@ -56,7 +59,7 @@ struct RequestEncodingContext<'a> {
     tool_result_name: ToolResultNamePolicy,
     default_max_output_tokens: Option<u32>,
     max_body_bytes: usize,
-    provider_routing: Option<&'a ResolvedProviderRouting>,
+    raw_extension: Option<&'a OpenAiChatRawExtension>,
 }
 
 fn encode_request_parts(context: RequestEncodingContext<'_>) -> Result<Bytes, LlmError> {
@@ -69,7 +72,7 @@ fn encode_request_parts(context: RequestEncodingContext<'_>) -> Result<Bytes, Ll
         tool_result_name,
         default_max_output_tokens,
         max_body_bytes,
-        provider_routing,
+        raw_extension,
     } = context;
     let mut messages = Vec::with_capacity(domain_messages.len());
     for (index, message) in domain_messages.iter().enumerate() {
@@ -96,13 +99,31 @@ fn encode_request_parts(context: RequestEncodingContext<'_>) -> Result<Bytes, Ll
         encode_reasoning_effort(options.reasoning()),
         compat.max_output_tokens,
         matches!(compat.stream_usage, StreamUsagePolicy::IncludeUsage),
-        provider_routing.map(ProviderRoutingWire::from),
     );
-    let body = serde_json::to_vec(&wire).map_err(|_| {
-        LlmError::from(ProtocolError::new(
-            "failed to serialize planned OpenAI Chat request",
-        ))
-    })?;
+    // Without a raw extension the typed wire is serialized directly, so the encoded
+    // bytes are unaffected by the existence of the body axis. Only a request that
+    // opts into the dangerous extension pays the value round trip.
+    let body = match raw_extension {
+        None => serde_json::to_vec(&wire).map_err(|_| serialization_failed())?,
+        Some(raw) => {
+            let mut body_value = serde_json::to_value(&wire).map_err(|_| serialization_failed())?;
+            let object = body_value.as_object_mut().ok_or_else(|| {
+                ProtocolError::new("OpenAI Chat request did not serialize as an object")
+            })?;
+            for (name, value) in raw.fields() {
+                if object.contains_key(name) {
+                    return Err(ValidationError::new(
+                        "protocol_options.openai_chat.raw",
+                        ValidationReason::Conflict,
+                        "raw extension conflicts with an SDK-owned request field",
+                    )
+                    .into());
+                }
+                object.insert(name.clone(), value.clone());
+            }
+            serde_json::to_vec(&body_value).map_err(|_| serialization_failed())?
+        }
+    };
     if body.len() > max_body_bytes {
         return Err(ValidationError::new(
             "request_body",
@@ -112,6 +133,10 @@ fn encode_request_parts(context: RequestEncodingContext<'_>) -> Result<Bytes, Ll
         .into());
     }
     Ok(Bytes::from(body))
+}
+
+fn serialization_failed() -> LlmError {
+    ProtocolError::new("failed to serialize planned OpenAI Chat request").into()
 }
 
 fn encode_message(

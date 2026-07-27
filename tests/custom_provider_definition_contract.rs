@@ -4,11 +4,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use philo::provider::auth::ApiKey;
+use philo::provider::capability::ProviderCapabilities;
+use philo::provider::catalog::ProductId;
+use philo::provider::definition::AuthScheme;
+use philo::provider::endpoint::EndpointConfig;
+use philo::provider::registry::{ProviderRegistration, ProviderRegistry};
+use philo::provider::secret::{SecretReference, SecretResolver};
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    ApiKey, AuthScheme, EndpointConfig, GenerateRequest, GenerationOptions, LlmClient, Message,
-    ModelRef, ProductId, ProviderCapabilities, ProviderDefinition, ProviderDeploymentConfig,
-    ProviderId, ProviderRegistration, ProviderRegistry, SecretReference, SecretResolver,
+    GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef, ProviderDefinition,
+    ProviderDeploymentConfig, ProviderId,
 };
 use proptest::prelude::*;
 
@@ -29,7 +35,10 @@ impl CountingResolver {
 }
 
 impl SecretResolver for CountingResolver {
-    fn resolve(&self, _reference: &SecretReference) -> Result<ApiKey, philo::ProviderConfigError> {
+    fn resolve(
+        &self,
+        _reference: &SecretReference,
+    ) -> Result<ApiKey, philo::error::ProviderConfigError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         ApiKey::new("custom-provider-secret-value")
             .map_err(|_| panic!("static test API key must be valid"))

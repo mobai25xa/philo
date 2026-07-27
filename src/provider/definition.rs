@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use http::{HeaderName, HeaderValue, header};
 
-use crate::domain::{ModelId, PolicySource, ProtocolId, ProviderId, ResourceLimits};
+use crate::domain::{ModelId, ProtocolId, ProviderId, ResourceLimits};
 use crate::error::{LlmError, ValidationError, ValidationReason};
 use crate::transport::SseConfig;
 
@@ -19,8 +19,6 @@ use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::catalog::{ModelCatalog, ProductId};
-use super::compat::{AnthropicUsageCompat, CompatPatch, OpenRouterRoutingContract};
-use super::config::{SecretReference, SecretResolver};
 use super::endpoint::{
     CredentialBinding, EndpointConfig, ResolvedModelMapping, resolve_official, resolve_official_for,
 };
@@ -28,7 +26,9 @@ use super::headers::{
     DynamicHeaderPolicy, HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource,
 };
 use super::profile::{ProviderProfile, ProviderProfileParts};
-use super::{IdempotencyPolicy, RateLimitPolicy, ResolvedProtocolContract};
+use super::protocol_contract::{AnthropicUsageCompat, CompatProfile};
+use super::secret::{SecretReference, SecretResolver};
+use super::{IdempotencyPolicy, OpenAiChatContract, RateLimitPolicy, ResolvedProtocolContract};
 
 /// Authentication shape fixed by a provider definition without containing a secret.
 /// Validated, secret-free authentication shape for a provider definition.
@@ -138,9 +138,7 @@ pub struct ProviderDefinition {
     capabilities: ProviderCapabilities,
     model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     catalog: ModelCatalog,
-    provider_compat: CompatPatch,
-    model_compat: BTreeMap<ModelId, CompatPatch>,
-    openrouter_routing: Option<OpenRouterRoutingContract>,
+    model_protocol_contracts: BTreeMap<ModelId, ResolvedProtocolContract>,
     transport: ProviderTransportOptions,
     rate_limit: RateLimitPolicy,
     idempotency: IdempotencyPolicy,
@@ -238,10 +236,12 @@ impl ProviderDefinition {
     }
 
     /// Resolves one deployment credential and compiles an immutable profile.
-    pub fn compile(
+    ///
+    /// This is the SDK's only path from a declaration to a runnable profile.
+    pub fn compile<R: SecretResolver + ?Sized>(
         &self,
         deployment: &ProviderDeploymentConfig,
-        resolver: &dyn SecretResolver,
+        resolver: &R,
     ) -> Result<ProviderProfile, LlmError> {
         if deployment.provider_id != self.provider_id {
             return Err(configuration(
@@ -310,9 +310,7 @@ impl ProviderDefinition {
             capabilities: self.capabilities.clone(),
             model_capabilities: self.model_capabilities.clone(),
             catalog: self.catalog.clone(),
-            provider_compat: self.provider_compat.clone(),
-            model_compat: self.model_compat.clone(),
-            openrouter_routing: self.openrouter_routing.clone(),
+            model_protocol_contracts: self.model_protocol_contracts.clone(),
             dialect: self.dialect,
             protocol_contract: self.protocol_contract.clone(),
             transport: self.transport,
@@ -533,9 +531,7 @@ pub struct ProviderDefinitionBuilder {
     model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     catalog: Option<ModelCatalog>,
     allow_unregistered_models: bool,
-    provider_compat: CompatPatch,
-    model_compat: BTreeMap<ModelId, CompatPatch>,
-    openrouter_routing: Option<OpenRouterRoutingContract>,
+    model_compat: BTreeMap<ModelId, CompatProfile>,
     transport: ProviderTransportOptions,
     rate_limit: RateLimitPolicy,
     idempotency: IdempotencyPolicy,
@@ -566,9 +562,7 @@ impl ProviderDefinitionBuilder {
             model_capabilities: BTreeMap::new(),
             catalog: None,
             allow_unregistered_models: false,
-            provider_compat: CompatPatch::from_source(PolicySource::ProviderProfile),
             model_compat: BTreeMap::new(),
-            openrouter_routing: None,
             transport: ProviderTransportOptions::secure_defaults(),
             rate_limit: RateLimitPolicy::standard_only(),
             idempotency: IdempotencyPolicy::unknown(),
@@ -605,7 +599,9 @@ impl ProviderDefinitionBuilder {
         self
     }
 
-    pub(crate) fn with_provider_headers(mut self, headers: Vec<HeaderOperation>) -> Self {
+    /// Installs provider-owned static header operations.
+    #[must_use]
+    pub fn with_provider_headers(mut self, headers: Vec<HeaderOperation>) -> Self {
         self.provider_headers = headers;
         self
     }
@@ -661,22 +657,22 @@ impl ProviderDefinitionBuilder {
         self
     }
 
-    /// Installs typed OpenAI-compatible provider deviations.
+    /// Installs the resolved `OpenAI` Chat compatibility contract.
+    ///
+    /// The contract is already resolved: this builder performs no layering.
+    /// `philo-compat` is the crate that turns ordered sparse declarations into
+    /// one of these (FR-004).
     #[must_use]
-    pub fn with_provider_compat(mut self, compat: CompatPatch) -> Self {
-        self.provider_compat = compat;
+    pub fn with_openai_chat_compat(mut self, compat: CompatProfile) -> Self {
+        self.protocol_contract =
+            ResolvedProtocolContract::OpenAiChat(OpenAiChatContract::from_compat(compat));
         self
     }
 
-    /// Adds typed OpenAI-compatible deviations for one exact model.
+    /// Installs a resolved `OpenAI` Chat compatibility contract for one model.
     #[must_use]
-    pub fn with_model_compat(mut self, model: ModelId, compat: CompatPatch) -> Self {
+    pub fn with_model_openai_chat_compat(mut self, model: ModelId, compat: CompatProfile) -> Self {
         self.model_compat.insert(model, compat);
-        self
-    }
-
-    pub(crate) fn with_openrouter_routing(mut self, contract: OpenRouterRoutingContract) -> Self {
-        self.openrouter_routing = Some(contract);
         self
     }
 
@@ -783,13 +779,36 @@ impl ProviderDefinitionBuilder {
         validate_model_capabilities(&self.model_capabilities)?;
 
         if matches!(self.dialect, ProtocolDialect::AnthropicMessages)
-            && (!self.provider_compat.is_empty()
-                || self.model_compat.values().any(|patch| !patch.is_empty())
-                || self.openrouter_routing.is_some())
+            && !self.model_compat.is_empty()
         {
             return Err(configuration(
                 "Anthropic Messages definitions cannot carry OpenAI compatibility policy",
             ));
+        }
+
+        // FR-004: a contract that contradicts its capabilities is rejected when
+        // the definition is built, not when the first request is planned.
+        let mut model_protocol_contracts = BTreeMap::new();
+        if let Some(contract) = self.protocol_contract.openai_chat() {
+            contract.compat().validate_against(&capabilities)?;
+        }
+        for (model, compat) in self.model_compat {
+            let mut model_capabilities = capabilities.clone();
+            if let Some(profile) = self.model_capabilities.get(&model) {
+                model_capabilities.apply_model(profile);
+            }
+            if let Some(entry) = catalog.get(&super::catalog::ModelKey {
+                provider_id: self.provider_id.clone(),
+                product_id: self.product_id.clone(),
+                domain_model_id: model.clone(),
+            }) {
+                model_capabilities.apply_catalog(&entry.capabilities);
+            }
+            compat.validate_against(&model_capabilities)?;
+            model_protocol_contracts.insert(
+                model,
+                ResolvedProtocolContract::OpenAiChat(OpenAiChatContract::from_compat(compat)),
+            );
         }
 
         validate_header_owners(&auth_scheme, &self.provider_headers, &self.model_headers)?;
@@ -828,9 +847,7 @@ impl ProviderDefinitionBuilder {
             capabilities,
             model_capabilities: self.model_capabilities,
             catalog,
-            provider_compat: self.provider_compat,
-            model_compat: self.model_compat,
-            openrouter_routing: self.openrouter_routing,
+            model_protocol_contracts,
             transport: self.transport,
             rate_limit: self.rate_limit,
             idempotency: self.idempotency,
@@ -965,20 +982,7 @@ fn validate_deployment_limits(deployment: &ResolvedProviderDeployment) -> Result
 }
 
 fn validate_auth_header_name(name: &HeaderName) -> Result<(), LlmError> {
-    if name.as_str().len() > 128
-        || matches!(
-            name.as_str(),
-            "host"
-                | "content-length"
-                | "content-type"
-                | "accept"
-                | "transfer-encoding"
-                | "connection"
-                | "cookie"
-                | "set-cookie"
-                | "user-agent"
-        )
-    {
+    if name.as_str().len() > 128 || crate::protected::is_auth_ineligible_header(name) {
         Err(ValidationError::new(
             "auth.header_name",
             ValidationReason::ProtectedHeader,

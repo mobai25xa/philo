@@ -2,7 +2,7 @@ use bytes::Bytes;
 
 use crate::domain::{ParallelToolCalls, ResponseFormat, ThinkingRequest, ToolChoice};
 use crate::error::{LlmError, ProtocolError, ValidationError, ValidationReason};
-use crate::execution::contract::ResolvedCallPlan;
+use crate::plan::ResolvedCallPlan;
 use crate::protocol_options::{AnthropicEffort, AnthropicThinkingDisplay};
 
 use super::history::plan_history;
@@ -114,7 +114,7 @@ pub(super) fn encode_planned_request(plan: &ResolvedCallPlan) -> Result<Bytes, L
     };
 
     let effort = anthropic_options
-        .and_then(crate::extensions::AnthropicMessagesOptions::effort)
+        .and_then(crate::protocol_options::AnthropicMessagesOptions::effort)
         .map(|effort| match effort {
             AnthropicEffort::Low => AnthropicEffortWire::Low,
             AnthropicEffort::Medium => AnthropicEffortWire::Medium,
@@ -126,7 +126,7 @@ pub(super) fn encode_planned_request(plan: &ResolvedCallPlan) -> Result<Bytes, L
         effort,
     });
     let thinking = anthropic_options
-        .and_then(crate::extensions::AnthropicMessagesOptions::adaptive_thinking)
+        .and_then(crate::protocol_options::AnthropicMessagesOptions::adaptive_thinking)
         .map(|display| ThinkingConfigWire {
             kind: ThinkingKindWire::Adaptive,
             display: match display {
@@ -191,18 +191,16 @@ mod tests {
         ToolResultMessage, ToolSchema,
     };
     use crate::execution::planner::CallPlanner;
+    use crate::plan::ResolvedCallPlan;
     use crate::protocol::openai_chat::OpenAiChatDriver;
-    use crate::provider::{ModelCapabilityProfile, TestOnlyProfile};
-    use crate::{
+    use crate::protocol_options::{
         AnthropicEffort, AnthropicMessagesOptions, AnthropicRawExtension, AnthropicThinkingDisplay,
     };
+    use crate::provider::{ModelCapabilityProfile, TestOnlyProfile};
 
     use super::super::AnthropicMessagesDriver;
 
-    fn plan(
-        messages: Vec<Message>,
-        options: GenerationOptions,
-    ) -> crate::execution::contract::ResolvedCallPlan {
+    fn plan(messages: Vec<Message>, options: GenerationOptions) -> ResolvedCallPlan {
         let runtime =
             TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
                 .unwrap()
@@ -226,7 +224,7 @@ mod tests {
         CallPlanner::plan(&runtime, &request).unwrap()
     }
 
-    fn plan_with_replay(messages: Vec<Message>) -> crate::execution::contract::ResolvedCallPlan {
+    fn plan_with_replay(messages: Vec<Message>) -> ResolvedCallPlan {
         let runtime =
             TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
                 .unwrap()
@@ -239,10 +237,7 @@ mod tests {
         CallPlanner::plan(&runtime, &request).unwrap()
     }
 
-    fn openai_plan(
-        messages: Vec<Message>,
-        options: GenerationOptions,
-    ) -> crate::execution::contract::ResolvedCallPlan {
+    fn openai_plan(messages: Vec<Message>, options: GenerationOptions) -> ResolvedCallPlan {
         let runtime = TestOnlyProfile::localhost(
             "http://127.0.0.1:8787/chat/completions",
             "request-test-key",
@@ -256,7 +251,7 @@ mod tests {
         CallPlanner::plan(&runtime, &request).unwrap()
     }
 
-    fn anthropic_plan(options: GenerationOptions) -> crate::execution::contract::ResolvedCallPlan {
+    fn anthropic_plan(options: GenerationOptions) -> ResolvedCallPlan {
         let runtime =
             TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
                 .unwrap()

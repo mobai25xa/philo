@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
+use philo::ProviderRuntime;
 use philo::provider::TestOnlyProfile;
-use philo::{
-    DeepSeekProfile, OfficialOpenAiProfile, OpenRouterAttribution, OpenRouterProfile,
-    ProviderRuntime, ZaiCodingProfile, ZaiStandardProfile,
+use philo::provider::profiles::OfficialOpenAiProfile;
+use philo_presets::{
+    DeepSeekProfile, OpenRouterAttribution, OpenRouterProfile, ZaiCodingProfile, ZaiStandardProfile,
 };
 
 /// Runtime preset used by the shared offline runner.

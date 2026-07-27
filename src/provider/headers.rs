@@ -1,4 +1,4 @@
-//! Layered header resolution with protected-field enforcement and value-free tracing.
+//! Layered header resolution with protected-field enforcement.
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
 use std::collections::HashSet;
@@ -147,67 +147,11 @@ impl HeaderLayer {
     }
 }
 
-/// Value-free operation kind stored in a resolution trace.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TraceOperation {
-    /// A Set operation.
-    Set,
-    /// A Remove operation.
-    Remove,
-}
-
-/// Final decision for a header operation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TraceDecision {
-    /// Value is present after this operation.
-    Set,
-    /// Value is absent after this operation.
-    Removed,
-}
-
-/// One value-free header resolution record.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HeaderTraceEntry {
-    name: HeaderName,
-    source: HeaderSource,
-    operation: TraceOperation,
-    decision: TraceDecision,
-    protected: bool,
-    sensitive: bool,
-}
-
-impl HeaderTraceEntry {
-    /// Returns normalized header name.
-    pub fn name(&self) -> &HeaderName {
-        &self.name
-    }
-    /// Returns source layer.
-    pub fn source(&self) -> HeaderSource {
-        self.source
-    }
-    /// Returns operation kind.
-    pub fn operation(&self) -> TraceOperation {
-        self.operation
-    }
-    /// Returns final operation decision.
-    pub fn decision(&self) -> TraceDecision {
-        self.decision
-    }
-    /// Returns whether policy protects the header.
-    pub fn is_protected(&self) -> bool {
-        self.protected
-    }
-    /// Returns whether the value was sensitive.
-    pub fn is_sensitive(&self) -> bool {
-        self.sensitive
-    }
-}
-
-/// Resolved per-request headers and a value-free trace.
+/// Resolved per-request headers and private lifecycle observation facts.
 #[derive(Clone)]
 pub struct ResolvedHeaders {
     headers: HeaderMap,
-    trace: Vec<HeaderTraceEntry>,
+    steps: Vec<(HeaderName, HeaderSource, bool, bool, bool)>,
 }
 
 impl ResolvedHeaders {
@@ -215,24 +159,23 @@ impl ResolvedHeaders {
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
     }
-    /// Returns the value-free resolution trace.
-    pub fn trace(&self) -> &[HeaderTraceEntry] {
-        &self.trace
-    }
-    /// Consumes the result into final headers and its value-free trace.
-    pub fn into_parts(self) -> (HeaderMap, Vec<HeaderTraceEntry>) {
-        (self.headers, self.trace)
+    /// Consumes the result into transport headers and value-free lifecycle facts.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn into_parts(
+        self,
+    ) -> (HeaderMap, Vec<(HeaderName, HeaderSource, bool, bool, bool)>) {
+        (self.headers, self.steps)
     }
     /// Returns the highest-priority source that set a final header.
     pub fn final_source(&self, name: &HeaderName) -> Option<HeaderSource> {
         if !self.headers.contains_key(name) {
             return None;
         }
-        self.trace
+        self.steps
             .iter()
             .rev()
-            .find(|entry| entry.name() == name && entry.operation() == TraceOperation::Set)
-            .map(HeaderTraceEntry::source)
+            .find(|(entry_name, _, present, _, _)| entry_name == name && *present)
+            .map(|(_, source, _, _, _)| *source)
     }
 }
 
@@ -241,7 +184,7 @@ impl fmt::Debug for ResolvedHeaders {
         let names: Vec<_> = self.headers.keys().map(HeaderName::as_str).collect();
         f.debug_struct("ResolvedHeaders")
             .field("header_names", &names)
-            .field("trace", &self.trace)
+            .field("lifecycle_steps", &self.steps)
             .finish()
     }
 }
@@ -289,20 +232,8 @@ impl HeaderPolicy {
 
     /// Returns whether a header is protected from ordinary layers.
     pub fn is_protected(&self, name: &HeaderName) -> bool {
-        matches!(
-            name.as_str(),
-            "authorization"
-                | "proxy-authorization"
-                | "host"
-                | "content-length"
-                | "content-type"
-                | "accept"
-                | "transfer-encoding"
-                | "connection"
-                | "cookie"
-                | "set-cookie"
-                | "user-agent"
-        ) || self.is_auth_header(name)
+        crate::protected::is_protected_header(name)
+            || self.is_auth_header(name)
             || self.provider_headers.contains(name)
     }
 
@@ -388,38 +319,26 @@ impl HeaderPipeline {
     fn resolve_layers(&self, mut layers: Vec<HeaderLayer>) -> Result<ResolvedHeaders, LlmError> {
         layers.sort_by_key(HeaderLayer::source);
         let mut headers = HeaderMap::new();
-        let mut trace = Vec::new();
+        let mut steps = Vec::new();
         for layer in layers {
             for operation in layer.operations {
                 match operation {
                     HeaderOperation::Set { name, value } => {
                         self.validate_operation(layer.source, &name, value.is_sensitive())?;
                         headers.insert(name.clone(), value.value().clone());
-                        trace.push(HeaderTraceEntry {
-                            protected: self.policy.is_protected(&name),
-                            name,
-                            source: layer.source,
-                            operation: TraceOperation::Set,
-                            decision: TraceDecision::Set,
-                            sensitive: value.is_sensitive(),
-                        });
+                        let protected = self.policy.is_protected(&name);
+                        steps.push((name, layer.source, true, protected, value.is_sensitive()));
                     }
                     HeaderOperation::Remove { name } => {
                         self.validate_operation(layer.source, &name, false)?;
                         headers.remove(&name);
-                        trace.push(HeaderTraceEntry {
-                            protected: self.policy.is_protected(&name),
-                            name,
-                            source: layer.source,
-                            operation: TraceOperation::Remove,
-                            decision: TraceDecision::Removed,
-                            sensitive: false,
-                        });
+                        let protected = self.policy.is_protected(&name);
+                        steps.push((name, layer.source, false, protected, false));
                     }
                 }
             }
         }
-        Ok(ResolvedHeaders { headers, trace })
+        Ok(ResolvedHeaders { headers, steps })
     }
 
     fn validate_operation(

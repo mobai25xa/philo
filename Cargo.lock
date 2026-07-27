@@ -585,6 +585,10 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http",
+ "philo-compat",
+ "philo-config",
+ "philo-presets",
+ "philo-test-support",
  "proptest",
  "rand 0.9.5",
  "reqwest",
@@ -599,6 +603,40 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "philo-compat"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "philo",
+]
+
+[[package]]
+name = "philo-config"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "http",
+ "philo",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "philo-presets"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "http",
+ "philo",
+ "url",
+]
+
+[[package]]
+name = "philo-test-support"
+version = "0.0.0"
+dependencies = [
+ "philo",
 ]
 
 [[package]]

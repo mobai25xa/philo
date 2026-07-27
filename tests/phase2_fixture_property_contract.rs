@@ -8,16 +8,25 @@ use std::sync::Mutex;
 use bytes::Bytes;
 use futures_util::StreamExt as _;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::content::{
+    ImageContent, ImageDetail, ImageMime, OpaqueReasoning, SourceIdentity, ThinkingContent,
+};
+use philo::domain::history::{
+    DiagnosticCode, DialectPolicy, HistoryCapabilities, HistoryPolicy, ThinkingReplayPolicy,
+};
+use philo::domain::history::{apply_thinking_replay_policy, normalize_history};
+use philo::domain::ids::{ProtocolId, ToolCallId, ToolName};
+use philo::domain::message::ToolResultMessage;
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::validate_tool_call;
+use philo::domain::tools::{ToolArguments, ToolCall, ToolChoice, ToolDefinition};
+use philo::error::{HistoryFailure, SchemaFailure, ToolValidationFailure};
 use philo::provider::{ModelCapabilityProfile, TestOnlyProfile};
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    AssistantEvent, CapabilityStatus, ContentPart, DiagnosticCode, DialectPolicy, FinishReason,
-    GenerateRequest, GenerationOptions, HistoryCapabilities, HistoryFailure, HistoryPolicy,
-    ImageContent, ImageDetail, ImageMime, LlmClient, Message, MessageRole, ModelId, ModelRef,
-    OpaqueReasoning, ProtocolId, ProviderId, SchemaFailure, SourceIdentity, ThinkingContent,
-    ThinkingReplayPolicy, ToolArguments, ToolCall, ToolCallId, ToolChoice, ToolDefinition,
-    ToolName, ToolResultMessage, ToolSchema, ToolValidationFailure, apply_thinking_replay_policy,
-    normalize_history, validate_tool_call,
+    AssistantEvent, ContentPart, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
+    Message, MessageRole, ModelId, ModelRef, ProviderId,
 };
 use proptest::prelude::*;
 use serde_json::{Value, json};

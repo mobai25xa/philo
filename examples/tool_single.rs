@@ -5,11 +5,15 @@
 
 mod support;
 
-use philo::{
-    CapabilityStatus, ContentPart, DialectPolicy, GenerationOptions, HistoryCapabilities,
-    HistoryPolicy, Message, MessageRole, ToolArguments, ToolCall, ToolCallId, ToolChoice,
-    ToolDefinition, ToolName, ToolResultMessage, ToolSchema, normalize_history, validate_tool_call,
-};
+use philo::domain::history::normalize_history;
+use philo::domain::history::{DialectPolicy, HistoryCapabilities, HistoryPolicy};
+use philo::domain::ids::{ToolCallId, ToolName};
+use philo::domain::message::ToolResultMessage;
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::validate_tool_call;
+use philo::domain::tools::{ToolArguments, ToolCall, ToolChoice, ToolDefinition};
+use philo::{ContentPart, GenerationOptions, Message, MessageRole};
 use serde_json::json;
 use support::ExampleResult;
 

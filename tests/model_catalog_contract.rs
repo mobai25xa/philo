@@ -2,17 +2,14 @@
 
 use std::collections::BTreeMap;
 
-use bytes::Bytes;
-use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::ids::ProtocolId;
+use philo::domain::request::{CapabilityStatus, ReasoningEffortSupport};
 use philo::provider::TestOnlyProfile;
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
-use philo::{
-    CapabilityStatus, CatalogCapabilities, CatalogSource, CatalogSourceId, CompatField,
-    CompatPatch, GenerateRequest, GenerationOptions, LlmClient, MaxOutputTokensWireFormat, Message,
-    ModelCatalog, ModelEntry, ModelId, ModelKey, ModelLimits, ModelRef, PolicySource, ProductId,
-    ProtocolId, ProviderId, ProviderModelId, ReasoningEffortSupport, SupportStatus,
-    ToolArgumentsCompat, WireModelValue, resolve_compat,
+use philo::provider::catalog::{
+    CatalogCapabilities, CatalogSource, CatalogSourceId, ModelCatalog, ModelEntry, ModelKey,
+    ModelLimits, ProductId, ProviderModelId, WireModelValue,
 };
+use philo::{ModelId, ProviderId};
 
 const ENDPOINT: &str = "http://127.0.0.1:41993/v1/chat/completions";
 
@@ -57,22 +54,11 @@ fn entry(source_id: &str, function_tools: CapabilityStatus, limits: ModelLimits)
         capabilities: capabilities(function_tools),
         limits,
         default_max_output_tokens: None,
-        compat_overrides: CompatPatch::from_source(PolicySource::ModelProfile),
         pricing: None,
         source: source(source_id, None),
-        support_status: SupportStatus::Experimental,
+        support_status: CapabilityStatus::Supported,
         provenance: BTreeMap::new(),
     }
-}
-
-fn success() -> MockResponse {
-    MockResponse::new(
-        StatusCode::OK,
-        HeaderMap::from_iter([(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))]),
-        vec![MockBodyItem::chunk(Bytes::from_static(
-            b"data: {\"id\":\"catalog\",\"model\":\"wire-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
-        ))],
-    )
 }
 
 #[test]
@@ -86,7 +72,7 @@ fn catalog_merge_is_deterministic_fieldwise_and_preserves_unknown() {
             ..ModelLimits::default()
         },
     );
-    base_entry.support_status = SupportStatus::Supported;
+    base_entry.support_status = CapabilityStatus::Supported;
     let base = ModelCatalog::from_entries([base_entry]).unwrap();
     let mut overlay_entry = entry(
         "overlay",
@@ -96,7 +82,7 @@ fn catalog_merge_is_deterministic_fieldwise_and_preserves_unknown() {
             ..ModelLimits::default()
         },
     );
-    overlay_entry.support_status = SupportStatus::Unknown;
+    overlay_entry.support_status = CapabilityStatus::Unknown;
     let overlay = ModelCatalog::from_entries([overlay_entry]).unwrap();
     let merged = ModelCatalog::merge(&[&base, &overlay]).unwrap();
     let resolved = merged.entries().next().unwrap();
@@ -107,7 +93,7 @@ fn catalog_merge_is_deterministic_fieldwise_and_preserves_unknown() {
     assert_eq!(resolved.limits.max_messages, Some(10));
     assert_eq!(resolved.limits.max_tools, Some(2));
     assert_eq!(resolved.pricing, None);
-    assert_eq!(resolved.support_status, SupportStatus::Supported);
+    assert_eq!(resolved.support_status, CapabilityStatus::Supported);
     assert_eq!(resolved.source.id().as_str(), "overlay");
     assert_eq!(
         resolved
@@ -136,10 +122,10 @@ fn catalog_merge_is_deterministic_fieldwise_and_preserves_unknown() {
 }
 
 #[test]
-fn stale_evidence_is_visible_without_rewriting_support_status() {
+fn capability_decision_and_stale_evidence_are_independent() {
     let entry = ModelEntry {
         source: source("stale", Some("2026-07-24")),
-        support_status: SupportStatus::Experimental,
+        support_status: CapabilityStatus::Supported,
         ..entry(
             "original",
             CapabilityStatus::Unknown,
@@ -147,7 +133,7 @@ fn stale_evidence_is_visible_without_rewriting_support_status() {
         )
     };
     assert!(entry.source.is_stale_on("2026-07-25").unwrap());
-    assert_eq!(entry.support_status, SupportStatus::Experimental);
+    assert_eq!(entry.support_status, CapabilityStatus::Supported);
 }
 
 #[test]
@@ -185,90 +171,6 @@ fn duplicate_and_cross_provider_catalog_entries_fail_closed() {
             .build()
             .is_err()
     );
-}
-
-#[test]
-fn catalog_merge_preserves_each_compat_leaf_source() {
-    let mut base_entry = entry("base", CapabilityStatus::Unknown, ModelLimits::default());
-    base_entry.compat_overrides = CompatPatch::from_source(PolicySource::ProviderProfile)
-        .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens);
-    let mut overlay_entry = entry("overlay", CapabilityStatus::Unknown, ModelLimits::default());
-    overlay_entry.compat_overrides = CompatPatch::from_source(PolicySource::ModelProfile)
-        .with_tool_arguments(ToolArgumentsCompat::StringOrObject);
-    let base = ModelCatalog::from_entries([base_entry]).unwrap();
-    let overlay = ModelCatalog::from_entries([overlay_entry]).unwrap();
-    let merged = ModelCatalog::merge(&[&base, &overlay]).unwrap();
-    let profile = resolve_compat(&[merged.entries().next().unwrap().compat_overrides.clone()]);
-
-    assert_eq!(
-        profile.source(CompatField::RequestMaxOutputTokens),
-        PolicySource::ProviderProfile
-    );
-    assert_eq!(
-        profile.source(CompatField::ResponseToolArguments),
-        PolicySource::ModelProfile
-    );
-}
-
-#[tokio::test]
-async fn planner_enforces_exact_model_output_limit_before_transport() {
-    let catalog = ModelCatalog::from_entries([entry(
-        "limit",
-        CapabilityStatus::Unknown,
-        ModelLimits {
-            max_output_tokens: Some(8),
-            ..ModelLimits::default()
-        },
-    )])
-    .unwrap();
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "test-key")
-        .unwrap()
-        .with_catalog(catalog)
-        .build()
-        .unwrap();
-    let mock = MockTransport::default();
-    let request = GenerateRequest::new(
-        ModelRef::new("test-only", "domain-model").unwrap(),
-        vec![Message::user("hello")],
-    )
-    .with_options(GenerationOptions::new().with_max_output_tokens(9));
-    let error = LlmClient::new(runtime, mock.clone())
-        .complete(request)
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("max_output_tokens"));
-    assert!(mock.captured_requests().is_empty());
-}
-
-#[tokio::test]
-async fn catalog_compiles_wire_model_and_safe_defaults_into_the_call_plan() {
-    let mut exact = entry(
-        "wire",
-        CapabilityStatus::Unknown,
-        ModelLimits {
-            max_output_tokens: Some(12),
-            ..ModelLimits::default()
-        },
-    );
-    exact.default_max_output_tokens = Some(7);
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "test-key")
-        .unwrap()
-        .with_catalog(ModelCatalog::from_entries([exact]).unwrap())
-        .build()
-        .unwrap();
-    let mock = MockTransport::scripted([MockExchange::response(success())]);
-    let request = GenerateRequest::new(
-        ModelRef::new("test-only", "domain-model").unwrap(),
-        vec![Message::user("hello")],
-    );
-    LlmClient::new(runtime, mock.clone())
-        .complete(request)
-        .await
-        .unwrap();
-    let body: serde_json::Value =
-        serde_json::from_slice(mock.captured_requests()[0].body()).unwrap();
-    assert_eq!(body["model"], "wire-model");
-    assert_eq!(body["max_completion_tokens"], 7);
 }
 
 #[test]

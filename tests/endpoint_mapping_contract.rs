@@ -4,17 +4,22 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::history::PolicySource;
+use philo::domain::ids::ProtocolId;
+use philo::domain::request::{CapabilityStatus, ReasoningEffortSupport};
 use philo::provider::TestOnlyProfile;
-use philo::provider::endpoint::{resolve_official, resolve_official_for, resolve_test_only};
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
-use philo::{
-    CapabilityStatus, CatalogCapabilities, CatalogSource, CatalogSourceId, CompatPatch,
-    CredentialAudience, DeploymentId, EndpointConfig, EndpointPathVariable, EndpointQuery,
-    EndpointQueryAction, EndpointQuerySource, EndpointTemplate, EndpointValues, GenerateRequest,
-    LlmClient, Message, ModelBodyWireFormat, ModelCatalog, ModelEntry, ModelId, ModelKey,
-    ModelLimits, ModelRef, PolicySource, ProductId, ProtocolId, ProviderId, ProviderModelId,
-    QueryMergeRule, ReasoningEffortSupport, RedirectPolicy, SupportStatus, WireModelValue,
+use philo::provider::catalog::{
+    CatalogCapabilities, CatalogSource, CatalogSourceId, DeploymentId, ModelCatalog, ModelEntry,
+    ModelKey, ModelLimits, ProductId, ProviderModelId, WireModelValue,
 };
+use philo::provider::endpoint::{
+    CredentialAudience, EndpointConfig, EndpointPathVariable, EndpointQuery, EndpointQueryAction,
+    EndpointQuerySource, EndpointTemplate, EndpointValues, QueryMergeRule, RedirectPolicy,
+};
+use philo::provider::endpoint::{resolve_official, resolve_official_for, resolve_test_only};
+use philo::provider::protocol_contract::{CompatProfile, ModelBodyWireFormat};
+use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
+use philo::{GenerateRequest, LlmClient, Message, ModelId, ModelRef, ProviderId};
 use proptest::prelude::*;
 use url::Url;
 
@@ -58,11 +63,9 @@ fn entry(deployment: &str) -> ModelEntry {
         },
         limits: ModelLimits::default(),
         default_max_output_tokens: None,
-        compat_overrides: CompatPatch::from_source(PolicySource::ModelProfile)
-            .with_model_body(ModelBodyWireFormat::Omit),
         pricing: None,
         source: source(),
-        support_status: SupportStatus::Experimental,
+        support_status: CapabilityStatus::Supported,
         provenance: BTreeMap::new(),
     }
 }
@@ -188,6 +191,11 @@ async fn compat_explicitly_controls_model_body_and_catalog_controls_endpoint() {
             .unwrap()
             .with_endpoint_config(template_config())
             .with_catalog(catalog)
+            .with_model_compat(
+                ModelId::new("domain-model").unwrap(),
+                CompatProfile::openai_chat_default()
+                    .with_model_body(ModelBodyWireFormat::Omit, PolicySource::ModelProfile),
+            )
             .build()
             .unwrap();
     let mock = MockTransport::scripted([MockExchange::response(success())]);

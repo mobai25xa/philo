@@ -2,7 +2,7 @@
 
 `philo` is an experimental, streaming-first Rust SDK for LLM applications.
 
-The official OpenAI Chat Completions adapter implements the frozen phase-one text path and the phase-two official semantics for function tools, tool streams/results, history normalization, image inputs, reasoning effort/usage, structured output, and local cost estimation. Phase three adds experimental OpenRouter, DeepSeek, and Z.AI profiles plus versioned configuration, typed compatibility policy, deployment mapping, diagnostics, and offline conformance. Phase four adds bounded deadlines, stage timeouts, opt-in same-provider retry, backpressure, typed rate/idempotency metadata, secure network policy, and value-free lifecycle hooks. Arbitrary request-body extensions remain out of scope.
+The official OpenAI Chat Completions adapter implements the frozen phase-one text path and the phase-two official semantics for function tools, tool streams/results, history normalization, image inputs, reasoning effort/usage, structured output, and local cost estimation. Phase three adds declarative OpenRouter, DeepSeek, and Z.AI presets in the sibling `philo-presets` crate, plus external versioned configuration, typed protocol contracts, deployment mapping, lifecycle observations, and offline conformance. Phase four adds bounded deadlines, stage timeouts, opt-in same-provider retry, backpressure, typed rate/idempotency metadata, secure network policy, and value-free lifecycle hooks. Both protocols expose bounded, protected raw body extensions for non-portable top-level fields.
 
 Phase five adds official Anthropic Messages as a second protocol behind the same
 client and reliability pipeline. Anthropic request/stream wire types remain
@@ -33,9 +33,9 @@ The current implementation includes:
 - public `LlmClient::stream/complete` entry points that still consume one stream only;
 - typed errors/identifiers and value-free lifecycle observations;
 - rustls-backed transport with fail-closed headers/auth/body limits.
-- experimental exact-product profiles for OpenRouter, DeepSeek, Z.AI standard,
-  and Z.AI coding, all currently backed by offline contract evidence only;
-- value-free provider diagnostics and a five-state support vocabulary;
+- experimental exact-product presets for OpenRouter, DeepSeek, Z.AI standard,
+  and Z.AI coding in `philo-presets`, all currently backed by offline contract evidence only;
+- three-state capability decisions with separate catalog evidence/freshness and value-free lifecycle observations;
 - one absolute deadline across attempts, layered timeouts, cancellable full-jitter
   waits, and a permanent no-retry boundary after the first delivered event;
 - an optional `tracing` lifecycle adapter without an SDK-owned subscriber/exporter;
@@ -48,7 +48,8 @@ Capabilities that are `Unknown` for an exact model id fail closed. The SDK never
 ## Minimal Complete Call
 
 ```rust,no_run
-use philo::{GenerateRequest, LlmClient, Message, ModelRef, OfficialOpenAiProfile};
+use philo::{GenerateRequest, LlmClient, Message, ModelRef};
+use philo::provider::profiles::OfficialOpenAiProfile;
 
 # async fn run() -> Result<(), philo::LlmError> {
 let key = std::env::var("OPENAI_API_KEY")
@@ -72,8 +73,9 @@ Examples:
 - phase one: `stream_text.rs`, `complete_text.rs`, `cancellation_timeout.rs`, `request_headers.rs`, `typed_errors.rs`
 - phase two: `tool_single.rs`, `tool_parallel.rs`, `tool_reject.rs`, `image_url.rs`, `structured_json_schema.rs`
 - phase three: `provider_profiles.rs`, `provider_diagnostics.rs`,
-  `provider_auth_shapes.rs`, `provider_config.rs`, `deployment_mapping.rs`,
-  `provider_routing.rs`
+  `provider_auth_shapes.rs`, `deployment_mapping.rs`, and `provider_routing.rs`;
+- fix_root migration: `quickstart.rs`, `custom_provider.rs`, `raw_extension.rs`,
+  and `config_separation.rs` (`philo-config` also owns `provider_config.rs`);
 - phase four: `reliability_controls.rs`, `lifecycle_observer.rs`,
   and `slow_consumer_drop.rs`; the offline soak lives in
   `benches/phase4_client_soak.rs`
@@ -84,7 +86,7 @@ Examples:
 
 Provider guides live in the workspace under `docs/philo/stage/guide/providers/`.
 Start with `custom-provider-definitions.md` for the public definition API and
-`provider-definition-migration.md` for compatibility notes.
+`fix-root-migration.md` for the current Public API Diff.
 The standalone repository keeps its checked support declaration in
 [`support/provider-support-matrix.md`](./support/provider-support-matrix.md),
 with [`provider-support-matrix.toml`](./support/provider-support-matrix.toml) as
@@ -147,11 +149,11 @@ See [`SECURITY.md`](./SECURITY.md) for reporting and handling expectations.
 
 The SDK still does not support audio, prompt-cache automation, the Responses API,
 cross-provider fallback, dangerous header overrides, or automatic Tool execution.
-Anthropic raw extensions are explicit, bounded, protected, non-portable, and
-diagnostic; OpenAI has no arbitrary body extension. Unsupported or unknown
+Anthropic and OpenAI raw extensions are explicit, bounded, protected, non-portable, and
+diagnostic. Unsupported or unknown
 capabilities fail closed.
 
-OpenRouter, DeepSeek, and Z.AI profiles remain `Experimental`: offline fixtures
+OpenRouter, DeepSeek, and Z.AI presets remain `Experimental`: offline fixtures
 do not constitute real-provider verification or a `Supported` claim. Their
 protected online runs, hosted exact-SHA evidence, and independent reviews are
 still pending.

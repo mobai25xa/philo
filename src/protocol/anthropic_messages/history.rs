@@ -6,7 +6,7 @@ use crate::domain::{
     NormalizationDiagnostic, SourceIdentity, ThinkingContent, ThinkingReplayPolicy,
 };
 use crate::error::{LlmError, ProtocolError};
-use crate::execution::contract::ResolvedCallPlan;
+use crate::plan::ResolvedCallPlan;
 
 use super::wire::{
     ImageSourceWire, MessageRoleWire, MessageWire, RequestContentBlockWire, SystemBlockWire,

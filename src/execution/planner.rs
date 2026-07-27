@@ -1,13 +1,13 @@
 //! Deterministic compilation of a logical generation request.
 
 use crate::domain::{
-    GenerateRequest, HistoryCapabilities, normalize_history, validate_planned_request,
+    GenerateRequest, HistoryCapabilities, normalize_history_with_limits, validate_planned_request,
     validate_request_shape,
 };
 use crate::error::LlmError;
-use crate::provider::{ProviderRequestOptions, ProviderRuntime};
+use crate::provider::ProviderRuntime;
 
-use super::contract::{
+use crate::plan::{
     CallExecutionIntent, NormalizationReport, PlanProvenance, PlannedRequest, ResolvedCallPlan,
 };
 
@@ -21,15 +21,7 @@ impl CallPlanner {
         runtime: &ProviderRuntime,
         request: &GenerateRequest,
     ) -> Result<ResolvedCallPlan, LlmError> {
-        Self::plan_with_provider_options(runtime, request, &ProviderRequestOptions::new())
-    }
-
-    pub(crate) fn plan_with_provider_options(
-        runtime: &ProviderRuntime,
-        request: &GenerateRequest,
-        provider_options: &ProviderRequestOptions,
-    ) -> Result<ResolvedCallPlan, LlmError> {
-        let policy = runtime.plan_policy_for_with_options(request, provider_options)?;
+        let policy = runtime.plan_policy_for(request)?;
         let (capability_source, model_override_applied) =
             runtime.policy_provenance_for(request.model().model());
         let capabilities = policy.capabilities.generation_options();
@@ -48,7 +40,7 @@ impl CallPlanner {
         validate_request_shape(request, &capabilities, &policy.limits.request)?;
 
         let input_message_count = request.messages().len();
-        let normalized = normalize_history(
+        let normalized = normalize_history_with_limits(
             request.messages(),
             &HistoryCapabilities::new(
                 policy.capabilities.developer_role,
@@ -56,6 +48,8 @@ impl CallPlanner {
             ),
             &policy.protocol.dialect_policy(),
             &policy.history,
+            policy.limits.request.max_messages,
+            policy.limits.request.max_text_bytes,
         )?;
         let planned = PlannedRequest {
             model: request.model().clone(),
@@ -108,7 +102,7 @@ impl CallPlanner {
 mod tests {
     use crate::domain::{
         CapabilityStatus, ContentPart, DiagnosticCode, GenerateRequest, Message, MessageRole,
-        ModelId, ModelRef, ToolArguments, ToolCall, ToolCallId, ToolName,
+        ModelId, ModelRef, ResourceLimits, ToolArguments, ToolCall, ToolCallId, ToolName,
     };
     use crate::error::{HistoryFailure, LlmError, ValidationReason};
     use crate::provider::{ModelCapabilityProfile, TestOnlyProfile};
@@ -199,6 +193,37 @@ mod tests {
             error,
             LlmError::History(ref error)
                 if error.reason() == HistoryFailure::MissingToolResult
+        ));
+    }
+
+    #[test]
+    fn resolved_history_resource_limits_reject_instead_of_truncating() {
+        let limits = ResourceLimits::builder()
+            .with_max_messages(1)
+            .with_max_total_text_bytes(4)
+            .build()
+            .unwrap();
+        let runtime =
+            TestOnlyProfile::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
+                .unwrap()
+                .with_resource_limits(limits)
+                .build()
+                .unwrap();
+
+        let too_many =
+            GenerateRequest::new(model(), vec![Message::user("one"), Message::user("two")]);
+        let error = CallPlanner::plan(&runtime, &too_many).unwrap_err();
+        assert!(matches!(
+            error,
+            LlmError::Validation(ref error)
+                if error.reason() == ValidationReason::OutOfRange
+        ));
+
+        let too_large = GenerateRequest::new(model(), vec![Message::user("12345")]);
+        let error = CallPlanner::plan(&runtime, &too_large).unwrap_err();
+        assert!(matches!(
+            error,
+            LlmError::History(ref error) if error.reason() == HistoryFailure::TextTooLarge
         ));
     }
 }

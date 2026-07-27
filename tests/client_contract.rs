@@ -7,15 +7,22 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::StreamExt as _;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::ids::{ProviderRequestId, ToolCallId, ToolName, TraceId};
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::ToolSchema;
+use philo::domain::structured::{ResponseFormat, StructuredSchema};
+use philo::domain::tools::{ToolArguments, ToolCall};
+use philo::error::{HistoryFailure, SchemaFailure, StructuredOutputFailure};
+use philo::observability::{
+    LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind, LifecycleObserver,
+};
 use philo::provider::TestOnlyProfile;
+use philo::provider::capability::ModelCapabilityProfile;
+use philo::provider::headers::HeaderSource;
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    AssistantEvent, CapabilityStatus, ContentPart, FinishReason, GenerateRequest,
-    GenerationOptions, HistoryFailure, LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind,
-    LifecycleObserver, LlmClient, LlmError, Message, MessageRole, ModelCapabilityProfile, ModelId,
-    ModelRef, ProviderRequestId, RequestControl, ResponseFormat, SchemaFailure,
-    StructuredOutputFailure, StructuredSchema, ToolArguments, ToolCall, ToolCallId, ToolName,
-    ToolSchema, TraceId, Usage,
+    AssistantEvent, ContentPart, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
+    LlmError, Message, MessageRole, ModelId, ModelRef, RequestControl, Usage,
 };
 use serde_json::Value;
 use tokio::time::sleep;
@@ -491,7 +498,13 @@ async fn lifecycle_trace_is_ordered_value_free_and_uses_typed_ids() {
     );
     assert!(kinds
         .iter()
-        .any(|kind| matches!(kind, LifecycleEventKind::HeadersResolved { trace } if trace.iter().any(|entry| entry.name() == header::AUTHORIZATION && entry.is_sensitive()))));
+        .any(|kind| matches!(kind, LifecycleEventKind::HeadersResolved { steps } if steps.iter().any(|entry| {
+            entry.0 == header::AUTHORIZATION
+                && entry.1 == HeaderSource::Auth
+                && entry.2
+                && entry.3
+                && entry.4
+        }))));
     assert!(kinds.iter().any(|kind| matches!(
         kind,
         LifecycleEventKind::StatusReceived {

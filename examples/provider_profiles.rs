@@ -2,7 +2,7 @@
 
 use std::error::Error;
 
-use philo::{
+use philo_presets::{
     DeepSeekProfile, OpenRouterAttribution, OpenRouterProfile, ZaiCodingProfile, ZaiStandardProfile,
 };
 

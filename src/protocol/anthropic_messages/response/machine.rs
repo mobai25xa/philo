@@ -14,8 +14,8 @@ use crate::error::{
     ErrorStage, LlmError, ProtocolError, RetriableHint, TruncatedStreamError, UnknownFinishReason,
     UnsupportedResponseSemantics,
 };
+use crate::plan::ResponseLimits;
 use crate::provider::AnthropicUsageCompat;
-use crate::provider::call_policy::ResponseLimits;
 use crate::transport::SseEvent;
 
 use super::super::wire::{

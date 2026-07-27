@@ -53,104 +53,30 @@ pub mod client;
 pub mod domain;
 pub mod error;
 mod execution;
-mod extensions;
 pub mod observability;
+mod plan;
+pub mod protected;
 mod protocol;
-/// Protocol-scoped typed options and the bounded dangerous escape hatch.
-pub mod protocol_options {
-    pub use crate::extensions::*;
-}
+pub mod protocol_options;
 pub mod provider;
 pub mod transport;
 
+// The crate root exports only what a first request needs: construct a runtime,
+// build a request, stream it, handle the error. Everything else stays public at
+// its owning module path — see `docs/philo/stage/suggest/fix_root/01-public-surface-reduction.md`.
 pub use client::{AssistantStream, LlmClient, RequestControl};
 pub use domain::{
-    AssistantEvent, AssistantMessage, CapabilitySet, CapabilityStatus, ContentIndex, ContentPart,
-    CostEstimate, CurrencyCode, DiagnosticCode, DialectPolicy, FinishReason, GenerateRequest,
-    GenerationId, GenerationOptions, HistoryCapabilities, HistoryPolicy, IdMapping, ImageContent,
-    ImageDetail, ImageMime, ImageSource, ImageWireFormat, LlmRequest, LocalRequestId, Message,
-    MessageRole, MissingToolResultPolicy, ModelId, ModelRef, MoneyAmount, NormalizationDiagnostic,
-    NormalizedContext, OpaqueReasoning, ParallelToolCalls, PolicySource, PriceProfile, ProtocolId,
-    ProviderId, ProviderRequestId, ReasoningEffort, ReasoningEffortSupport, RefusalContent,
-    RequestMetadata, RequestTimeout, ResourceLimits, ResourceLimitsBuilder, ResponseFormat,
-    SchemaLimits, SourceIdentity, StreamUsagePolicy, StructuredOutputWireFormat, StructuredSchema,
-    ThinkingContent, ThinkingReplayPolicy, ThinkingRequest, ThinkingWireFormat, TokenCount,
-    ToolArguments, ToolCall, ToolCallId, ToolCallIdPolicy, ToolChoice, ToolChoiceWireFormat,
-    ToolDefinition, ToolLimits, ToolName, ToolResultMessage, ToolResultNamePolicy, ToolSchema,
-    TraceId, UnsupportedContentPolicy, Usage, UsageDetails, UsageMergeOutcome, ValidatedToolCall,
-    WireToolIndex, apply_thinking_replay_policy, collect_assistant_message,
-    collect_assistant_message_for_format, drop_opaque_reasoning, estimate_cost,
-    merge_usage_details, normalize_history, validate_tool_call, validate_tool_options,
+    AssistantEvent, AssistantMessage, ContentPart, FinishReason, GenerateRequest,
+    GenerationOptions, Message, MessageRole, ModelId, ModelRef, ProviderId, TokenCount, Usage,
+    UsageDetails,
 };
-pub use error::{
-    AuthFailureKind, AuthenticationError, BodySummary, CapabilityError, CostError, CostFailure,
-    CredentialError, CredentialFailure, ErrorStage, HeaderPolicyError, HeaderPolicyFailure,
-    HistoryError, HistoryFailure, HttpStatusError, LlmError, ProtocolError, ProviderConfigError,
-    ProviderConfigFailure, ProviderRegistryError, ProviderRegistryFailure, RetriableHint,
-    RetryReason, SchemaError, SchemaFailure, StructuredOutputError, StructuredOutputFailure,
-    TimeoutError, TimeoutStage, ToolValidationError, ToolValidationFailure, TransportError,
-    TruncatedStreamError, UnknownFinishReason, ValidationError, ValidationReason,
-};
+pub use error::LlmError;
 pub use execution::reliability::{RetryPolicy, RetryWaitPolicy, TimeoutPolicy};
-pub use extensions::{
-    ANTHROPIC_MESSAGES_PROTOCOL_ID, AnthropicEffort, AnthropicMessagesOptions,
-    AnthropicRawExtension, AnthropicThinkingDisplay, ProtocolOptionDiagnostic, ProtocolOptions,
-};
-#[cfg(feature = "tracing")]
-pub use observability::TracingObserver;
-pub use observability::{
-    AttemptId, AttemptIdentity, LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind,
-    LifecycleIdentity, LifecycleObserver, RetryStopReason,
-};
+pub use protocol_options::ProtocolOptions;
 pub use provider::{
-    AnthropicUsageCompat, ApiKey, ApiKeyHeaderAuth, AuthContext, AuthDiagnostics, AuthProvider,
-    AuthScheme, AuthSchemeKind, BearerAuth, BearerCredential, CatalogCapabilities, CatalogDefaults,
-    CatalogSource, CatalogSourceId, ClientIdentity, ClientIdentityConfig, ClientIdentityFragment,
-    CompatDiagnostic, CompatField, CompatPatch, CompatProfile, ConfigSchemaVersion, ConfigSource,
-    ConfigSourceId, ConfigSourceKind, ConfigSourceLocation, ConfigValue, ConstraintStrength,
-    CredentialAudience, CredentialAudienceSpec, CredentialBinding, CredentialFuture,
-    CredentialIdentity, CredentialSourceKind, DataRetention, DeepSeekProfile, DeploymentId,
-    DetectionConfidence, DetectionExplanation, DetectionSuggestion, DetectionUnknownReason,
-    DomainModelId, DynamicAuth, DynamicCredential, DynamicCredentialCache,
-    DynamicCredentialContext, DynamicCredentialScheme, DynamicCredentialSource,
-    DynamicHeaderContext, DynamicHeaderFuture, DynamicHeaderPolicy, DynamicHeaderSource,
-    DynamicResponseFormat, EffectiveSupportStatus, EndpointConfig, EndpointDetection,
-    EndpointDetectionPolicy, EndpointDetector, EndpointDiagnostics, EndpointNetworkPolicy,
-    EndpointPathVariable, EndpointQuery, EndpointQueryAction, EndpointQueryDiagnostic,
-    EndpointQuerySource, EndpointResolutionDiagnostics, EndpointSpec, EndpointTemplate,
-    EndpointValues, EnvironmentSecretResolver, EvidenceVerification, FallbackDimension,
-    FieldProvenance, FieldState, FinishReasonCompat, HeaderDiagnostic, HeaderLayer,
-    HeaderOperation, HeaderPipeline, HeaderPolicy, HeaderSource, HeaderTraceEntry, HistoryCompat,
-    IdempotencyCapability, IdempotencyKey, IdempotencyKeySource, IdempotencyPolicy,
-    InlineErrorCompat, ListMerge, MapMerge, MaxOutputTokensWireFormat, ModelBodyWireFormat,
-    ModelCapabilityProfile, ModelCatalog, ModelEntry, ModelKey, ModelLimits, MultiHeaderAuth,
-    NamedConfigValue, NamedListMerge, NoAuth, NormalizedEndpointFacts,
-    OFFICIAL_ANTHROPIC_API_VERSION, OFFICIAL_ANTHROPIC_CAPABILITY_REVIEW_DATE,
-    OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE, OfficialAnthropicFactory, OfficialAnthropicProfile,
-    OfficialOpenAiFactory, OfficialOpenAiProfile, OpenRouterAttribution, OpenRouterProfile,
-    OpenRouterRoutingContract, OpenRouterRoutingPatch, Origin, ProductId, ProtocolDialect,
-    ProviderCapabilities, ProviderConfigDocument, ProviderConfigField, ProviderConfigLayer,
-    ProviderConfigSnapshot, ProviderDefinition, ProviderDefinitionBuilder,
-    ProviderDeploymentConfig, ProviderDiagnostics, ProviderModelId, ProviderProfile,
-    ProviderRegistration, ProviderRegistrationMetadata, ProviderRegistry, ProviderRequestOptions,
-    ProviderRuntime, ProviderRuntimeFactory, ProviderSelection, ProviderSelectionInput,
-    ProviderSelectionSource, ProviderSelector, ProviderTransportOptions, QueryMergeRule,
-    RateLimitHeaderKind, RateLimitHeaderSpec, RateLimitObservation, RateLimitPolicy,
-    RateLimitQuota, RateLimitReset, RateLimitSourceKind, RateLimitUnit, RateLimitValue,
-    RedirectPolicy, RequestCompat, ResolvedEndpoint, ResolvedHeaders, ResolvedModelMapping,
-    ResolvedProviderRouting, ResponseCompat, RoutingFallback, RoutingField, RoutingRegion,
-    RoutingSort, SecretReference, SecretResolver, SensitiveHeaderValue, StaticProviderFactory,
-    SupportDiagnostics, SupportStatus, TenantId, ToolArgumentsCompat, TraceDecision,
-    TraceOperation, UpstreamId, UsageCompat, WireModelValue, ZaiCodingProfile, ZaiStandardProfile,
-    resolve_compat,
+    ProviderDefinition, ProviderDefinitionBuilder, ProviderDeploymentConfig, ProviderRuntime,
 };
-pub use transport::{
-    ByteStream, CancellationToken, ConnectionPoolPolicy, DnsPolicy, ExplicitProxy, HttpRequest,
-    HttpResponse, HttpVersionPolicy, IpPreference, LimitedBody, MinimumTlsVersion, NetworkPolicy,
-    NoProxyList, ProxyCredentials, ProxyPolicy, RequestLifecycle, ReqwestTransport, SseConfig,
-    SseDecoder, SseError, SseEvent, SseLimit, TlsPolicy, Transport, TransportContext,
-    TransportFuture, read_body_limited,
-};
+pub use transport::{ReqwestTransport, Transport};
 
 #[cfg(test)]
 mod tests {

@@ -3,10 +3,10 @@
 use std::collections::BTreeSet;
 use std::error::Error;
 
-use philo::{
-    CapabilityStatus, GenerateRequest, LlmClient, Message, ModelCapabilityProfile, ModelId,
-    ModelRef, OfficialOpenAiProfile, ReasoningEffort, ReasoningEffortSupport,
-};
+use philo::domain::request::{CapabilityStatus, ReasoningEffort, ReasoningEffortSupport};
+use philo::provider::capability::ModelCapabilityProfile;
+use philo::provider::profiles::OfficialOpenAiProfile;
+use philo::{GenerateRequest, LlmClient, Message, ModelId, ModelRef};
 
 pub(crate) type ExampleResult<T = ()> = Result<T, Box<dyn Error>>;
 
