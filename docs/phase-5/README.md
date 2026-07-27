@@ -11,9 +11,9 @@ guess a protocol and never falls back to another provider or protocol.
 Use a named secret reference so configuration contains no credential value:
 
 ```rust,no_run
-use philo::ProviderId;
-use philo::provider::config::{ConfigSource, ConfigValue, EnvironmentSecretResolver, ProviderConfigLayer, ProviderConfigSnapshot, SecretReference};
-use philo::provider::registry::ProviderRegistry;
+use philo::ProviderRuntime;
+use philo::provider::secret::{EnvironmentSecretResolver, SecretReference};
+use philo_config::{ConfigSource, ConfigValue, ProviderConfigLayer, ProviderConfigSnapshot};
 
 # fn build() -> Result<philo::ProviderRuntime, philo::LlmError> {
 let credential = ProviderConfigLayer::new(ConfigSource::environment_secret(
@@ -23,12 +23,9 @@ let credential = ProviderConfigLayer::new(ConfigSource::environment_secret(
     "ANTHROPIC_API_KEY",
 )?));
 let config = ProviderConfigSnapshot::official_anthropic()?.merge_layers([credential])?;
-let provider = ProviderId::new("official-anthropic")?;
-let runtime = ProviderRegistry::with_official_anthropic()?.build(
-    &provider,
-    &config,
-    &EnvironmentSecretResolver,
-)?;
+let (definition, deployment) = config.official_anthropic_inputs()?;
+let profile = definition.compile(&deployment, &EnvironmentSecretResolver)?;
+let runtime = ProviderRuntime::build(profile)?;
 # Ok(runtime)
 # }
 ```

@@ -31,6 +31,17 @@ fn rust_sources(directory: &Path, output: &mut Vec<PathBuf>) {
     }
 }
 
+fn markdown_sources(directory: &Path, output: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            markdown_sources(&path, output);
+        } else if path.extension().is_some_and(|extension| extension == "md") {
+            output.push(path);
+        }
+    }
+}
+
 fn production_sources_under(directory: &str) -> Vec<(String, String)> {
     let mut files = Vec::new();
     rust_sources(&crate_root().join(directory), &mut files);
@@ -1565,17 +1576,9 @@ fn deliberate_open_protocol_options_container_is_rejected() {
 
 #[test]
 fn current_user_docs_do_not_reintroduce_removed_rust_paths() {
-    let docs_root = crate_root().join("../docs/philo");
-    let mut files = vec![
-        crate_root().join("README.md"),
-        docs_root.join("stage/cotalogue/project-structure.md"),
-    ];
-    files.extend(
-        fs::read_dir(docs_root.join("stage/guide/providers"))
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| path.extension().is_some_and(|extension| extension == "md")),
-    );
+    let mut files = vec![crate_root().join("README.md")];
+    markdown_sources(&crate_root().join("docs"), &mut files);
+    files.sort();
 
     for file in files {
         let text = fs::read_to_string(&file).unwrap();
