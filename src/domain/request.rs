@@ -22,7 +22,7 @@ use super::{
     ContentPart, ImageDetail, ImageSource, Message, MessageRole, ModelRef, ResourceLimits,
 };
 use crate::error::{CapabilityError, LlmError, ValidationError, ValidationReason};
-use crate::extensions::ProtocolOptions;
+use crate::protocol_options::ProtocolOptions;
 
 /// A three-state capability declaration used for fail-closed validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -876,17 +876,5 @@ fn check_capability(field: &str, status: CapabilityStatus) -> Result<(), LlmErro
 }
 
 fn is_protected(name: &HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "authorization"
-            | "proxy-authorization"
-            | "content-type"
-            | "accept"
-            | "host"
-            | "user-agent"
-            | "content-length"
-            | "transfer-encoding"
-            | "connection"
-            | "cookie"
-    )
+    crate::protected::is_protected_header(name)
 }

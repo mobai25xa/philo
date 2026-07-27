@@ -7,6 +7,7 @@ mod replay;
 
 pub use diagnostics::{DiagnosticCode, IdMapping, NormalizationDiagnostic, NormalizedContext};
 pub use normalize::normalize_history;
+pub(crate) use normalize::normalize_history_with_limits;
 pub use policy::{
     DialectPolicy, HistoryCapabilities, HistoryPolicy, ImageWireFormat, MissingToolResultPolicy,
     PolicySource, StreamUsagePolicy, StructuredOutputWireFormat, ThinkingReplayPolicy,

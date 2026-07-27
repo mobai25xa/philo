@@ -17,8 +17,8 @@ use crate::error::{HistoryError, HistoryFailure};
 
 use super::diagnostics::{DiagnosticCode, DiagnosticCounter, IdMapping, NormalizedContext};
 use super::policy::{
-    DialectPolicy, HistoryCapabilities, HistoryPolicy, MissingToolResultPolicy,
-    ThinkingReplayPolicy, ToolCallIdPolicy, UnsupportedContentPolicy,
+    DialectPolicy, HistoryCapabilities, HistoryPolicy, ThinkingReplayPolicy, ToolCallIdPolicy,
+    UnsupportedContentPolicy,
 };
 
 /// Normalizes domain history for a target profile without mutating the input.
@@ -28,9 +28,27 @@ pub fn normalize_history(
     dialect: &DialectPolicy,
     policy: &HistoryPolicy,
 ) -> Result<NormalizedContext, HistoryError> {
-    validate_policy_supported(policy)?;
+    let limits = crate::domain::ResourceLimits::official();
+    normalize_history_with_limits(
+        messages,
+        capabilities,
+        dialect,
+        policy,
+        limits.max_messages,
+        limits.max_total_text_bytes,
+    )
+}
 
-    if messages.len() > policy.max_messages {
+/// Normalizes history with a resolved fail-closed resource ceiling.
+pub(crate) fn normalize_history_with_limits(
+    messages: &[Message],
+    capabilities: &HistoryCapabilities,
+    dialect: &DialectPolicy,
+    policy: &HistoryPolicy,
+    max_messages: usize,
+    max_total_text_bytes: usize,
+) -> Result<NormalizedContext, HistoryError> {
+    if messages.len() > max_messages {
         return Err(HistoryError::new(
             "messages",
             HistoryFailure::TooManyMessages,
@@ -72,7 +90,7 @@ pub fn normalize_history(
                     policy,
                     &mut diagnostics,
                     &mut total_text_bytes,
-                    policy.max_total_text_bytes,
+                    max_total_text_bytes,
                 )?;
                 if let Some(message) = normalized {
                     output.push(message);
@@ -87,7 +105,7 @@ pub fn normalize_history(
                     policy,
                     &mut diagnostics,
                     &mut total_text_bytes,
-                    policy.max_total_text_bytes,
+                    max_total_text_bytes,
                 )?;
                 if let Some(message) = normalized {
                     output.push(message);
@@ -113,7 +131,7 @@ pub fn normalize_history(
                     &mut diagnostics,
                     &mut BTreeSet::new(),
                     &mut total_text_bytes,
-                    policy.max_total_text_bytes,
+                    max_total_text_bytes,
                 )?;
                 let mapping_start = id_mappings.len();
                 id_mappings.extend(local_mappings);
@@ -196,8 +214,12 @@ pub fn normalize_history(
                             ));
                         }
                     }
-                    let remapped =
-                        remap_tool_result(result, &mapped_id, &mut total_text_bytes, policy)?;
+                    let remapped = remap_tool_result(
+                        result,
+                        &mapped_id,
+                        &mut total_text_bytes,
+                        max_total_text_bytes,
+                    )?;
                     results.push(remapped);
                     index += 1;
                 }
@@ -218,7 +240,7 @@ pub fn normalize_history(
         }
     }
 
-    if output.len() > policy.max_messages {
+    if output.len() > max_messages {
         return Err(HistoryError::new(
             "messages",
             HistoryFailure::TooManyMessages,
@@ -232,26 +254,6 @@ pub fn normalize_history(
         id_mappings,
         diagnostics.into_vec(),
     ))
-}
-
-fn validate_policy_supported(policy: &HistoryPolicy) -> Result<(), HistoryError> {
-    if !matches!(policy.missing_tool_result, MissingToolResultPolicy::Reject) {
-        return Err(HistoryError::new(
-            "history_policy.missing_tool_result",
-            HistoryFailure::UnsupportedPolicy,
-            None,
-            "only MissingToolResultPolicy::Reject is supported in phase two",
-        ));
-    }
-    if !matches!(policy.unsupported_content, UnsupportedContentPolicy::Reject) {
-        return Err(HistoryError::new(
-            "history_policy.unsupported_content",
-            HistoryFailure::UnsupportedPolicy,
-            None,
-            "only UnsupportedContentPolicy::Reject is supported in phase two",
-        ));
-    }
-    Ok(())
 }
 
 fn normalize_plain_message(
@@ -594,12 +596,12 @@ fn remap_tool_result(
     result: &ToolResultMessage,
     mapped_id: &ToolCallId,
     total_text_bytes: &mut usize,
-    policy: &HistoryPolicy,
+    max_total_text_bytes: usize,
 ) -> Result<ToolResultMessage, HistoryError> {
     for part in result.content() {
         match part {
             ContentPart::Text { text } => {
-                add_text_bytes(total_text_bytes, text.len(), policy.max_total_text_bytes)?;
+                add_text_bytes(total_text_bytes, text.len(), max_total_text_bytes)?;
             }
             ContentPart::Image(_)
             | ContentPart::Thinking(_)

@@ -15,7 +15,6 @@ use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::catalog::{ModelCatalog, ProductId};
-use super::compat::{CompatPatch, OpenRouterRoutingContract};
 use super::endpoint::{CredentialBinding, EndpointConfig, resolve_official, resolve_test_only};
 use super::headers::{DynamicHeaderPolicy, HeaderOperation};
 use super::{IdempotencyPolicy, RateLimitPolicy};
@@ -36,9 +35,7 @@ pub struct ProviderProfile {
     pub(super) capabilities: ProviderCapabilities,
     pub(super) model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     pub(super) catalog: ModelCatalog,
-    pub(super) provider_compat: CompatPatch,
-    pub(super) model_compat: BTreeMap<ModelId, CompatPatch>,
-    pub(super) openrouter_routing: Option<OpenRouterRoutingContract>,
+    pub(super) model_protocol_contracts: BTreeMap<ModelId, ResolvedProtocolContract>,
     pub(super) dialect: ProtocolDialect,
     pub(super) protocol_contract: ResolvedProtocolContract,
     pub(super) transport: ProviderTransportOptions,
@@ -65,9 +62,7 @@ pub(super) struct ProviderProfileParts {
     pub(super) capabilities: ProviderCapabilities,
     pub(super) model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     pub(super) catalog: ModelCatalog,
-    pub(super) provider_compat: CompatPatch,
-    pub(super) model_compat: BTreeMap<ModelId, CompatPatch>,
-    pub(super) openrouter_routing: Option<OpenRouterRoutingContract>,
+    pub(super) model_protocol_contracts: BTreeMap<ModelId, ResolvedProtocolContract>,
     pub(super) dialect: ProtocolDialect,
     pub(super) protocol_contract: ResolvedProtocolContract,
     pub(super) transport: ProviderTransportOptions,
@@ -153,9 +148,7 @@ impl ProviderProfile {
             capabilities: parts.capabilities,
             model_capabilities: parts.model_capabilities,
             catalog: parts.catalog,
-            provider_compat: parts.provider_compat,
-            model_compat: parts.model_compat,
-            openrouter_routing: parts.openrouter_routing,
+            model_protocol_contracts: parts.model_protocol_contracts,
             dialect: parts.dialect,
             protocol_contract: parts.protocol_contract,
             transport: parts.transport,
@@ -265,9 +258,7 @@ mod tests {
             capabilities: ProviderCapabilities::official_openai(),
             model_capabilities: BTreeMap::<ModelId, ModelCapabilityProfile>::new(),
             catalog: ModelCatalog::default(),
-            provider_compat: CompatPatch::from_source(crate::domain::PolicySource::ProviderProfile),
-            model_compat: BTreeMap::new(),
-            openrouter_routing: None,
+            model_protocol_contracts: BTreeMap::new(),
             dialect: ProtocolDialect::OpenAiChatCompletions,
             protocol_contract: ResolvedProtocolContract::strict_openai_chat(),
             transport: ProviderTransportOptions::secure_defaults(),

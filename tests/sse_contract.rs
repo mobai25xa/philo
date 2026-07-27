@@ -10,10 +10,10 @@ use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::task::noop_waker_ref;
 use futures_util::{StreamExt as _, stream};
-use philo::{
-    ByteStream, ErrorStage, LlmError, RetriableHint, SseConfig, SseDecoder, SseError, SseEvent,
-    SseLimit, TransportError,
-};
+use philo::LlmError;
+use philo::error::{ErrorStage, RetriableHint, TransportError};
+use philo::transport::ByteStream;
+use philo::transport::{SseConfig, SseDecoder, SseError, SseEvent, SseLimit};
 use proptest::prelude::*;
 
 async fn decode_chunks(chunks: Vec<Bytes>, config: SseConfig) -> Vec<Result<SseEvent, SseError>> {

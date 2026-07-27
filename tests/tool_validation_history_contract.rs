@@ -1,12 +1,19 @@
 //! Phase-two tool validation, tool result pairing, and history normalization tests.
 
-use philo::{
-    CapabilityStatus, ContentPart, DiagnosticCode, DialectPolicy, HistoryCapabilities,
-    HistoryFailure, HistoryPolicy, LlmError, Message, MissingToolResultPolicy, ThinkingContent,
-    ThinkingReplayPolicy, ToolArguments, ToolCall, ToolCallId, ToolDefinition, ToolName,
-    ToolResultMessage, ToolSchema, ToolValidationFailure, UnsupportedContentPolicy,
-    normalize_history, validate_tool_call,
+use philo::domain::content::{ImageContent, ImageDetail, ThinkingContent};
+use philo::domain::history::normalize_history;
+use philo::domain::history::{
+    DiagnosticCode, DialectPolicy, HistoryCapabilities, HistoryPolicy, ThinkingReplayPolicy,
+    UnsupportedContentPolicy,
 };
+use philo::domain::ids::{ToolCallId, ToolName};
+use philo::domain::message::ToolResultMessage;
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::validate_tool_call;
+use philo::domain::tools::{ToolArguments, ToolCall, ToolDefinition};
+use philo::error::{HistoryFailure, ToolValidationFailure};
+use philo::{ContentPart, LlmError, Message};
 use serde_json::json;
 
 fn object_schema() -> ToolSchema {
@@ -283,7 +290,7 @@ fn history_sanitizes_tool_call_ids_and_drops_thinking() {
 }
 
 #[test]
-fn history_removes_empty_assistant_and_rejects_only_unsupported_policy() {
+fn history_removes_empty_assistant_and_reports_every_content_drop() {
     let input = vec![
         Message::user("hi"),
         Message::new(philo::MessageRole::Assistant, vec![]),
@@ -305,17 +312,6 @@ fn history_removes_empty_assistant_and_rejects_only_unsupported_policy() {
     );
 
     let mut policy = HistoryPolicy::official_openai();
-    policy.missing_tool_result = MissingToolResultPolicy::SynthesizeError;
-    let error = normalize_history(
-        &input,
-        &history_caps(),
-        &DialectPolicy::official_openai(),
-        &policy,
-    )
-    .unwrap_err();
-    assert_eq!(error.reason(), HistoryFailure::UnsupportedPolicy);
-
-    policy = HistoryPolicy::official_openai();
     policy.thinking_replay = ThinkingReplayPolicy::SameSourceOnly;
     let same_source_input = vec![
         Message::user("hi"),
@@ -338,14 +334,27 @@ fn history_removes_empty_assistant_and_rejects_only_unsupported_policy() {
 
     policy = HistoryPolicy::official_openai();
     policy.unsupported_content = UnsupportedContentPolicy::DropWithDiagnostic;
-    let error = normalize_history(
-        &input,
+    let image_input = vec![Message::new(
+        philo::MessageRole::User,
+        vec![
+            ContentPart::text("describe"),
+            ContentPart::Image(
+                ImageContent::parse_url("https://example.com/image.png", ImageDetail::Auto)
+                    .unwrap(),
+            ),
+        ],
+    )];
+    let normalized = normalize_history(
+        &image_input,
         &history_caps(),
         &DialectPolicy::official_openai(),
         &policy,
     )
-    .unwrap_err();
-    assert_eq!(error.reason(), HistoryFailure::UnsupportedPolicy);
+    .unwrap();
+    assert_eq!(normalized.messages()[0].content().len(), 1);
+    assert!(normalized.diagnostics().iter().any(|item| {
+        item.code() == DiagnosticCode::DroppedUnsupportedImage && item.count() == 1
+    }));
 }
 
 #[test]

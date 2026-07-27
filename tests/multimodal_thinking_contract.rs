@@ -4,13 +4,24 @@ use std::collections::BTreeSet;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bytes::Bytes;
+use philo::domain::content::{
+    ImageContent, ImageDetail, ImageMime, ImageSource, OpaqueReasoning, SourceIdentity,
+    ThinkingContent,
+};
+use philo::domain::history::{
+    DiagnosticCode, HistoryCapabilities, HistoryPolicy, ThinkingReplayPolicy,
+};
+use philo::domain::history::{apply_thinking_replay_policy, normalize_history};
+use philo::domain::ids::ProtocolId;
+use philo::domain::limits::ResourceLimits;
+use philo::domain::message::ToolResultMessage;
+use philo::domain::request::{
+    CapabilitySet, CapabilityStatus, ReasoningEffort, ReasoningEffortSupport, ThinkingRequest,
+};
+use philo::error::HistoryFailure;
 use philo::{
-    CapabilitySet, CapabilityStatus, ContentPart, DiagnosticCode, GenerateRequest,
-    GenerationOptions, HistoryCapabilities, HistoryFailure, HistoryPolicy, ImageContent,
-    ImageDetail, ImageMime, ImageSource, Message, MessageRole, ModelId, OpaqueReasoning,
-    ProtocolId, ProviderId, ReasoningEffort, ReasoningEffortSupport, ResourceLimits,
-    SourceIdentity, ThinkingContent, ThinkingReplayPolicy, ThinkingRequest, TokenCount,
-    ToolResultMessage, UsageDetails, apply_thinking_replay_policy, normalize_history,
+    ContentPart, GenerateRequest, GenerationOptions, Message, MessageRole, ModelId, ProviderId,
+    TokenCount, UsageDetails,
 };
 
 fn png_bytes() -> Bytes {
@@ -116,8 +127,8 @@ fn request_validation_enforces_image_and_reasoning_capabilities() {
 
 #[test]
 fn tool_result_images_fail_closed_and_history_rejects_unsupported_images() {
-    let call_id = philo::ToolCallId::new("call_1").unwrap();
-    let name = philo::ToolName::new("tool").unwrap();
+    let call_id = philo::domain::ids::ToolCallId::new("call_1").unwrap();
+    let name = philo::domain::ids::ToolName::new("tool").unwrap();
     let image = ImageContent::from_inline(ImageMime::Png, png_bytes(), ImageDetail::Auto).unwrap();
     let err = ToolResultMessage::new(
         call_id,
@@ -135,7 +146,7 @@ fn tool_result_images_fail_closed_and_history_rejects_unsupported_images() {
             vec![ContentPart::text("look"), ContentPart::Image(image)],
         )],
         &HistoryCapabilities::official_openai_defaults(),
-        &philo::DialectPolicy::official_openai(),
+        &philo::domain::history::DialectPolicy::official_openai(),
         &HistoryPolicy::official_openai(),
     )
     .unwrap_err();

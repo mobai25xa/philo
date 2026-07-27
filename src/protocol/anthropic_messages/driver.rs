@@ -4,7 +4,7 @@ use http::{HeaderValue, Method, header};
 
 use crate::domain::{ContentPart, MessageRole, ThinkingRequest};
 use crate::error::LlmError;
-use crate::execution::contract::ResolvedCallPlan;
+use crate::plan::ResolvedCallPlan;
 use crate::protocol::{
     AnthropicMessagesResponsePlan, ExpectedContentType, HttpResponseRequirements,
     MaxOutputTokensSource, PreparedCall, ProtocolOperation, ProtocolRequestParts,

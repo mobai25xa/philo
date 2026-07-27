@@ -7,8 +7,8 @@ use crate::domain::{
     AssistantEvent, ContentIndex, ToolArguments, ToolCall, ToolCallId, ToolName, WireToolIndex,
 };
 use crate::error::LlmError;
+use crate::plan::ResponseLimits;
 use crate::provider::ToolArgumentsCompat;
-use crate::provider::call_policy::ResponseLimits;
 
 pub(super) struct ToolCallAccumulator {
     pending_by_wire_index: BTreeMap<WireToolIndex, PendingToolCall>,

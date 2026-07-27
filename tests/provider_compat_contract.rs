@@ -4,19 +4,25 @@ use std::collections::BTreeSet;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::ProviderRuntime;
+use philo::TokenCount;
+use philo::domain::content::{ImageContent, ImageDetail};
+use philo::domain::history::PolicySource;
+use philo::domain::ids::ToolName;
+use philo::domain::request::{CapabilityStatus, ReasoningEffort, ReasoningEffortSupport};
+use philo::domain::schema::ToolSchema;
+use philo::domain::structured::{ResponseFormat, StructuredSchema};
+use philo::domain::tools::{ParallelToolCalls, ToolChoice, ToolDefinition};
 use philo::provider::TestOnlyProfile;
+use philo::provider::capability::{ModelCapabilityProfile, ProtocolDialect};
+use philo::provider::profiles::OfficialOpenAiProfile;
+use philo::provider::protocol_contract::{
+    CompatProfile, FinishReasonCompat, MaxOutputTokensWireFormat, ToolArgumentsCompat, UsageCompat,
+};
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    CapabilityStatus, ContentPart, GenerateRequest, GenerationOptions, ImageContent, ImageDetail,
-    Message, MessageRole, ModelCapabilityProfile, ModelId, ModelRef, ParallelToolCalls,
-    ProtocolDialect, ReasoningEffort, ReasoningEffortSupport, ResponseFormat, StructuredSchema,
-    ToolChoice, ToolDefinition, ToolName, ToolSchema,
+    ContentPart, GenerateRequest, GenerationOptions, Message, MessageRole, ModelId, ModelRef,
 };
-use philo::{
-    CompatField, CompatPatch, FinishReasonCompat, MaxOutputTokensWireFormat, PolicySource,
-    TokenCount, ToolArgumentsCompat, UsageCompat, resolve_compat,
-};
-use philo::{OfficialOpenAiProfile, ProviderRuntime};
 use serde_json::json;
 
 const OFFICIAL_KEY: &str = "philo-compat-official-key-canary";
@@ -149,8 +155,10 @@ async fn typed_request_compat_selects_max_tokens_without_a_public_payload_escape
         .unwrap()
         .with_model_compat(
             ModelId::new("gpt-compat-wire").unwrap(),
-            CompatPatch::from_source(PolicySource::ModelProfile)
-                .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens),
+            CompatProfile::openai_chat_default().with_max_output_tokens(
+                MaxOutputTokensWireFormat::MaxTokens,
+                PolicySource::ModelProfile,
+            ),
         )
         .build()
         .unwrap();
@@ -171,56 +179,19 @@ async fn typed_request_compat_selects_max_tokens_without_a_public_payload_escape
 }
 
 #[test]
-fn compat_merge_is_fieldwise_deterministic_and_traced() {
-    let provider = CompatPatch::from_source(PolicySource::ProviderProfile)
-        .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens);
-    let model = CompatPatch::from_source(PolicySource::ModelProfile)
-        .with_tool_arguments(ToolArgumentsCompat::StringOrObject);
-    let resolved = resolve_compat(&[provider, model]);
-    assert_eq!(
-        resolved.request().max_output_tokens,
-        MaxOutputTokensWireFormat::MaxTokens
-    );
-    assert_eq!(
-        resolved.response().tool_arguments,
-        ToolArgumentsCompat::StringOrObject
-    );
-    assert_eq!(
-        resolved.source(CompatField::RequestMaxOutputTokens),
-        PolicySource::ProviderProfile
-    );
-    assert_eq!(
-        resolved.source(CompatField::ResponseToolArguments),
-        PolicySource::ModelProfile
-    );
-    assert_eq!(
-        resolved.source(CompatField::RequestImage),
-        PolicySource::ProtocolDefault
-    );
-}
-
-#[tokio::test]
-async fn illegal_capability_compat_pairs_fail_before_transport() {
-    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+fn illegal_capability_compat_pairs_fail_when_the_definition_is_built() {
+    let error = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .with_model_compat(
             ModelId::new("gpt-invalid-compat").unwrap(),
-            CompatPatch::from_source(PolicySource::ModelProfile)
-                .with_tool_arguments(ToolArgumentsCompat::StringOrObject),
+            CompatProfile::openai_chat_default().with_tool_arguments(
+                ToolArgumentsCompat::StringOrObject,
+                PolicySource::ModelProfile,
+            ),
         )
         .build()
-        .unwrap();
-    let mock = MockTransport::default();
-    let request = GenerateRequest::new(
-        ModelRef::new("test-only", "gpt-invalid-compat").unwrap(),
-        vec![Message::user("hello")],
-    );
-    let error = philo::LlmClient::new(runtime, mock.clone())
-        .complete(request)
-        .await
         .unwrap_err();
     assert!(error.to_string().contains("tool argument compatibility"));
-    assert!(mock.captured_requests().is_empty());
 }
 
 #[tokio::test]
@@ -351,9 +322,15 @@ fn duplicate_finish_runtime() -> ProviderRuntime {
         .unwrap()
         .with_model_compat(
             ModelId::new("gpt-duplicate-finish").unwrap(),
-            CompatPatch::from_source(PolicySource::ModelProfile)
-                .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate)
-                .with_usage(UsageCompat::OpenAiDropInconsistentReasoning),
+            CompatProfile::openai_chat_default()
+                .with_finish_reason(
+                    FinishReasonCompat::AllowOneIdenticalDuplicate,
+                    PolicySource::ModelProfile,
+                )
+                .with_usage(
+                    UsageCompat::OpenAiDropInconsistentReasoning,
+                    PolicySource::ModelProfile,
+                ),
         )
         .build()
         .unwrap()
@@ -387,8 +364,10 @@ async fn typed_response_compat_normalizes_object_tool_arguments_in_the_private_a
         ))
         .with_model_compat(
             ModelId::new("gpt-object").unwrap(),
-            CompatPatch::from_source(PolicySource::ModelProfile)
-                .with_tool_arguments(ToolArgumentsCompat::StringOrObject),
+            CompatProfile::openai_chat_default().with_tool_arguments(
+                ToolArgumentsCompat::StringOrObject,
+                PolicySource::ModelProfile,
+            ),
         )
         .build()
         .unwrap();
@@ -428,7 +407,7 @@ data: [DONE]
 
 fn assert_capabilities(
     case: &ProviderContractCase,
-    actual: &philo::ProviderCapabilities,
+    actual: &philo::provider::capability::ProviderCapabilities,
     expected: &CapabilityExpectations,
 ) {
     assert_eq!(
@@ -619,7 +598,9 @@ async fn supported_capabilities_use_the_shared_protocol_wire_for_every_case() {
                 .with_tool_choice(ToolChoice::Required)
                 .with_parallel_tool_calls(ParallelToolCalls::Enabled)
                 .with_response_format(ResponseFormat::JsonSchema(schema))
-                .with_reasoning(philo::ThinkingRequest::Effort(ReasoningEffort::High)),
+                .with_reasoning(philo::domain::request::ThinkingRequest::Effort(
+                    ReasoningEffort::High,
+                )),
         );
         let mock = MockTransport::scripted([MockExchange::response(success_response_with_text(
             r#"{"value":"ok"}"#,
@@ -704,10 +685,9 @@ async fn unsupported_capabilities_fail_before_transport_for_every_case() {
             )
         }),
         ("reasoning", |request| {
-            request.with_options(
-                GenerationOptions::new()
-                    .with_reasoning(philo::ThinkingRequest::Effort(ReasoningEffort::High)),
-            )
+            request.with_options(GenerationOptions::new().with_reasoning(
+                philo::domain::request::ThinkingRequest::Effort(ReasoningEffort::High),
+            ))
         }),
     ];
     for case in cases() {
@@ -738,7 +718,7 @@ fn profile_cases_preserve_header_auth_and_audience_security() {
         let runtime = (case.build)();
         assert_eq!(
             runtime.transport_options().redirect_policy(),
-            philo::RedirectPolicy::Disabled
+            philo::provider::endpoint::RedirectPolicy::Disabled
         );
         let mut request_headers = HeaderMap::new();
         request_headers.insert(

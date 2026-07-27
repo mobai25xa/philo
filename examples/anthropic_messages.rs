@@ -3,26 +3,27 @@
 use std::error::Error;
 
 use futures_util::StreamExt as _;
+use philo::protocol_options::{AnthropicMessagesOptions, AnthropicThinkingDisplay};
+use philo::provider::registry::ProviderRegistry;
+use philo::provider::secret::{EnvironmentSecretResolver, SecretReference};
 use philo::{
-    AnthropicMessagesOptions, AnthropicThinkingDisplay, ConfigSource, ConfigValue,
-    EnvironmentSecretResolver, GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef,
-    ProviderConfigLayer, ProviderConfigSnapshot, ProviderId, ProviderRegistry, SecretReference,
+    GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef, ProviderDeploymentConfig,
+    ProviderId,
 };
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let secret = ProviderConfigLayer::new(ConfigSource::environment_secret(
-        "env/anthropic-key",
-        "ANTHROPIC_API_KEY",
-    )?)
-    .with_credential(ConfigValue::set(SecretReference::environment_variable(
-        "ANTHROPIC_API_KEY",
-    )?));
-    let config = ProviderConfigSnapshot::official_anthropic()?.merge_layers([secret])?;
+    // One construction path: a registered definition plus a deployment that
+    // names the credential. Layered configuration documents, if you want them,
+    // live in the `philo-config` crate and produce exactly these two values.
     let provider = ProviderId::new("official-anthropic")?;
-    let runtime = ProviderRegistry::with_official_anthropic()?.build(
+    let deployment = ProviderDeploymentConfig::new(
+        provider.clone(),
+        SecretReference::environment_variable("ANTHROPIC_API_KEY")?,
+    );
+    let runtime = ProviderRegistry::with_official_anthropic()?.build_deployment(
         &provider,
-        &config,
+        &deployment,
         &EnvironmentSecretResolver,
     )?;
     let client = LlmClient::with_reqwest(runtime)?;

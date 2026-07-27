@@ -23,9 +23,7 @@ use crate::observability::{
     LifecycleObserver,
 };
 use crate::protocol::ProtocolDispatch;
-use crate::provider::{
-    IdempotencyKey, ProviderRequestOptions, ProviderRuntime, ResolvedIdempotency,
-};
+use crate::provider::{IdempotencyKey, ProviderRuntime, ResolvedIdempotency};
 use crate::transport::{
     CancellationToken, NetworkPolicy, RequestLifecycle, ReqwestTransport, Transport,
     lifecycle_preflight,
@@ -38,7 +36,6 @@ type EventStream = Pin<Box<dyn Stream<Item = Result<AssistantEvent, LlmError>> +
 pub struct RequestControl {
     cancellation: CancellationToken,
     trace_id: Option<TraceId>,
-    provider_options: ProviderRequestOptions,
     timeout_policy: Option<TimeoutPolicy>,
     retry_policy: Option<RetryPolicy>,
     retry_wait_policy: Option<RetryWaitPolicy>,
@@ -75,19 +72,6 @@ impl RequestControl {
     #[must_use]
     pub fn trace_id(&self) -> Option<&TraceId> {
         self.trace_id.as_ref()
-    }
-
-    /// Attaches typed provider-scoped request options without changing the domain request.
-    #[must_use]
-    pub fn with_provider_options(mut self, options: ProviderRequestOptions) -> Self {
-        self.provider_options = options;
-        self
-    }
-
-    /// Returns typed provider-scoped request options.
-    #[must_use]
-    pub fn provider_options(&self) -> &ProviderRequestOptions {
-        &self.provider_options
     }
 
     /// Requests stage timeouts that may only tighten the client policy.
@@ -559,15 +543,7 @@ impl LlmClient {
         let lifecycle = request_lifecycle(request, control.cancellation.clone())?;
         lifecycle_preflight(&lifecycle)?;
 
-        let plan = if control.provider_options().is_empty() {
-            CallPlanner::plan(&self.runtime, request)?
-        } else {
-            CallPlanner::plan_with_provider_options(
-                &self.runtime,
-                request,
-                control.provider_options(),
-            )?
-        };
+        let plan = CallPlanner::plan(&self.runtime, request)?;
         emit(observation, LifecycleEventKind::ValidationCompleted);
 
         let driver = ProtocolDispatch::for_kind(plan.policy.target.protocol_kind);

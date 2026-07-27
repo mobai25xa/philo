@@ -3,13 +3,20 @@
 use std::collections::BTreeSet;
 
 use futures_util::stream;
+use philo::domain::event::{collect_assistant_message, collect_assistant_message_for_format};
+use philo::domain::history::DialectPolicy;
+use philo::domain::ids::{ContentIndex, LocalRequestId};
+use philo::domain::request::{
+    CapabilitySet, CapabilityStatus, ReasoningEffort, ReasoningEffortSupport,
+};
+use philo::domain::schema::ToolSchema;
+use philo::domain::structured::{ResponseFormat, StructuredSchema};
+use philo::domain::usage::{CurrencyCode, MoneyAmount, PriceProfile, UsageMergeOutcome};
+use philo::domain::usage::{estimate_cost, merge_usage_details};
+use philo::error::{CostFailure, StructuredOutputFailure};
 use philo::{
-    AssistantEvent, CapabilitySet, CapabilityStatus, ContentIndex, ContentPart, CostFailure,
-    CurrencyCode, DialectPolicy, FinishReason, GenerateRequest, GenerationOptions, LlmError,
-    LocalRequestId, Message, ModelRef, MoneyAmount, PriceProfile, ReasoningEffort,
-    ReasoningEffortSupport, ResponseFormat, StructuredOutputFailure, StructuredSchema, TokenCount,
-    ToolSchema, Usage, UsageDetails, UsageMergeOutcome, collect_assistant_message,
-    collect_assistant_message_for_format, estimate_cost, merge_usage_details,
+    AssistantEvent, ContentPart, FinishReason, GenerateRequest, GenerationOptions, LlmError,
+    Message, ModelRef, TokenCount, Usage, UsageDetails,
 };
 use serde_json::json;
 
@@ -266,7 +273,8 @@ struct ToolCallLike;
 
 impl ToolCallLike {
     fn events() -> Vec<Result<AssistantEvent, LlmError>> {
-        use philo::{ToolArguments, ToolCall, ToolCallId, ToolName, WireToolIndex};
+        use philo::domain::ids::{ToolCallId, ToolName, WireToolIndex};
+        use philo::domain::tools::{ToolArguments, ToolCall};
         let call = ToolCall::new(
             ToolCallId::new("call_1").unwrap(),
             ToolName::new("lookup").unwrap(),
@@ -326,15 +334,21 @@ fn response_format_capability_gates_unknown_and_unsupported() {
 #[test]
 fn official_dialect_policy_is_protocol_default_group() {
     let dialect = DialectPolicy::official_openai();
-    assert_eq!(dialect.source, philo::PolicySource::ProtocolDefault);
+    assert_eq!(
+        dialect.source,
+        philo::domain::history::PolicySource::ProtocolDefault
+    );
     assert_eq!(
         dialect.structured_output,
-        philo::StructuredOutputWireFormat::OpenAiResponseFormat
+        philo::domain::history::StructuredOutputWireFormat::OpenAiResponseFormat
     );
-    assert_eq!(dialect.stream_usage, philo::StreamUsagePolicy::IncludeUsage);
+    assert_eq!(
+        dialect.stream_usage,
+        philo::domain::history::StreamUsagePolicy::IncludeUsage
+    );
     assert_eq!(
         dialect.thinking,
-        philo::ThinkingWireFormat::OpenAiReasoningEffort
+        philo::domain::history::ThinkingWireFormat::OpenAiReasoningEffort
     );
 }
 
@@ -359,8 +373,9 @@ fn model_reasoning_effort_set_is_exact_only() {
     };
     let model = ModelRef::new("official-openai", "gpt-test").unwrap();
     let request = GenerateRequest::new(model, vec![Message::user("hi")]).with_options(
-        GenerationOptions::new()
-            .with_reasoning(philo::ThinkingRequest::Effort(ReasoningEffort::High)),
+        GenerationOptions::new().with_reasoning(philo::domain::request::ThinkingRequest::Effort(
+            ReasoningEffort::High,
+        )),
     );
     assert!(matches!(
         request.validate(&caps),

@@ -6,14 +6,17 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::StreamExt as _;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::error::{ErrorStage, RetriableHint, TimeoutStage, TransportError};
+use philo::observability::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
 use philo::provider::TestOnlyProfile;
+use philo::provider::idempotency::{IdempotencyKey, IdempotencyPolicy};
+use philo::provider::rate_limit::{
+    RateLimitHeaderKind, RateLimitHeaderSpec, RateLimitPolicy, RateLimitUnit, RateLimitValue,
+};
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    AssistantEvent, ErrorStage, GenerateRequest, GenerationOptions, IdempotencyKey,
-    IdempotencyPolicy, LifecycleEvent, LifecycleEventKind, LifecycleObserver, LlmClient, LlmError,
-    Message, ModelRef, RateLimitHeaderKind, RateLimitHeaderSpec, RateLimitPolicy, RateLimitUnit,
-    RateLimitValue, RequestControl, RetriableHint, RetryPolicy, RetryWaitPolicy, TimeoutPolicy,
-    TimeoutStage, TransportError,
+    AssistantEvent, GenerateRequest, GenerationOptions, LlmClient, LlmError, Message, ModelRef,
+    RequestControl, RetryPolicy, RetryWaitPolicy, TimeoutPolicy,
 };
 
 const ENDPOINT: &str = "http://127.0.0.1:41992/v1/chat/completions";
@@ -375,14 +378,14 @@ async fn idle_timeout_after_delivery_is_precise_and_never_retried() {
 fn public_reliability_types_are_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
 
-    assert_send_sync::<philo::AttemptId>();
-    assert_send_sync::<philo::AttemptIdentity>();
+    assert_send_sync::<philo::observability::AttemptId>();
+    assert_send_sync::<philo::observability::AttemptIdentity>();
     assert_send_sync::<RetryPolicy>();
     assert_send_sync::<RetryWaitPolicy>();
     assert_send_sync::<TimeoutPolicy>();
-    assert_send_sync::<philo::RateLimitObservation>();
-    assert_send_sync::<philo::IdempotencyKey>();
-    assert_send_sync::<philo::NetworkPolicy>();
+    assert_send_sync::<philo::provider::rate_limit::RateLimitObservation>();
+    assert_send_sync::<philo::provider::idempotency::IdempotencyKey>();
+    assert_send_sync::<philo::transport::NetworkPolicy>();
 }
 
 #[tokio::test(start_paused = true)]

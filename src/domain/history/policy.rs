@@ -5,10 +5,6 @@ use super::super::request::CapabilityStatus;
 pub enum MissingToolResultPolicy {
     /// Reject the history until results are complete.
     Reject,
-    /// Synthesize error results (phase-three input only).
-    SynthesizeError,
-    /// Leave results deferred (phase-three input only).
-    Defer,
 }
 
 /// How unsupported content parts are handled.
@@ -29,7 +25,7 @@ pub enum ThinkingReplayPolicy {
     DropAll,
 }
 
-/// Resource and policy controls for history normalization.
+/// Protocol-legality controls for history normalization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HistoryPolicy {
     /// Missing tool-result policy.
@@ -38,10 +34,6 @@ pub struct HistoryPolicy {
     pub unsupported_content: UnsupportedContentPolicy,
     /// Thinking replay policy.
     pub thinking_replay: ThinkingReplayPolicy,
-    /// Maximum messages accepted for one normalized context.
-    pub max_messages: usize,
-    /// Maximum total UTF-8 text bytes across the history.
-    pub max_total_text_bytes: usize,
 }
 
 impl HistoryPolicy {
@@ -51,8 +43,6 @@ impl HistoryPolicy {
             missing_tool_result: MissingToolResultPolicy::Reject,
             unsupported_content: UnsupportedContentPolicy::Reject,
             thinking_replay: ThinkingReplayPolicy::DropAll,
-            max_messages: 1024,
-            max_total_text_bytes: 16 * 1024 * 1024,
         }
     }
 }

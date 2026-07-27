@@ -1,4 +1,4 @@
-//! P3-014 value-free diagnostics and structured support-matrix contracts.
+//! Catalog evidence and structured support-matrix contracts.
 
 mod support;
 
@@ -6,20 +6,15 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use http::{HeaderName, HeaderValue};
-use philo::{
-    AuthSchemeKind, CredentialSourceKind, DeepSeekProfile, EffectiveSupportStatus,
-    EvidenceVerification, GenerateRequest, GenerationOptions, HeaderSource, Message, ModelRef,
-    OpenRouterAttribution, OpenRouterProfile, OpenRouterRoutingPatch, PolicySource,
-    ProviderRequestOptions, RequestMetadata, RoutingSort, SupportStatus,
-};
+use philo::ModelId;
+use philo::domain::request::CapabilityStatus;
+use philo_presets::DeepSeekProfile;
 use serde::Deserialize;
 
 const CREDENTIAL_CANARY: &str = "diagnostics-credential-canary";
 const PROMPT_CANARY: &str = "diagnostics-prompt-canary";
 const HEADER_CANARY: &str = "diagnostics-header-value-canary";
 const METADATA_CANARY: &str = "diagnostics-metadata-value-canary";
-const ATTRIBUTION_CANARY: &str = "diagnostics-attribution-value-canary";
 
 #[derive(Debug, Deserialize)]
 struct Matrix {
@@ -103,155 +98,25 @@ fn assert_hosted_evidence(entry: &MatrixEntry, key: &str) {
     );
 }
 
-fn openrouter_request() -> GenerateRequest {
-    let mut metadata = RequestMetadata::new();
-    metadata.insert("diagnostic-test", METADATA_CANARY).unwrap();
-    let options = GenerationOptions::new()
-        .with_header(
-            HeaderName::from_static("x-diagnostic-test"),
-            HeaderValue::from_static(HEADER_CANARY),
-        )
-        .with_metadata(metadata);
-    GenerateRequest::new(
-        ModelRef::new("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free").unwrap(),
-        vec![Message::user(PROMPT_CANARY)],
-    )
-    .with_options(options)
-}
-
 #[test]
-fn diagnostics_explain_final_sources_without_values() {
-    let runtime = OpenRouterProfile::from_api_key(CREDENTIAL_CANARY)
-        .unwrap()
-        .with_attribution(
-            OpenRouterAttribution::new("https://diagnostics.example", ATTRIBUTION_CANARY).unwrap(),
-        )
-        .with_routing(OpenRouterRoutingPatch::from_source(
-            PolicySource::ProviderProfile,
-        ))
-        .build()
-        .unwrap();
-    let options = ProviderRequestOptions::new().with_openrouter_routing(
-        OpenRouterRoutingPatch::from_source(PolicySource::Request).with_sort(RoutingSort::Latency),
-    );
-    let diagnostics = runtime
-        .diagnostics_for_request(&openrouter_request(), &options, "2026-07-24")
-        .unwrap();
-
-    assert_eq!(diagnostics.provider_id().as_str(), "openrouter");
-    assert_eq!(diagnostics.product_id().as_str(), "openrouter-chat");
-    assert_eq!(
-        diagnostics.domain_model().as_str(),
-        "nvidia/nemotron-3-ultra-550b-a55b:free"
-    );
-    assert_eq!(
-        diagnostics.provider_model().as_str(),
-        "nvidia/nemotron-3-ultra-550b-a55b:free"
-    );
-    assert_eq!(
-        diagnostics.wire_model().as_str(),
-        "nvidia/nemotron-3-ultra-550b-a55b:free"
-    );
-    assert_eq!(diagnostics.endpoint().origin().host(), "openrouter.ai");
-    assert_eq!(
-        diagnostics.endpoint().path_shape(),
-        "/api/v1/chat/completions"
-    );
-    assert_eq!(diagnostics.auth().scheme(), AuthSchemeKind::Bearer);
-    assert_eq!(
-        diagnostics.auth().credential_source(),
-        CredentialSourceKind::Static
-    );
-    assert_eq!(
-        diagnostics.support().status(),
-        EffectiveSupportStatus::Experimental
-    );
-    assert_eq!(
-        diagnostics.support().verification(),
-        EvidenceVerification::CatalogDeclaration
-    );
-    assert_eq!(diagnostics.typed_extensions(), &["openrouter-routing"]);
-    assert_eq!(diagnostics.compat().len(), 16);
-    assert!(diagnostics.compat().iter().any(|entry| {
-        entry.field() == philo::CompatField::ResponseFinishReason
-            && entry.value() == "AllowOneIdenticalDuplicate"
-            && entry.source() == PolicySource::ProviderProfile
-    }));
-    assert!(
-        diagnostics
-            .compat()
-            .iter()
-            .all(|entry| !entry.value().is_empty())
-    );
-    assert!(diagnostics.headers().iter().any(|entry| {
-        entry.name().as_str() == "authorization"
-            && entry.source() == HeaderSource::Auth
-            && entry.is_protected()
-            && entry.is_sensitive()
-    }));
-    assert!(diagnostics.headers().iter().any(|entry| {
-        entry.name().as_str() == "http-referer"
-            && entry.source() == HeaderSource::Provider
-            && entry.is_protected()
-            && !entry.is_sensitive()
-    }));
-    assert!(diagnostics.headers().iter().any(|entry| {
-        entry.name().as_str() == "x-diagnostic-test"
-            && entry.source() == HeaderSource::Request
-            && !entry.is_sensitive()
-    }));
-
-    let formatted = format!("{diagnostics:?}\n{diagnostics}");
-    for forbidden in [
-        CREDENTIAL_CANARY,
-        PROMPT_CANARY,
-        HEADER_CANARY,
-        METADATA_CANARY,
-        ATTRIBUTION_CANARY,
-        "https://diagnostics.example",
-    ] {
-        assert!(
-            !formatted.contains(forbidden),
-            "diagnostics leaked {forbidden}"
-        );
-    }
-}
-
-#[test]
-fn exact_compat_and_expiry_are_visible_without_silent_upgrade() {
+fn capability_decision_and_evidence_freshness_are_independent() {
     let runtime = DeepSeekProfile::from_api_key(CREDENTIAL_CANARY)
         .unwrap()
         .build()
         .unwrap();
-    let request = GenerateRequest::new(
-        ModelRef::new("deepseek", "deepseek-v4-flash").unwrap(),
-        vec![Message::user("safe")],
-    );
-    let current = runtime
-        .diagnostics_for_request(&request, &ProviderRequestOptions::new(), "2026-10-23")
-        .unwrap();
-    assert!(current.compat().iter().any(
-        |entry| entry.value() == "MaxTokens" && entry.source() == PolicySource::ProviderProfile
-    ));
-    assert_eq!(
-        current.support().status(),
-        EffectiveSupportStatus::Experimental
-    );
-
-    let stale = runtime
-        .diagnostics_for_request(&request, &ProviderRequestOptions::new(), "2026-10-24")
-        .unwrap();
-    assert_eq!(stale.support().status(), EffectiveSupportStatus::Stale);
-    assert_eq!(stale.support().expires_at(), Some("2026-10-23"));
+    let model = ModelId::new("deepseek-v4-flash").unwrap();
+    let entry = runtime.model_entry(&model).unwrap();
+    assert_eq!(entry.support_status, CapabilityStatus::Supported);
+    assert!(!entry.source.is_stale_on("2026-10-23").unwrap());
+    assert!(entry.source.is_stale_on("2026-10-24").unwrap());
+    assert_eq!(entry.support_status, CapabilityStatus::Supported);
 
     let distinct = BTreeSet::from([
-        format!("{:?}", EffectiveSupportStatus::Supported),
-        format!("{:?}", EffectiveSupportStatus::Experimental),
-        format!("{:?}", EffectiveSupportStatus::Unsupported),
-        format!("{:?}", EffectiveSupportStatus::Unknown),
-        format!("{:?}", EffectiveSupportStatus::Stale),
+        format!("{:?}", CapabilityStatus::Supported),
+        format!("{:?}", CapabilityStatus::Unsupported),
+        format!("{:?}", CapabilityStatus::Unknown),
     ]);
-    assert_eq!(distinct.len(), 5);
+    assert_eq!(distinct.len(), 3);
 }
 
 #[test]
@@ -318,7 +183,7 @@ fn structured_matrix_matches_catalog_conformance_and_evidence_policy() {
         let runtime = descriptor.profile.build("matrix-contract-credential");
         let model = philo::ModelId::new(entry.exact_model.clone()).unwrap();
         let catalog = runtime.model_entry(&model).expect("exact catalog entry");
-        assert_eq!(catalog.support_status, SupportStatus::Experimental);
+        assert_eq!(catalog.support_status, CapabilityStatus::Supported);
         assert_eq!(catalog.source.reviewed_at(), entry.reviewed_at);
         assert_eq!(catalog.source.expires_at(), Some(entry.expires_at.as_str()));
 
@@ -373,4 +238,22 @@ fn docs_matrix_is_a_checked_rendering_of_the_structured_source() {
     ] {
         assert!(!markdown.contains(forbidden));
     }
+}
+
+#[test]
+fn body_axis_extension_diagnostic_stays_with_protocol_options() {
+    use philo::protocol_options::{
+        OpenAiChatOptions, OpenAiChatRawExtension, ProtocolOptionDiagnostic,
+    };
+
+    let raw = OpenAiChatRawExtension::dangerous_from_object(serde_json::json!({
+        "provider": { "sort": "latency", "note": "diagnostics-canary-value" }
+    }))
+    .unwrap();
+    let options = OpenAiChatOptions::new().with_raw_extension(raw);
+    assert_eq!(
+        options.diagnostics(),
+        vec![ProtocolOptionDiagnostic::NonPortableExtensionUsed]
+    );
+    assert!(!format!("{options:?}").contains("diagnostics-canary-value"));
 }

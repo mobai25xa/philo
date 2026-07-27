@@ -1,0 +1,13 @@
+[package]
+name = "philo-test-support"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+license = "MIT"
+
+[dependencies]
+philo = { version = "=0.1.0-alpha.1", path = "../..", features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -119,11 +119,11 @@ mod tests {
         SourceIdentity,
     };
     use crate::execution::executor::{AttemptResponse, AttemptResponseBody};
+    use crate::plan::ResponseLimits;
     use crate::protocol::{
         AnthropicMessagesResponsePlan, ExpectedContentType, HttpResponseRequirements,
         OpenAiChatResponsePlan, ProtocolResponsePlan, ResponseMeta, ResponsePlan,
     };
-    use crate::provider::call_policy::ResponseLimits;
     use crate::transport::LimitedBody;
     use crate::transport::{ByteStream, SseConfig};
 

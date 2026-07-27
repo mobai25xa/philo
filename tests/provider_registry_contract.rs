@@ -1,17 +1,25 @@
-//! Provider Registry, Factory, and immutable Runtime contracts.
+//! Provider Registry and immutable Runtime contracts.
+//!
+//! FR-005 removed the configuration-document compiler from the core, so a
+//! registration is now exactly one thing: a secret-free [`ProviderDefinition`].
+//! A runtime is reached the single way — definition plus deployment plus an
+//! explicit secret resolution. These tests pin that path and the isolation
+//! guarantees that survived the extraction.
 
 use std::sync::{Arc, Barrier};
 use std::thread;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::request::CapabilityStatus;
+use philo::error::{ProviderConfigFailure, ProviderRegistryFailure};
+use philo::provider::auth::ApiKey;
+use philo::provider::profiles::{OfficialAnthropicProfile, OfficialOpenAiProfile};
+use philo::provider::registry::{ProviderRegistration, ProviderRegistry};
+use philo::provider::secret::{SecretReference, SecretResolver};
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
-    AnthropicMessagesOptions, AnthropicRawExtension, ApiKey, ConfigSource, ConfigValue,
-    EndpointSpec, GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef,
-    OfficialOpenAiFactory, ProviderConfigFailure, ProviderConfigLayer, ProviderConfigSnapshot,
-    ProviderId, ProviderRegistration, ProviderRegistry, ProviderRegistryFailure,
-    ProviderRequestOptions, ProviderRuntimeFactory, SecretReference, SecretResolver,
+    GenerateRequest, LlmClient, Message, ModelId, ModelRef, ProviderDeploymentConfig, ProviderId,
 };
 
 const KEY_CANARY: &str = "philo-registry-secret-canary-1734";
@@ -35,11 +43,14 @@ impl StaticResolver {
 }
 
 impl SecretResolver for StaticResolver {
-    fn resolve(&self, reference: &SecretReference) -> Result<ApiKey, philo::ProviderConfigError> {
+    fn resolve(
+        &self,
+        reference: &SecretReference,
+    ) -> Result<ApiKey, philo::error::ProviderConfigError> {
         if reference.name() == SECRET_NAME {
             Ok(self.key.clone())
         } else {
-            Err(philo::ProviderConfigError::new(
+            Err(philo::error::ProviderConfigError::new(
                 "credential",
                 ProviderConfigFailure::SecretUnavailable,
                 "test resolver has no matching secret",
@@ -48,39 +59,32 @@ impl SecretResolver for StaticResolver {
     }
 }
 
-fn official_snapshot() -> ProviderConfigSnapshot {
-    let layer = ProviderConfigLayer::new(
-        ConfigSource::environment_secret("env/registry", SECRET_NAME).unwrap(),
-    )
-    .with_credential(ConfigValue::set(
-        SecretReference::environment_variable(SECRET_NAME).unwrap(),
-    ));
-    ProviderConfigSnapshot::official_openai()
-        .unwrap()
-        .merge_layers([layer])
-        .unwrap()
+fn provider(value: &str) -> ProviderId {
+    ProviderId::new(value).unwrap()
 }
 
-fn anthropic_snapshot() -> ProviderConfigSnapshot {
-    let layer = ProviderConfigLayer::new(
-        ConfigSource::environment_secret("env/registry", SECRET_NAME).unwrap(),
-    )
-    .with_credential(ConfigValue::set(
+fn deployment(value: &str) -> ProviderDeploymentConfig {
+    ProviderDeploymentConfig::new(
+        provider(value),
         SecretReference::environment_variable(SECRET_NAME).unwrap(),
-    ));
-    ProviderConfigSnapshot::official_anthropic()
-        .unwrap()
-        .merge_layers([layer])
-        .unwrap()
+    )
+}
+
+fn openai_registration() -> ProviderRegistration {
+    ProviderRegistration::from_definition(OfficialOpenAiProfile::definition().unwrap()).unwrap()
 }
 
 #[test]
-fn official_anthropic_factory_is_explicit_and_diagnostics_are_value_free() {
+fn official_anthropic_definition_is_explicit_and_evidence_is_separate() {
     let registry = ProviderRegistry::with_official_profiles().unwrap();
     assert_eq!(registry.list().unwrap().len(), 2);
-    let provider_id = ProviderId::new("official-anthropic").unwrap();
+    let provider_id = provider("official-anthropic");
     let runtime = registry
-        .build(&provider_id, &anthropic_snapshot(), &StaticResolver::new())
+        .build_deployment(
+            &provider_id,
+            &deployment("official-anthropic"),
+            &StaticResolver::new(),
+        )
         .unwrap();
     assert_eq!(runtime.protocol_id().as_str(), "anthropic-messages");
     assert_eq!(
@@ -88,33 +92,15 @@ fn official_anthropic_factory_is_explicit_and_diagnostics_are_value_free() {
         "https://api.anthropic.com/v1/messages"
     );
 
-    let raw = AnthropicRawExtension::dangerous_from_object(
-        serde_json::json!({"future_feature": "diagnostic-secret-canary"}),
-    )
-    .unwrap();
-    let request = GenerateRequest::new(
-        ModelRef::new("official-anthropic", "claude-sonnet-5").unwrap(),
-        vec![Message::user("message-secret-canary")],
-    )
-    .with_options(
-        GenerationOptions::new()
-            .with_protocol_options(AnthropicMessagesOptions::new().with_raw_extension(raw)),
-    );
-    let diagnostics = runtime
-        .diagnostics_for_request(&request, &ProviderRequestOptions::new(), "2026-07-26")
-        .unwrap();
-    assert!(diagnostics.compat().is_empty());
+    let model = ModelId::new("claude-sonnet-5").unwrap();
+    let entry = runtime.model_entry(&model).unwrap();
     assert_eq!(
-        diagnostics.typed_extensions(),
-        ["anthropic-messages-options", "non_portable_extension_used"]
+        entry.support_status,
+        CapabilityStatus::Supported,
+        "availability is a three-state decision"
     );
-    let debug = format!("{diagnostics:?}");
-    assert!(!debug.contains("diagnostic-secret-canary"));
-    assert!(!debug.contains("message-secret-canary"));
-}
-
-fn registration(version: &str) -> ProviderRegistration {
-    ProviderRegistration::new("official-openai", version, OfficialOpenAiFactory).unwrap()
+    assert_eq!(entry.source.id().as_str(), "anthropic-models-ledger");
+    assert!(!entry.source.is_stale_on("2026-07-26").unwrap());
 }
 
 fn success_response(generation_id: &str) -> MockResponse {
@@ -155,9 +141,12 @@ fn anthropic_success_response() -> MockResponse {
 #[tokio::test]
 async fn official_anthropic_runtime_dispatches_end_to_end_without_protocol_guessing() {
     let registry = ProviderRegistry::with_official_anthropic().unwrap();
-    let provider_id = ProviderId::new("official-anthropic").unwrap();
     let runtime = registry
-        .build(&provider_id, &anthropic_snapshot(), &StaticResolver::new())
+        .build_deployment(
+            &provider("official-anthropic"),
+            &deployment("official-anthropic"),
+            &StaticResolver::new(),
+        )
         .unwrap();
     let transport = MockTransport::scripted([MockExchange::response(anthropic_success_response())]);
     let client = LlmClient::new(runtime, transport.clone());
@@ -183,57 +172,67 @@ async fn official_anthropic_runtime_dispatches_end_to_end_without_protocol_guess
 #[test]
 fn duplicate_registration_is_rejected_unless_replace_is_explicit() {
     let registry = ProviderRegistry::new();
-    registry.register(registration("1.0")).unwrap();
-    let error = registry.register(registration("1.1")).unwrap_err();
+    registry.register(openai_registration()).unwrap();
+    let error = registry.register(openai_registration()).unwrap_err();
     assert_eq!(
         error.reason(),
         ProviderRegistryFailure::DuplicateRegistration
     );
     assert_eq!(error.provider_id(), Some("official-openai"));
 
-    let previous = registry.replace(registration("1.1")).unwrap();
-    assert_eq!(previous.version(), "1.0");
+    let previous = registry.replace(openai_registration()).unwrap();
+    assert_eq!(previous.provider_id().as_str(), "official-openai");
     assert_eq!(
         registry
             .get_by_name(" OFFICIAL-OPENAI ")
             .unwrap()
             .unwrap()
-            .version(),
-        "1.1"
+            .product_id()
+            .unwrap()
+            .as_str(),
+        "chat-completions"
+    );
+}
+
+#[test]
+fn replacing_an_unregistered_provider_is_rejected() {
+    let registry = ProviderRegistry::new();
+    let error = registry.replace(openai_registration()).unwrap_err();
+    assert_eq!(
+        error.reason(),
+        ProviderRegistryFailure::RegistrationNotFound
     );
 }
 
 #[test]
 fn registry_listing_is_deterministic_and_value_free() {
-    let registry = ProviderRegistry::new();
-    registry
-        .register(ProviderRegistration::new("zeta", "1.0", OfficialOpenAiFactory).unwrap())
-        .unwrap();
-    registry
-        .register(ProviderRegistration::new("Alpha", "2.0", OfficialOpenAiFactory).unwrap())
-        .unwrap();
+    let registry = ProviderRegistry::with_official_profiles().unwrap();
     let entries = registry.list().unwrap();
     assert_eq!(
         entries
             .iter()
             .map(|entry| entry.provider_id().as_str())
             .collect::<Vec<_>>(),
-        vec!["alpha", "zeta"]
+        vec!["official-anthropic", "official-openai"]
     );
     let debug = format!("{registry:?}");
-    assert!(debug.contains("alpha"));
+    assert!(debug.contains("official-openai"));
     assert!(!debug.contains(KEY_CANARY));
 }
 
 #[test]
 fn runtime_survives_registry_removal_as_an_immutable_snapshot() {
     let registry = ProviderRegistry::with_official_openai().unwrap();
-    let provider_id = ProviderId::new("official-openai").unwrap();
+    let provider_id = provider("official-openai");
     let runtime = registry
-        .build(&provider_id, &official_snapshot(), &StaticResolver::new())
+        .build_deployment(
+            &provider_id,
+            &deployment("official-openai"),
+            &StaticResolver::new(),
+        )
         .unwrap();
     assert_eq!(runtime.provider_id(), &provider_id);
-    registry.remove(&provider_id).unwrap();
+    assert!(registry.remove(&provider_id).unwrap().is_some());
     assert!(registry.get(&provider_id).unwrap().is_none());
     assert_eq!(
         runtime.endpoint().url().as_str(),
@@ -244,17 +243,21 @@ fn runtime_survives_registry_removal_as_an_immutable_snapshot() {
 #[test]
 fn replacement_does_not_mutate_existing_runtime() {
     let registry = ProviderRegistry::with_official_openai().unwrap();
-    let provider_id = ProviderId::new("official-openai").unwrap();
-    let snapshot = official_snapshot();
+    let provider_id = provider("official-openai");
     let first = registry
-        .build(&provider_id, &snapshot, &StaticResolver::new())
+        .build_deployment(
+            &provider_id,
+            &deployment("official-openai"),
+            &StaticResolver::new(),
+        )
         .unwrap();
-    assert_eq!(
-        registry.replace(registration("2.0")).unwrap().version(),
-        "1.0"
-    );
+    registry.replace(openai_registration()).unwrap();
     let second = registry
-        .build(&provider_id, &snapshot, &StaticResolver::new())
+        .build_deployment(
+            &provider_id,
+            &deployment("official-openai"),
+            &StaticResolver::new(),
+        )
         .unwrap();
     assert_eq!(first.endpoint(), second.endpoint());
     assert_eq!(first.provider_id(), second.provider_id());
@@ -263,20 +266,20 @@ fn replacement_does_not_mutate_existing_runtime() {
 #[tokio::test]
 async fn shared_transport_does_not_share_auth_headers_or_request_state() {
     let registry = ProviderRegistry::with_official_openai().unwrap();
-    let provider_id = ProviderId::new("official-openai").unwrap();
+    let provider_id = provider("official-openai");
     let first_key = "philo-registry-first-key";
     let second_key = "philo-registry-second-key";
     let first_runtime = registry
-        .build(
+        .build_deployment(
             &provider_id,
-            &official_snapshot(),
+            &deployment("official-openai"),
             &StaticResolver::with_key(first_key),
         )
         .unwrap();
     let second_runtime = registry
-        .build(
+        .build_deployment(
             &provider_id,
-            &official_snapshot(),
+            &deployment("official-openai"),
             &StaticResolver::with_key(second_key),
         )
         .unwrap();
@@ -324,127 +327,135 @@ async fn shared_transport_does_not_share_auth_headers_or_request_state() {
 }
 
 #[test]
-fn factory_reports_config_source_without_secret_value() {
-    let layer =
-        ProviderConfigLayer::new(ConfigSource::programmatic("application/endpoint").unwrap())
-            .with_endpoint(ConfigValue::set(EndpointSpec::base_and_path(
-                "https://example.com/v1",
-                "/chat/completions",
-            )));
-    let snapshot = ProviderConfigSnapshot::official_openai()
-        .unwrap()
-        .merge_layers([layer])
-        .unwrap();
+fn a_deployment_for_a_different_provider_is_rejected_before_secret_resolution() {
     let registry = ProviderRegistry::with_official_openai().unwrap();
-    let provider_id = ProviderId::new("official-openai").unwrap();
     let error = registry
-        .build(&provider_id, &snapshot, &StaticResolver::new())
+        .build_deployment(
+            &provider("official-openai"),
+            &deployment("some-other-provider"),
+            &StaticResolver::new(),
+        )
         .unwrap_err();
-    let error = match error {
-        philo::LlmError::ProviderConfig(error) => error,
-        other => panic!("unexpected error: {other:?}"),
+    assert!(matches!(
+        error,
+        philo::LlmError::ProviderRegistry(ref error)
+            if error.reason() == ProviderRegistryFailure::FactoryProviderMismatch
+    ));
+}
+
+#[test]
+fn an_unresolvable_secret_fails_and_never_reaches_a_runtime() {
+    let registry = ProviderRegistry::with_official_openai().unwrap();
+    let wrong_name = ProviderDeploymentConfig::new(
+        provider("official-openai"),
+        SecretReference::environment_variable("PHILO_REGISTRY_WRONG_NAME").unwrap(),
+    );
+    let error = registry
+        .build_deployment(
+            &provider("official-openai"),
+            &wrong_name,
+            &StaticResolver::new(),
+        )
+        .unwrap_err();
+    let philo::LlmError::ProviderConfig(error) = error else {
+        panic!("unexpected error kind")
     };
-    assert_eq!(error.source(), Some("application/endpoint"));
+    assert_eq!(error.reason(), ProviderConfigFailure::SecretUnavailable);
     assert!(!error.to_string().contains(KEY_CANARY));
 }
 
 #[test]
-fn official_profile_builds_through_the_same_factory() {
+fn registry_built_runtime_matches_the_preset_built_runtime() {
     let registry = ProviderRegistry::with_official_openai().unwrap();
-    let provider_id = ProviderId::new("official-openai").unwrap();
-    let snapshot = official_snapshot();
     let runtime = registry
-        .build(&provider_id, &snapshot, &StaticResolver::new())
+        .build_deployment(
+            &provider("official-openai"),
+            &deployment("official-openai"),
+            &StaticResolver::new(),
+        )
         .unwrap();
-    let legacy = philo::OfficialOpenAiProfile::new(ApiKey::new(KEY_CANARY).unwrap())
+    let preset = OfficialOpenAiProfile::new(ApiKey::new(KEY_CANARY).unwrap())
         .build()
         .unwrap();
-    assert_eq!(runtime.provider_id(), legacy.provider_id());
-    assert_eq!(runtime.protocol_id(), legacy.protocol_id());
-    assert_eq!(runtime.endpoint(), legacy.endpoint());
-    assert_eq!(runtime.dialect(), legacy.dialect());
-    assert_eq!(runtime.transport_options(), legacy.transport_options());
+    assert_eq!(runtime.provider_id(), preset.provider_id());
+    assert_eq!(runtime.product_id(), preset.product_id());
+    assert_eq!(runtime.protocol_id(), preset.protocol_id());
+    assert_eq!(runtime.endpoint(), preset.endpoint());
+    assert_eq!(runtime.dialect(), preset.dialect());
+    assert_eq!(runtime.transport_options(), preset.transport_options());
 }
 
-struct BlockingFactory {
+#[test]
+fn official_anthropic_registry_and_preset_agree_on_the_frozen_identity() {
+    let registry = ProviderRegistry::with_official_anthropic().unwrap();
+    let runtime = registry
+        .build_deployment(
+            &provider("official-anthropic"),
+            &deployment("official-anthropic"),
+            &StaticResolver::new(),
+        )
+        .unwrap();
+    let preset = OfficialAnthropicProfile::new(ApiKey::new(KEY_CANARY).unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(runtime.provider_id(), preset.provider_id());
+    assert_eq!(runtime.product_id(), preset.product_id());
+    assert_eq!(runtime.endpoint(), preset.endpoint());
+    assert_eq!(runtime.dialect(), preset.dialect());
+    assert_eq!(
+        runtime.catalog().entries().count(),
+        preset.catalog().entries().count()
+    );
+}
+
+/// The registry must not hold its lock across credential resolution.
+///
+/// The old proof used a blocking `ProviderRuntimeFactory`; that trait was the
+/// configuration path and is gone. Secret resolution is now the user-supplied
+/// callback on the compile path, so blocking there proves the same property.
+struct BlockingResolver {
     entered: Arc<Barrier>,
     release: Arc<Barrier>,
+    inner: StaticResolver,
 }
 
-impl ProviderRuntimeFactory for BlockingFactory {
-    fn build(
+impl SecretResolver for BlockingResolver {
+    fn resolve(
         &self,
-        config: &ProviderConfigSnapshot,
-        resolver: &dyn SecretResolver,
-    ) -> Result<philo::ProviderRuntime, philo::LlmError> {
+        reference: &SecretReference,
+    ) -> Result<ApiKey, philo::error::ProviderConfigError> {
         self.entered.wait();
         self.release.wait();
-        OfficialOpenAiFactory.build(config, resolver)
+        self.inner.resolve(reference)
     }
 }
 
 #[test]
-fn registry_releases_lock_before_factory_callback() {
+fn registry_releases_its_lock_before_resolving_a_secret() {
     let entered = Arc::new(Barrier::new(2));
     let release = Arc::new(Barrier::new(2));
-    let registry = ProviderRegistry::new();
-    registry
-        .register(
-            ProviderRegistration::new(
-                "official-openai",
-                "1.0",
-                BlockingFactory {
-                    entered: entered.clone(),
-                    release: release.clone(),
-                },
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    let registry = ProviderRegistry::with_official_openai().unwrap();
     let thread_registry = registry.clone();
+    let resolver = BlockingResolver {
+        entered: entered.clone(),
+        release: release.clone(),
+        inner: StaticResolver::new(),
+    };
     let build = thread::spawn(move || {
-        let provider_id = ProviderId::new("official-openai").unwrap();
         thread_registry
-            .build(&provider_id, &official_snapshot(), &StaticResolver::new())
+            .build_deployment(
+                &provider("official-openai"),
+                &deployment("official-openai"),
+                &resolver,
+            )
             .unwrap()
     });
     entered.wait();
+    // The registry is fully usable while the resolver is blocked.
     assert_eq!(registry.list().unwrap().len(), 1);
-    assert_eq!(
-        registry.replace(registration("2.0")).unwrap().version(),
-        "1.0"
-    );
+    registry.replace(openai_registration()).unwrap();
     release.wait();
-    build.join().unwrap();
-}
-
-#[test]
-fn registry_rejects_mismatched_config_before_factory_and_preserves_source() {
-    let registry = ProviderRegistry::with_official_openai().unwrap();
-    let layer =
-        ProviderConfigLayer::new(ConfigSource::programmatic("application/provider").unwrap())
-            .with_provider_id(ConfigValue::set("other-provider".to_owned()));
-    let snapshot = ProviderConfigSnapshot::official_openai()
-        .unwrap()
-        .merge_layers([layer])
-        .unwrap();
-    let error = registry
-        .build(
-            &ProviderId::new("official-openai").unwrap(),
-            &snapshot,
-            &StaticResolver::new(),
-        )
-        .unwrap_err();
-    let error = match error {
-        philo::LlmError::ProviderConfig(error) => error,
-        other => panic!("unexpected error: {other:?}"),
-    };
-    assert_eq!(error.source(), Some("application/provider"));
-    assert_eq!(error.reason(), ProviderConfigFailure::InvalidValue);
-    assert!(
-        registry
-            .get(&ProviderId::new("official-openai").unwrap())
-            .unwrap()
-            .is_some()
-    );
+    let runtime = build.join().unwrap();
+    assert_eq!(runtime.provider_id().as_str(), "official-openai");
 }

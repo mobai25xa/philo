@@ -2,10 +2,11 @@
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::request::CapabilityStatus;
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
-use philo::{
-    DeepSeekProfile, GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef,
-    OpenRouterAttribution, OpenRouterProfile, SupportStatus, ZaiCodingProfile, ZaiStandardProfile,
+use philo::{GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef};
+use philo_presets::{
+    DeepSeekProfile, OpenRouterAttribution, OpenRouterProfile, ZaiCodingProfile, ZaiStandardProfile,
 };
 use serde_json::json;
 
@@ -66,7 +67,7 @@ fn presets_freeze_exact_product_endpoint_catalog_and_experimental_support() {
             .entries()
             .find(|entry| entry.key.domain_model_id.as_str() == model)
             .unwrap();
-        assert_eq!(entry.support_status, SupportStatus::Experimental);
+        assert_eq!(entry.support_status, CapabilityStatus::Supported);
         assert_eq!(entry.wire_model_value.as_str(), model);
         assert!(!format!("{runtime:?}").contains(CANARY));
     }

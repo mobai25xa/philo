@@ -10,10 +10,10 @@ use http::{HeaderName, Method, StatusCode};
 use crate::domain::AssistantEvent;
 use crate::domain::{LocalRequestId, ModelRef, ProviderRequestId, ResponseFormat, SourceIdentity};
 use crate::error::LlmError;
-use crate::execution::contract::CallExecutionIntent;
+use crate::plan::{
+    CallExecutionIntent, ProtocolKind, ResolvedCallPlan, ResolvedTarget, ResponseLimits,
+};
 use crate::provider::HeaderOperation;
-use crate::provider::call_policy::ProtocolKind;
-use crate::provider::call_policy::{ResolvedTarget, ResponseLimits};
 use crate::provider::{AnthropicMessagesContract, OpenAiChatContract};
 use crate::transport::SseConfig;
 
@@ -43,10 +43,7 @@ impl ProtocolDispatch {
         }
     }
 
-    pub(crate) fn prepare(
-        self,
-        plan: &crate::execution::contract::ResolvedCallPlan,
-    ) -> Result<PreparedCall, LlmError> {
+    pub(crate) fn prepare(self, plan: &ResolvedCallPlan) -> Result<PreparedCall, LlmError> {
         match self {
             Self::OpenAiChat(driver) => driver.prepare(plan),
             Self::AnthropicMessages(driver) => driver.prepare(plan),
@@ -252,8 +249,8 @@ mod tests {
     use http::{HeaderValue, Method, header};
 
     use super::{ProtocolDispatch, ProtocolOperation, ProtocolRequestParts};
+    use crate::plan::ProtocolKind;
     use crate::provider::HeaderOperation;
-    use crate::provider::call_policy::ProtocolKind;
 
     const CANARY: &str = "protocol-contract-canary";
 

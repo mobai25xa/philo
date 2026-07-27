@@ -1,11 +1,16 @@
 //! Opt-in, value-free controlled smoke for the official Anthropic Messages target.
 
 use futures_util::StreamExt as _;
+use philo::domain::ids::ToolName;
+use philo::domain::request::CapabilityStatus;
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::{ToolChoice, ToolDefinition};
+use philo::protocol_options::{AnthropicMessagesOptions, AnthropicThinkingDisplay};
+use philo::provider::capability::ModelCapabilityProfile;
+use philo::provider::profiles::OfficialAnthropicProfile;
 use philo::{
-    AnthropicMessagesOptions, AnthropicThinkingDisplay, AssistantEvent, CapabilityStatus,
-    FinishReason, GenerateRequest, GenerationOptions, LlmClient, Message, ModelCapabilityProfile,
-    ModelId, ModelRef, OfficialAnthropicProfile, RequestControl, ToolChoice, ToolDefinition,
-    ToolName, ToolSchema,
+    AssistantEvent, FinishReason, GenerateRequest, GenerationOptions, LlmClient, Message, ModelId,
+    ModelRef, RequestControl,
 };
 use serde_json::json;
 

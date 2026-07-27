@@ -1,10 +1,12 @@
 //! Phase-two tool definition, schema, choice, and request-wire contract tests.
 
-use philo::{
-    CapabilitySet, CapabilityStatus, GenerateRequest, GenerationOptions, LlmError, Message,
-    ModelRef, ParallelToolCalls, SchemaFailure, ToolChoice, ToolDefinition, ToolName, ToolSchema,
-    ValidationReason, validate_tool_options,
-};
+use philo::domain::ids::ToolName;
+use philo::domain::request::{CapabilitySet, CapabilityStatus};
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::validate_tool_options;
+use philo::domain::tools::{ParallelToolCalls, ToolChoice, ToolDefinition};
+use philo::error::{SchemaFailure, ValidationReason};
+use philo::{GenerateRequest, GenerationOptions, LlmError, Message, ModelRef};
 use serde_json::{Value, json};
 
 fn object_schema() -> ToolSchema {
@@ -286,7 +288,7 @@ fn tool_description_limit_is_enforced() {
 
 mod wire {
     use super::*;
-    use philo::ReasoningEffortSupport;
+    use philo::domain::request::ReasoningEffortSupport;
     use philo::provider::ProviderCapabilities;
 
     // Re-test through GenerateRequest validation + documented field shapes by

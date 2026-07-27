@@ -2,9 +2,8 @@
 
 mod support;
 
-use philo::{
-    ContentPart, GenerateRequest, ImageContent, ImageDetail, Message, MessageRole, ModelRef,
-};
+use philo::domain::content::{ImageContent, ImageDetail};
+use philo::{ContentPart, GenerateRequest, Message, MessageRole, ModelRef};
 use support::ExampleResult;
 
 #[tokio::main(flavor = "current_thread")]

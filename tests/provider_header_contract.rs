@@ -4,14 +4,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use philo::error::{HeaderPolicyError, HeaderPolicyFailure};
 use philo::provider::TestOnlyProfile;
-use philo::transport::mock::{MockExchange, MockResponse, MockTransport};
-use philo::{
+use philo::provider::headers::{
     ClientIdentity, ClientIdentityFragment, DynamicHeaderContext, DynamicHeaderFuture,
-    DynamicHeaderPolicy, DynamicHeaderSource, GenerateRequest, HeaderLayer, HeaderOperation,
-    HeaderPipeline, HeaderPolicyError, HeaderPolicyFailure, HeaderSource, LlmClient, LlmError,
-    Message, ModelRef,
+    DynamicHeaderPolicy, DynamicHeaderSource, HeaderLayer, HeaderOperation, HeaderPipeline,
+    HeaderSource,
 };
+use philo::transport::mock::{MockExchange, MockResponse, MockTransport};
+use philo::{GenerateRequest, LlmClient, LlmError, Message, ModelRef};
 
 const ENDPOINT: &str = "http://127.0.0.1:42007/v1/chat/completions";
 

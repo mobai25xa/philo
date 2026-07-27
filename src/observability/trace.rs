@@ -7,8 +7,8 @@ use crate::domain::{
     TraceId,
 };
 use crate::error::{AuthFailureKind, ErrorStage, LlmError, RetryReason, TimeoutStage};
-use crate::provider::HeaderTraceEntry;
-use crate::provider::{IdempotencyCapability, IdempotencyKeySource};
+use crate::provider::{HeaderSource, IdempotencyCapability, IdempotencyKeySource};
+use http::HeaderName;
 
 /// Stable, low-cardinality failure category for lifecycle diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,8 +216,9 @@ pub enum LifecycleEventKind {
     EndpointResolved,
     /// Header and authentication layers resolved successfully.
     HeadersResolved {
-        /// Value-free header resolution records.
-        trace: Arc<[HeaderTraceEntry]>,
+        /// Ordered value-free `(name, source, present, protected, sensitive)` records.
+        #[allow(clippy::type_complexity)]
+        steps: Arc<[(HeaderName, HeaderSource, bool, bool, bool)]>,
     },
     /// Transport execution began.
     TransportStarted,

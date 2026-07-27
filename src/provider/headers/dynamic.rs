@@ -278,18 +278,5 @@ impl fmt::Debug for DynamicHeaderPolicy {
 }
 
 fn is_protected(name: &HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "authorization"
-            | "proxy-authorization"
-            | "host"
-            | "content-length"
-            | "content-type"
-            | "accept"
-            | "transfer-encoding"
-            | "connection"
-            | "cookie"
-            | "set-cookie"
-            | "user-agent"
-    )
+    crate::protected::is_protected_header(name)
 }

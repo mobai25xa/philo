@@ -4,13 +4,23 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
+use philo::domain::history::PolicySource;
+use philo::error::ProviderConfigError;
+use philo::provider::auth::ApiKey;
+use philo::provider::capability::ProviderCapabilities;
+use philo::provider::catalog::ProductId;
+use philo::provider::definition::AuthScheme;
+use philo::provider::endpoint::EndpointConfig;
+use philo::provider::factory::StaticProviderFactory;
+use philo::provider::protocol_contract::{
+    AnthropicUsageCompat, CompatProfile, FinishReasonCompat, MaxOutputTokensWireFormat, UsageCompat,
+};
+use philo::provider::secret::{EnvironmentSecretResolver, SecretReference, SecretResolver};
+use philo::transport::CancellationToken;
 use philo::{
-    AnthropicUsageCompat, ApiKey, AssistantEvent, AssistantStream, AuthScheme, CancellationToken,
-    CompatPatch, EndpointConfig, EnvironmentSecretResolver, FinishReason, FinishReasonCompat,
-    GenerateRequest, GenerationOptions, LlmClient, LlmError, MaxOutputTokensWireFormat, Message,
-    ModelRef, PolicySource, ProductId, ProviderCapabilities, ProviderConfigError,
-    ProviderDefinition, ProviderDeploymentConfig, ProviderId, ProviderRuntime, RequestControl,
-    SecretReference, SecretResolver, StaticProviderFactory, UsageCompat,
+    AssistantEvent, AssistantStream, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
+    LlmError, Message, ModelRef, ProviderDefinition, ProviderDeploymentConfig, ProviderId,
+    ProviderRuntime, RequestControl,
 };
 
 const CREDENTIAL_ENV: &str = "PHILO_PROVIDER_CREDENTIAL";
@@ -85,11 +95,20 @@ impl CustomTarget {
                 .with_auth_scheme(AuthScheme::bearer())
                 .with_capabilities(ProviderCapabilities::conservative_chat_completions())
                 .allow_unregistered_models()
-                .with_provider_compat(
-                    CompatPatch::from_source(PolicySource::ProviderProfile)
-                        .with_max_output_tokens(MaxOutputTokensWireFormat::MaxTokens)
-                        .with_finish_reason(FinishReasonCompat::AllowOneIdenticalDuplicate)
-                        .with_usage(UsageCompat::OpenAiDropInconsistentReasoning),
+                .with_openai_chat_compat(
+                    CompatProfile::openai_chat_default()
+                        .with_max_output_tokens(
+                            MaxOutputTokensWireFormat::MaxTokens,
+                            PolicySource::ProviderProfile,
+                        )
+                        .with_finish_reason(
+                            FinishReasonCompat::AllowOneIdenticalDuplicate,
+                            PolicySource::ProviderProfile,
+                        )
+                        .with_usage(
+                            UsageCompat::OpenAiDropInconsistentReasoning,
+                            PolicySource::ProviderProfile,
+                        ),
                 )
                 .build(),
             Self::ZaiAnthropic => ProviderDefinition::anthropic_messages(provider, product)

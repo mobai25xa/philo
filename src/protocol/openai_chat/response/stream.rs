@@ -8,8 +8,8 @@ use futures_core::Stream;
 use super::machine::ChatStateMachine;
 use crate::domain::{AssistantEvent, LocalRequestId, ModelRef, ProviderRequestId, ResponseFormat};
 use crate::error::LlmError;
+use crate::plan::ResponseLimits;
 use crate::provider::ResponseCompat;
-use crate::provider::call_policy::ResponseLimits;
 use crate::transport::{ByteStream, SseConfig, SseDecoder};
 
 /// Stable request context supplied by the client orchestration layer.

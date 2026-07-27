@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http::HeaderName;
-use philo::{
+use philo::provider::auth::{
     ApiKey, ApiKeyHeaderAuth, AuthProvider, BearerAuth, BearerCredential, CredentialFuture,
     CredentialIdentity, DynamicAuth, DynamicCredential, DynamicCredentialContext,
     DynamicCredentialSource, MultiHeaderAuth, NoAuth, TenantId,
@@ -27,7 +27,7 @@ impl DynamicCredentialSource for ApplicationCredentialSource {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let audience = philo::CredentialAudience::OfficialOpenAi;
+    let audience = philo::provider::endpoint::CredentialAudience::OfficialOpenAi;
     let bearer = BearerAuth::new(BearerCredential::new(
         ApiKey::new("resolved-static-token")?,
         audience.clone(),

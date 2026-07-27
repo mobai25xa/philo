@@ -2,10 +2,12 @@
 
 use std::error::Error;
 
-use philo::{
-    AuthScheme, EndpointConfig, ProductId, ProviderCapabilities, ProviderDefinition, ProviderId,
-    ProviderRegistration, ProviderRegistry,
-};
+use philo::provider::capability::ProviderCapabilities;
+use philo::provider::catalog::ProductId;
+use philo::provider::definition::AuthScheme;
+use philo::provider::endpoint::EndpointConfig;
+use philo::provider::registry::{ProviderRegistration, ProviderRegistry};
+use philo::{ProviderDefinition, ProviderId};
 
 fn definition(provider: &str, endpoint: &str) -> Result<ProviderDefinition, philo::LlmError> {
     ProviderDefinition::openai_chat(ProviderId::new(provider)?, ProductId::new("chat")?)

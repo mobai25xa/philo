@@ -8,8 +8,15 @@ fn examples_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
 }
 
+/// `provider_config.rs` is intentionally absent: FR-005 moved layered
+/// configuration into `philo-config`, and its example moved with it to
+/// `crates/philo-config/examples/provider_config.rs`.
 fn required_examples() -> &'static [&'static str] {
     &[
+        "quickstart.rs",
+        "custom_provider.rs",
+        "raw_extension.rs",
+        "config_separation.rs",
         "tool_single.rs",
         "tool_parallel.rs",
         "tool_reject.rs",
@@ -22,7 +29,6 @@ fn required_examples() -> &'static [&'static str] {
         "provider_profiles.rs",
         "provider_diagnostics.rs",
         "provider_auth_shapes.rs",
-        "provider_config.rs",
         "deployment_mapping.rs",
         "provider_routing.rs",
         "anthropic_messages.rs",
@@ -31,6 +37,31 @@ fn required_examples() -> &'static [&'static str] {
         "multi_provider_same_protocol.rs",
         "one_provider_multiple_protocols.rs",
     ]
+}
+
+#[test]
+fn fix_root_examples_cover_the_migration_paths() {
+    let root = examples_dir();
+    let quickstart = fs::read_to_string(root.join("quickstart.rs")).unwrap();
+    assert!(quickstart.contains("use philo::{"));
+    for forbidden in ["philo::domain::", "philo::provider::", "philo::transport::"] {
+        assert!(
+            !quickstart.contains(forbidden),
+            "quickstart bypasses the root allowlist: {forbidden}"
+        );
+    }
+
+    let custom = fs::read_to_string(root.join("custom_provider.rs")).unwrap();
+    assert!(custom.contains("ProviderDefinition::openai_chat"));
+    assert!(custom.contains("https://llm.example.com"));
+
+    let raw = fs::read_to_string(root.join("raw_extension.rs")).unwrap();
+    assert!(raw.contains("OpenAiChatRawExtension::dangerous_from_object"));
+    assert!(raw.contains("\"provider\""));
+
+    let config = fs::read_to_string(root.join("config_separation.rs")).unwrap();
+    assert!(config.contains("official_openai_inputs"));
+    assert!(config.contains("definition.compile"));
 }
 
 #[test]

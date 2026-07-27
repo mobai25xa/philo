@@ -3,10 +3,12 @@
 use std::error::Error;
 
 use http::HeaderName;
-use philo::{
-    AuthScheme, EndpointConfig, ProductId, ProviderCapabilities, ProviderDefinition, ProviderId,
-    ProviderRegistration, ProviderRegistry,
-};
+use philo::provider::capability::ProviderCapabilities;
+use philo::provider::catalog::ProductId;
+use philo::provider::definition::AuthScheme;
+use philo::provider::endpoint::EndpointConfig;
+use philo::provider::registry::{ProviderRegistration, ProviderRegistry};
+use philo::{ProviderDefinition, ProviderId};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let provider = ProviderId::new("example-multi-protocol-gateway")?;

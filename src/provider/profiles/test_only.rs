@@ -13,10 +13,10 @@ use super::super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::super::catalog::{ModelCatalog, ProductId};
-use super::super::compat::{CompatPatch, OpenRouterRoutingContract};
 use super::super::endpoint::{CredentialAudience, EndpointConfig, resolve_test_only};
 use super::super::headers::DynamicHeaderPolicy;
 use super::super::profile::{ProviderProfile, ProviderProfileParts};
+use super::super::protocol_contract::CompatProfile;
 use super::super::runtime::ProviderRuntime;
 use super::super::{IdempotencyPolicy, RateLimitPolicy};
 
@@ -49,11 +49,7 @@ impl TestOnlyProfile {
                 capabilities: ProviderCapabilities::official_openai(),
                 model_capabilities: BTreeMap::new(),
                 catalog: ModelCatalog::default(),
-                provider_compat: CompatPatch::from_source(
-                    crate::domain::PolicySource::ProviderProfile,
-                ),
-                model_compat: BTreeMap::new(),
-                openrouter_routing: None,
+                model_protocol_contracts: BTreeMap::new(),
                 dialect: ProtocolDialect::OpenAiChatCompletions,
                 protocol_contract: ResolvedProtocolContract::strict_openai_chat(),
                 transport: ProviderTransportOptions::secure_defaults(),
@@ -121,24 +117,28 @@ impl TestOnlyProfile {
         self
     }
 
-    /// Replaces provider-level compatibility for an offline test runtime.
+    /// Replaces the resolved compatibility contract for an offline test runtime.
     #[must_use]
-    pub fn with_compat(mut self, compat: CompatPatch) -> Self {
-        self.profile.provider_compat = compat;
+    pub fn with_compat(mut self, compat: CompatProfile) -> Self {
+        self.profile.protocol_contract = crate::provider::ResolvedProtocolContract::OpenAiChat(
+            crate::provider::OpenAiChatContract::from_compat(compat),
+        );
         self
     }
 
-    /// Adds exact-model compatibility for an offline test runtime.
+    /// Adds an exact-model resolved contract for an offline test runtime.
     #[must_use]
-    pub fn with_model_compat(mut self, model: crate::domain::ModelId, compat: CompatPatch) -> Self {
-        self.profile.model_compat.insert(model, compat);
-        self
-    }
-
-    /// Enables the provider-scoped `OpenRouter` routing contract for offline adapter tests.
-    #[must_use]
-    pub fn with_openrouter_routing(mut self, contract: OpenRouterRoutingContract) -> Self {
-        self.profile.openrouter_routing = Some(contract);
+    pub fn with_model_compat(
+        mut self,
+        model: crate::domain::ModelId,
+        compat: CompatProfile,
+    ) -> Self {
+        self.profile.model_protocol_contracts.insert(
+            model,
+            crate::provider::ResolvedProtocolContract::OpenAiChat(
+                crate::provider::OpenAiChatContract::from_compat(compat),
+            ),
+        );
         self
     }
 

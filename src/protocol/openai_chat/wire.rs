@@ -7,7 +7,6 @@ use serde_json::Value;
 use crate::domain::{ImageDetail, MessageRole};
 use crate::provider::MaxOutputTokensWireFormat;
 
-use super::compat::routing::ProviderRoutingWire;
 use super::structured_wire::ResponseFormatWire;
 use super::tool_wire::{ToolChoiceWire, ToolWire};
 
@@ -35,8 +34,6 @@ pub(super) struct ChatCompletionRequestWire<'a> {
     response_format: Option<ResponseFormatWire<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<ReasoningEffortWire>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    provider: Option<ProviderRoutingWire<'a>>,
 }
 
 impl<'a> ChatCompletionRequestWire<'a> {
@@ -53,7 +50,6 @@ impl<'a> ChatCompletionRequestWire<'a> {
         reasoning_effort: Option<ReasoningEffortWire>,
         max_output_tokens_format: MaxOutputTokensWireFormat,
         include_usage: bool,
-        provider: Option<ProviderRoutingWire<'a>>,
     ) -> Self {
         let (max_completion_tokens, max_tokens) = super::compat::request::output_token_fields(
             max_completion_tokens,
@@ -73,7 +69,6 @@ impl<'a> ChatCompletionRequestWire<'a> {
             parallel_tool_calls,
             response_format,
             reasoning_effort,
-            provider,
         }
     }
 }

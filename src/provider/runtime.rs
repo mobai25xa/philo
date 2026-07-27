@@ -18,16 +18,12 @@ use crate::error::LlmError;
 use crate::protocol::RequestFacts;
 use crate::transport::{RequestLifecycle, SseConfig};
 
+use super::ResolvedProtocolContract;
 use super::auth::{AuthContext, AuthProvider, ClientIdentity};
-use super::call_policy::{CallPolicySnapshot, ProtocolKind, ResolvedLimits, ResolvedTarget};
 use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::catalog::{ModelCatalog, ModelEntry, ModelKey, ProductId, ProviderModelId};
-use super::compat::{
-    CompatPatch, OpenRouterRoutingContract, ProviderRequestOptions, resolve_compat, validate_compat,
-};
-use super::diagnostics::{DiagnosticsInput, ProviderDiagnostics};
 use super::endpoint::{
     EndpointConfig, EndpointMode, EndpointValues, ResolvedEndpoint, ResolvedModelMapping,
     resolve_official, resolve_official_for, resolve_test_only, resolve_test_only_for,
@@ -38,7 +34,7 @@ use super::headers::{
 };
 use super::profile::ProviderProfile;
 use super::{IdempotencyPolicy, RateLimitPolicy};
-use super::{OpenAiChatContract, ResolvedProtocolContract};
+use crate::plan::{CallPolicySnapshot, ProtocolKind, ResolvedLimits, ResolvedTarget};
 
 /// Immutable, concurrency-safe provider runtime.
 #[derive(Clone)]
@@ -58,9 +54,7 @@ pub struct ProviderRuntime {
     capabilities: ProviderCapabilities,
     model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     catalog: ModelCatalog,
-    provider_compat: CompatPatch,
-    model_compat: BTreeMap<ModelId, CompatPatch>,
-    openrouter_routing: Option<OpenRouterRoutingContract>,
+    model_protocol_contracts: BTreeMap<ModelId, ResolvedProtocolContract>,
     dialect: ProtocolDialect,
     protocol_contract: ResolvedProtocolContract,
     transport: ProviderTransportOptions,
@@ -132,14 +126,16 @@ impl ProviderRuntime {
             ));
         }
         if matches!(profile.dialect, ProtocolDialect::AnthropicMessages)
-            && (!profile.provider_compat.is_empty()
-                || profile.model_compat.values().any(|patch| !patch.is_empty())
-                || profile.openrouter_routing.is_some())
+            && !profile.model_protocol_contracts.is_empty()
         {
             return Err(LlmError::Configuration(
                 "Anthropic Messages profiles cannot carry OpenAI compatibility policy".to_owned(),
             ));
         }
+        // FR-004: a contract that contradicts the capabilities it will run
+        // under is rejected here, where every construction path converges, so
+        // it can never reach a request.
+        validate_contracts(&profile)?;
         let endpoint_mode = if profile.test_only {
             EndpointMode::TestOnly
         } else {
@@ -205,9 +201,7 @@ impl ProviderRuntime {
             capabilities: profile.capabilities,
             model_capabilities: profile.model_capabilities,
             catalog: profile.catalog,
-            provider_compat: profile.provider_compat,
-            model_compat: profile.model_compat,
-            openrouter_routing: profile.openrouter_routing,
+            model_protocol_contracts: profile.model_protocol_contracts,
             dialect: profile.dialect,
             protocol_contract: profile.protocol_contract,
             transport: profile.transport,
@@ -276,55 +270,6 @@ impl ProviderRuntime {
         capabilities
     }
 
-    /// Compiles value-free diagnostics for the same target-aware policy used by a call.
-    ///
-    /// The snapshot contains identifiers, sources, enum decisions, Header names, and
-    /// evidence dates. It never retains messages, Header values, credentials, request
-    /// metadata values, or URL query values.
-    pub fn diagnostics_for_request(
-        &self,
-        request: &GenerateRequest,
-        provider_options: &ProviderRequestOptions,
-        as_of: &str,
-    ) -> Result<ProviderDiagnostics, LlmError> {
-        let plan = self.plan_policy_for_with_options(request, provider_options)?;
-        let endpoint = self.resolve_target_endpoint(&plan.target)?;
-        let entry = self.model_entry(request.model().model());
-        let provider_headers = self
-            .provider_headers
-            .iter()
-            .map(HeaderOperation::name)
-            .cloned()
-            .collect();
-        let model_headers = self
-            .model_headers
-            .iter()
-            .map(HeaderOperation::name)
-            .cloned()
-            .collect();
-        let dynamic_headers = self
-            .dynamic_header_policy
-            .as_deref()
-            .map(DynamicHeaderPolicy::allowed_headers)
-            .unwrap_or_default()
-            .to_vec();
-        let request_headers = request.options().headers().keys().cloned().collect();
-        ProviderDiagnostics::compile(DiagnosticsInput {
-            plan: &plan,
-            endpoint: &endpoint,
-            entry,
-            as_of,
-            auth_scheme: self.auth.scheme_kind(),
-            credential_source: self.auth.credential_source_kind(),
-            auth_headers: self.auth.protected_headers(),
-            provider_headers,
-            model_headers,
-            dynamic_headers,
-            request_headers,
-            protocol_option_labels: protocol_option_labels(request),
-        })
-    }
-
     /// Returns dialect.
     pub fn dialect(&self) -> ProtocolDialect {
         self.dialect
@@ -348,10 +293,9 @@ impl ProviderRuntime {
     }
 
     /// Compiles the immutable, target-aware policy used for one logical call.
-    pub(crate) fn plan_policy_for_with_options(
+    pub(crate) fn plan_policy_for(
         &self,
         request: &GenerateRequest,
-        provider_options: &ProviderRequestOptions,
     ) -> Result<CallPolicySnapshot, LlmError> {
         if request.model().provider() != &self.provider_id {
             return Err(crate::error::ValidationError::new(
@@ -378,7 +322,7 @@ impl ProviderRuntime {
         if let Some(options) = request
             .options()
             .protocol_options()
-            .and_then(crate::extensions::ProtocolOptions::anthropic_messages)
+            .and_then(crate::protocol_options::ProtocolOptions::anthropic_messages)
         {
             if options.adaptive_thinking().is_some() {
                 validate_protocol_capability(
@@ -393,23 +337,13 @@ impl ProviderRuntime {
                 )?;
             }
         }
-        let mut compat_layers = vec![self.provider_compat.clone()];
-        if let Some(entry) = entry {
-            compat_layers.push(entry.compat_overrides.clone());
-        }
-        if let Some(model) = self.model_compat.get(request.model().model()) {
-            compat_layers.push(model.clone());
-        }
-        let protocol = match &self.protocol_contract {
-            ResolvedProtocolContract::OpenAiChat(_) => {
-                let compat = resolve_compat(&compat_layers);
-                validate_compat(&compat, &capabilities)?;
-                ResolvedProtocolContract::OpenAiChat(OpenAiChatContract::from_compat(compat))
-            }
-            ResolvedProtocolContract::AnthropicMessages(contract) => {
-                ResolvedProtocolContract::AnthropicMessages(*contract)
-            }
-        };
+        // FR-004: the contract was resolved and validated when the definition
+        // was built. Planning a request selects one; it never merges.
+        let protocol = self
+            .model_protocol_contracts
+            .get(request.model().model())
+            .unwrap_or(&self.protocol_contract)
+            .clone();
         let model_limits = entry.map(|entry| entry.limits).unwrap_or_default();
         let limits = ResolvedLimits::compile(
             model_limits.apply_to(self.resource_limits),
@@ -418,25 +352,7 @@ impl ProviderRuntime {
             model_limits.max_output_tokens,
             entry.and_then(|entry| entry.default_max_output_tokens),
         )?;
-        let history =
-            protocol.history_policy(limits.request.max_messages, limits.request.max_text_bytes);
-        let request_routing = provider_options.openrouter_routing();
-        let openrouter_routing = match (&self.openrouter_routing, request_routing) {
-            (Some(contract), request) => {
-                let resolved = contract.resolve(request)?;
-                (!resolved.is_empty()).then_some(resolved)
-            }
-            (None, Some(_)) => {
-                return Err(crate::error::ValidationError::new(
-                    "provider_options.openrouter_routing",
-                    crate::error::ValidationReason::CapabilityUnsupported,
-                    "selected profile does not declare OpenRouter routing support",
-                )
-                .into());
-            }
-            (None, None) => None,
-        };
-
+        let history = protocol.history_policy();
         Ok(CallPolicySnapshot {
             target: ResolvedTarget {
                 provider_id: self.provider_id.clone(),
@@ -459,14 +375,13 @@ impl ProviderRuntime {
             history,
             limits,
             response_format: request.options().response_format().clone(),
-            provider_routing: openrouter_routing,
         })
     }
 
     pub(crate) fn policy_provenance_for(&self, model: &ModelId) -> (PolicySource, bool) {
         let model_override_applied = self.model_capabilities.contains_key(model)
             || self.model_entry(model).is_some()
-            || self.model_compat.contains_key(model);
+            || self.model_protocol_contracts.contains_key(model);
         let source = if model_override_applied {
             PolicySource::ModelProfile
         } else {
@@ -652,22 +567,6 @@ impl ProviderRuntime {
     }
 }
 
-fn protocol_option_labels(request: &GenerateRequest) -> Vec<&'static str> {
-    let Some(options) = request.options().protocol_options() else {
-        return Vec::new();
-    };
-    let mut labels = vec!["anthropic-messages-options"];
-    if options.diagnostics().iter().any(|diagnostic| {
-        matches!(
-            diagnostic,
-            crate::extensions::ProtocolOptionDiagnostic::NonPortableExtensionUsed
-        )
-    }) {
-        labels.push("non_portable_extension_used");
-    }
-    labels
-}
-
 fn validate_protocol_capability(
     field: &'static str,
     status: crate::domain::CapabilityStatus,
@@ -687,6 +586,39 @@ fn validate_protocol_capability(
         )
         .into()),
     }
+}
+
+/// Rejects any resolved contract that contradicts the capabilities it will run under.
+///
+/// Every construction path — the definition builder and the test-only profile —
+/// funnels through `ProviderRuntime::build`, so this is the one place that has
+/// to hold for the guarantee to be complete.
+fn validate_contracts(profile: &ProviderProfile) -> Result<(), LlmError> {
+    let capabilities_for = |model: &ModelId| {
+        let mut capabilities = profile.capabilities.clone();
+        if let Some(entry) = profile.catalog.get(&ModelKey {
+            provider_id: profile.provider_id.clone(),
+            product_id: profile.product_id.clone(),
+            domain_model_id: model.clone(),
+        }) {
+            capabilities.apply_catalog(&entry.capabilities);
+        }
+        if let Some(declaration) = profile.model_capabilities.get(model) {
+            capabilities.apply_model(declaration);
+        }
+        capabilities
+    };
+    if let Some(contract) = profile.protocol_contract.openai_chat() {
+        contract.compat().validate_against(&profile.capabilities)?;
+    }
+    for (model, contract) in &profile.model_protocol_contracts {
+        if let Some(contract) = contract.openai_chat() {
+            contract
+                .compat()
+                .validate_against(&capabilities_for(model))?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_entry_endpoint(

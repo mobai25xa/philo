@@ -174,11 +174,22 @@ pub enum EndpointQueryAction {
 }
 
 /// Value-free query resolution record.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct EndpointQueryDiagnostic {
     name: String,
     action: EndpointQueryAction,
     source: EndpointQuerySource,
+}
+
+impl fmt::Debug for EndpointQueryDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EndpointQueryDiagnostic")
+            .field("name", &self.name)
+            .field("action", &self.action)
+            .field("source", &self.source)
+            .finish()
+    }
 }
 
 impl EndpointQueryDiagnostic {

@@ -2,7 +2,7 @@
 
 use std::error::Error;
 
-use philo::ProviderRegistry;
+use philo::provider::registry::ProviderRegistry;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let registry = ProviderRegistry::with_official_openai()?;

@@ -2,10 +2,10 @@
 
 mod support;
 
-use philo::{
-    GenerateRequest, GenerationOptions, ModelRef, ResponseFormat, StructuredSchema, ToolSchema,
-    collect_assistant_message_for_format,
-};
+use philo::domain::event::collect_assistant_message_for_format;
+use philo::domain::schema::ToolSchema;
+use philo::domain::structured::{ResponseFormat, StructuredSchema};
+use philo::{GenerateRequest, GenerationOptions, ModelRef};
 use serde_json::json;
 use support::ExampleResult;
 
@@ -35,7 +35,8 @@ async fn main() -> ExampleResult {
     if !support::has_live_credentials() {
         // Prove the collector helper is the complete-path validator surface.
         use futures_util::stream;
-        use philo::{AssistantEvent, ContentIndex, FinishReason, LocalRequestId};
+        use philo::domain::ids::{ContentIndex, LocalRequestId};
+        use philo::{AssistantEvent, FinishReason};
 
         let events = stream::iter(vec![
             Ok(AssistantEvent::Start {

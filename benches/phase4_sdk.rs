@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures_util::{StreamExt as _, stream};
 use http::{HeaderMap, HeaderValue, StatusCode, header};
+use philo::domain::request::CapabilitySet;
+use philo::observability::{LifecycleEvent, LifecycleObserver};
 use philo::provider::TestOnlyProfile;
 use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::transport::{ByteStream, SseDecoder};
-use philo::{
-    CapabilitySet, GenerateRequest, LifecycleEvent, LifecycleObserver, LlmClient, Message, ModelRef,
-};
+use philo::{GenerateRequest, LlmClient, Message, ModelRef};
 
 const ENDPOINT: &str = "http://127.0.0.1:41993/v1/chat/completions";
 

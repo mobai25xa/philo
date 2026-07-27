@@ -11,10 +11,9 @@ guess a protocol and never falls back to another provider or protocol.
 Use a named secret reference so configuration contains no credential value:
 
 ```rust,no_run
-use philo::{
-    ConfigSource, ConfigValue, EnvironmentSecretResolver, ProviderConfigLayer,
-    ProviderConfigSnapshot, ProviderId, ProviderRegistry, SecretReference,
-};
+use philo::ProviderId;
+use philo::provider::config::{ConfigSource, ConfigValue, EnvironmentSecretResolver, ProviderConfigLayer, ProviderConfigSnapshot, SecretReference};
+use philo::provider::registry::ProviderRegistry;
 
 # fn build() -> Result<philo::ProviderRuntime, philo::LlmError> {
 let credential = ProviderConfigLayer::new(ConfigSource::environment_secret(
@@ -73,10 +72,8 @@ Use common `GenerationOptions` for shared intent. Use
 `AnthropicMessagesOptions` for stable Anthropic-only behavior:
 
 ```rust
-use philo::{
-    AnthropicEffort, AnthropicMessagesOptions, AnthropicThinkingDisplay,
-    GenerationOptions,
-};
+use philo::GenerationOptions;
+use philo::protocol_options::{AnthropicEffort, AnthropicMessagesOptions, AnthropicThinkingDisplay};
 
 let options = GenerationOptions::new()
     .with_max_output_tokens(1024)

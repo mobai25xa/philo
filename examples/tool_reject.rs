@@ -2,10 +2,12 @@
 
 mod support;
 
-use philo::{
-    ToolArguments, ToolCall, ToolCallId, ToolDefinition, ToolName, ToolResultMessage, ToolSchema,
-    ToolValidationFailure, validate_tool_call,
-};
+use philo::domain::ids::{ToolCallId, ToolName};
+use philo::domain::message::ToolResultMessage;
+use philo::domain::schema::ToolSchema;
+use philo::domain::tools::validate_tool_call;
+use philo::domain::tools::{ToolArguments, ToolCall, ToolDefinition};
+use philo::error::ToolValidationFailure;
 use serde_json::json;
 use support::ExampleResult;
 

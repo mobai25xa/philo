@@ -2,9 +2,8 @@
 
 mod support;
 
-use philo::{
-    GenerateRequest, LifecycleEvent, LifecycleEventKind, LifecycleObserver, LlmClient, Message,
-};
+use philo::observability::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
+use philo::{GenerateRequest, LlmClient, Message};
 
 #[derive(Clone, Copy)]
 struct SafeObserver;

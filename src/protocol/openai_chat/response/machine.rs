@@ -13,8 +13,8 @@ use crate::error::{
     ErrorStage, LlmError, ProtocolError, TruncatedStreamError, UnknownFinishReason,
     UnsupportedResponseSemantics,
 };
+use crate::plan::ResponseLimits;
 use crate::provider::ResponseCompat;
-use crate::provider::call_policy::ResponseLimits;
 use crate::transport::SseEvent;
 
 pub(super) struct ChatStateMachine {

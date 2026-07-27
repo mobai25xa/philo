@@ -21,6 +21,7 @@ pub use event::{
     AssistantEvent, AssistantMessage, FinishReason, Usage, collect_assistant_message,
     collect_assistant_message_for_format,
 };
+pub(crate) use history::normalize_history_with_limits;
 pub use history::{
     DiagnosticCode, DialectPolicy, HistoryCapabilities, HistoryPolicy, IdMapping, ImageWireFormat,
     MissingToolResultPolicy, NormalizationDiagnostic, NormalizedContext, PolicySource,

@@ -57,10 +57,20 @@ impl Origin {
 }
 
 /// Value-free trace of how one endpoint was resolved.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct EndpointResolutionDiagnostics {
     path_variables: Vec<EndpointPathVariable>,
     query: Vec<EndpointQueryDiagnostic>,
+}
+
+impl fmt::Debug for EndpointResolutionDiagnostics {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EndpointResolutionDiagnostics")
+            .field("path_variables", &self.path_variables)
+            .field("query", &self.query)
+            .finish()
+    }
 }
 
 impl EndpointResolutionDiagnostics {
