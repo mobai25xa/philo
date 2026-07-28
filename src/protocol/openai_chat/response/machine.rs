@@ -3,21 +3,22 @@ use std::fmt;
 
 use super::super::wire::{ChatCompletionChunkWire, ChoiceWire, DeltaWire, ToolCallDeltaWire};
 use super::stream::OpenAiChatStreamContext;
-use super::terminal::{PreparedChunk, StructuredTerminal, bounded_label, record_field_names};
+use super::terminal::{PreparedChunk, bounded_label, record_field_names};
 use super::tool_calls::ToolCallAccumulator;
 use crate::domain::{
-    AssistantEvent, ContentIndex, FinishReason, GenerationId, ResponseFormat, UsageDetails,
-    UsageMergeOutcome, merge_usage_details,
+    AssistantEvent, ContentIndex, FinishReason, GenerationId, ResponseFormat, SchemaLimits,
+    UsageDetails, UsageMergeOutcome, merge_usage_details,
 };
 use crate::error::{
     ErrorStage, LlmError, ProtocolError, TruncatedStreamError, UnknownFinishReason,
     UnsupportedResponseSemantics,
 };
 use crate::plan::ResponseLimits;
+use crate::protocol::structured_terminal::StructuredTerminal;
 use crate::provider::ResponseCompat;
 use crate::transport::SseEvent;
 
-pub(super) struct ChatStateMachine {
+pub(crate) struct ChatStateMachine {
     context: OpenAiChatStreamContext,
     limits: ResponseLimits,
     started: bool,
@@ -80,7 +81,15 @@ impl ChatStateMachine {
             finish_reason: None,
             duplicate_finish_seen: false,
             seen_done: false,
-            terminal: StructuredTerminal::new(response_format),
+            terminal: StructuredTerminal::new(
+                response_format,
+                SchemaLimits {
+                    max_schema_bytes: usize::MAX,
+                    max_schema_depth: limits.max_schema_depth,
+                    max_json_array_items: limits.max_json_array_items,
+                },
+                limits.max_structured_output_bytes,
+            ),
             usage_details: None,
             generation_id: None,
             response_model: None,
@@ -111,13 +120,12 @@ impl ChatStateMachine {
                     "[DONE] received before all content blocks ended",
                 ));
             }
-            self.terminal.validate(
+            self.terminal.validate_before_done(
                 self.finish_reason
                     .as_ref()
                     .expect("finish reason checked above"),
                 !self.tools.is_empty(),
                 !matches!(self.refusal, ContentBlockState::NotStarted),
-                &self.limits,
             )?;
             self.seen_done = true;
             return Ok(Vec::new());
@@ -346,8 +354,7 @@ impl ChatStateMachine {
         let ContentBlockState::Open { index } = self.text else {
             return Err(Self::protocol("text block is not open"));
         };
-        self.terminal
-            .push_text(content, self.limits.max_structured_output_bytes)?;
+        self.terminal.push_answer_text(content)?;
         events.push(AssistantEvent::TextDelta {
             index,
             delta: content.to_owned(),
@@ -1530,7 +1537,15 @@ mod tests {
                 finish_reason: Some(FinishReason::ToolCalls),
                 duplicate_finish_seen: false,
                 seen_done: true,
-                terminal: StructuredTerminal::new(ResponseFormat::Text),
+                terminal: StructuredTerminal::new(
+                    ResponseFormat::Text,
+                    SchemaLimits {
+                        max_schema_bytes: usize::MAX,
+                        max_schema_depth: limits.max_schema_depth,
+                        max_json_array_items: limits.max_json_array_items,
+                    },
+                    limits.max_structured_output_bytes,
+                ),
                 usage_details: None,
                 generation_id: None,
                 response_model: None,

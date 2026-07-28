@@ -79,14 +79,7 @@ impl CallPlanner {
             planned,
             provenance: PlanProvenance {
                 capability_source,
-                compat_source: policy.protocol.openai_chat().map_or(
-                    crate::domain::PolicySource::ProtocolDefault,
-                    |contract| {
-                        contract
-                            .compat()
-                            .source(crate::provider::CompatField::RequestMaxOutputTokens)
-                    },
-                ),
+                compat_source: policy.protocol.provenance_source(),
                 model_override_applied,
             },
             execution: CallExecutionIntent {

@@ -131,9 +131,41 @@ fn validate_core_dependencies(manifest: &str) -> Result<(), String> {
         .get("dependencies")
         .and_then(toml::Value::as_table)
         .ok_or_else(|| "missing [dependencies]".to_owned())?;
-    for sibling in ["philo-config", "philo-compat", "philo-presets"] {
+    for sibling in [
+        "philo-config",
+        "philo-compat",
+        "philo-presets",
+        "philo-test-support",
+    ] {
         if dependencies.contains_key(sibling) {
             return Err(format!("core production dependency includes {sibling}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_sibling_dependencies(manifest: &str) -> Result<(), String> {
+    let document = manifest
+        .parse::<toml::Value>()
+        .map_err(|error| format!("invalid Cargo.toml: {error}"))?;
+    let dependencies = document
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "missing [dependencies]".to_owned())?;
+
+    let core = dependencies
+        .get("philo")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "sibling production dependencies do not point to philo".to_owned())?;
+    if core.get("path").and_then(toml::Value::as_str) != Some("../..") {
+        return Err("sibling philo dependency does not use the workspace core path".to_owned());
+    }
+
+    for dependency in dependencies.keys() {
+        if dependency.starts_with("philo-") {
+            return Err(format!(
+                "sibling production dependency points sideways to {dependency}"
+            ));
         }
     }
     Ok(())
@@ -921,6 +953,7 @@ fn private_migration_types_are_not_reexported() {
         let text = production_source(facade);
         for forbidden in [
             "ProviderProfileParts",
+            "ValidatedProtocolBinding",
             "ChatStateMachine",
             "OpenAiChatStreamContext",
             "ProtocolDispatch",
@@ -1264,20 +1297,95 @@ fn provider_definition_builder_is_the_only_production_parts_constructor() {
 }
 
 #[test]
-fn extracted_presets_are_not_core_production_dependencies() {
+fn core_still_has_no_sibling_production_dependency() {
     let manifest = source("Cargo.toml");
     validate_core_dependencies(&manifest).unwrap();
+}
+
+#[test]
+fn sibling_crates_depend_toward_core_without_sideways_edges() {
+    for sibling in [
+        "philo-config",
+        "philo-compat",
+        "philo-presets",
+        "philo-test-support",
+    ] {
+        let manifest = source(&format!("crates/{sibling}/Cargo.toml"));
+        validate_sibling_dependencies(&manifest)
+            .unwrap_or_else(|error| panic!("{sibling}: {error}"));
+    }
 }
 
 #[test]
 fn protocol_contract_binding_and_public_custom_api_remain_fail_closed() {
     let definition = production_source("src/provider/definition.rs");
     let profile = production_source("src/provider/profile.rs");
+    let runtime = production_source("src/provider/runtime.rs");
+    let binding = production_source("src/provider/protocol_contract/binding.rs");
     let policy = production_source("src/plan/policy.rs");
-    for text in [&definition, &profile, &policy] {
+    for text in [&definition, &profile, &runtime, &policy] {
         assert!(!text.contains("Option<ResolvedProtocolContract>"));
         assert!(!text.contains("protocol_contract: Option"));
     }
+    let definition_state = definition
+        .split("pub struct ProviderDefinition {")
+        .nth(1)
+        .unwrap()
+        .split("impl ProviderDefinition")
+        .next()
+        .unwrap();
+    let profile_state = profile
+        .split("pub struct ProviderProfile {")
+        .nth(1)
+        .unwrap()
+        .split("/// Typed construction input")
+        .next()
+        .unwrap();
+    let runtime_state = runtime
+        .split("pub struct ProviderRuntime {")
+        .nth(1)
+        .unwrap()
+        .split("pub(crate) struct HeaderAttemptContext")
+        .next()
+        .unwrap();
+    for (owner, text) in [
+        ("definition", definition_state),
+        ("profile", profile_state),
+        ("runtime", runtime_state),
+    ] {
+        assert!(
+            text.contains("protocol: ValidatedProtocolBinding"),
+            "{owner} does not carry the atomic protocol binding"
+        );
+        for forbidden in [
+            "protocol_id:",
+            "protocol_kind:",
+            "dialect:",
+            "protocol_contract:",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "{owner} restored parallel protocol state: {forbidden}"
+            );
+        }
+    }
+    for required in [
+        "pub(crate) struct ValidatedProtocolBinding",
+        "id: ProtocolId",
+        "kind: ProtocolKind",
+        "dialect: ProtocolDialect",
+        "contract: ResolvedProtocolContract",
+        "pub(crate) fn new(",
+        "protocol id, dialect, and contract do not form a supported binding",
+    ] {
+        assert!(
+            binding.contains(required),
+            "missing binding invariant: {required}"
+        );
+    }
+    assert!(definition.contains("ValidatedProtocolBinding::new("));
+    assert!(!profile.contains("match parts.dialect"));
+    assert!(!runtime.contains("match profile.dialect"));
     assert!(definition.contains("CredentialBinding::exact_https_origin"));
     assert!(definition.contains("resolve_definition_endpoint(&endpoint, &catalog)"));
     assert!(definition.contains("resolve_official(endpoint)"));
@@ -1287,8 +1395,6 @@ fn protocol_contract_binding_and_public_custom_api_remain_fail_closed() {
     assert!(openai.contains("CredentialAudience::OfficialOpenAi.into()"));
     assert!(anthropic.contains("CredentialAudience::OfficialAnthropic.into()"));
 
-    let runtime = production_source("src/provider/runtime.rs");
-    assert!(runtime.contains("let protocol_kind = match profile.dialect"));
     for forbidden in ["host_str()", "EndpointDetection", "detect_protocol"] {
         assert!(!runtime.contains(forbidden));
     }
@@ -1308,6 +1414,304 @@ fn protocol_contract_binding_and_public_custom_api_remain_fail_closed() {
             );
         }
     }
+}
+
+#[test]
+fn runtime_and_planner_keep_concrete_protocol_policy_in_contract_owners() {
+    let runtime = production_source("src/provider/runtime.rs");
+    let planner = production_source("src/execution/planner.rs");
+    let contract = production_source("src/provider/protocol_contract/mod.rs");
+
+    for forbidden in [
+        "ProtocolOptions::anthropic_messages",
+        ".adaptive_thinking()",
+        ".effort()",
+        "protocol_options.anthropic.adaptive_thinking",
+        "protocol_options.anthropic.effort",
+    ] {
+        assert!(
+            !runtime.contains(forbidden),
+            "runtime restored concrete protocol option policy: {forbidden}"
+        );
+    }
+    assert!(runtime.contains("protocol.validate_options("));
+    assert!(runtime.contains(".validate_capabilities("));
+    assert!(!runtime.contains(".openai_chat()"));
+    assert!(!planner.contains(".openai_chat()"));
+    assert!(!planner.contains("CompatField::"));
+    assert!(planner.contains("policy.protocol.provenance_source()"));
+    for required in [
+        "pub(crate) fn validate_options(",
+        "pub(crate) fn validate_capabilities(",
+        "fn validate_options(",
+        "pub(crate) fn provenance_source(",
+        "protocol_options.anthropic.adaptive_thinking",
+        "protocol_options.anthropic.effort",
+    ] {
+        assert!(
+            contract.contains(required),
+            "missing contract policy: {required}"
+        );
+    }
+}
+
+#[test]
+fn sse_machine_polling_has_one_protocol_private_owner() {
+    let protocol = production_source("src/protocol/mod.rs");
+    let shared = production_source("src/protocol/response_stream.rs");
+    let openai = production_source("src/protocol/openai_chat/response/stream.rs");
+    let anthropic = production_source("src/protocol/anthropic_messages/response/stream.rs");
+    let transport = production_source("src/transport/sse.rs");
+
+    assert!(protocol.contains("mod response_stream;"));
+    assert!(!protocol.contains("pub(crate) mod response_stream;"));
+    for required in [
+        "pub(crate) trait SseEventMachine",
+        "pub(crate) struct SseMachineStream<M>",
+        "impl<M> Stream for SseMachineStream<M>",
+        "stream.pending.pop_front()",
+        "stream.max_events_per_poll",
+        "stream.machine.finish()",
+        "error.into_llm_error()",
+    ] {
+        assert!(
+            shared.contains(required),
+            "missing shared SSE rule: {required}"
+        );
+    }
+    for (name, wrapper) in [("openai", openai), ("anthropic", anthropic)] {
+        assert!(wrapper.contains("impl SseEventMachine for"));
+        assert!(wrapper.contains("SseMachineStream::new("));
+        for forbidden in [
+            "fn poll_next(",
+            "VecDeque",
+            "max_events_per_poll:",
+            "terminal:",
+            "SseDecoder",
+        ] {
+            assert!(
+                !wrapper.contains(forbidden),
+                "{name} wrapper restored shared SSE mechanism: {forbidden}"
+            );
+        }
+    }
+    for forbidden in [
+        "AssistantEvent",
+        "SseEventMachine",
+        "ChatStateMachine",
+        "MessagesStateMachine",
+    ] {
+        assert!(
+            !transport.contains(forbidden),
+            "transport imported protocol/domain semantics: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn driver_preparation_mechanisms_have_one_protocol_private_owner() {
+    let protocol = production_source("src/protocol/mod.rs");
+    let shared = production_source("src/protocol/preparation.rs");
+    let openai = production_source("src/protocol/openai_chat/driver.rs");
+    let anthropic = production_source("src/protocol/anthropic_messages/driver.rs");
+
+    assert!(protocol.contains("mod preparation;"));
+    assert!(!protocol.contains("pub(crate) mod preparation;"));
+    for required in [
+        "struct CommonRequestFacts",
+        "fn scan(request: &PlannedRequest)",
+        "fn standard_json_sse_header_operations()",
+        "reasoning_requested",
+        "max_output_tokens_requested",
+    ] {
+        assert!(
+            shared.contains(required),
+            "missing preparation owner: {required}"
+        );
+    }
+    for forbidden in [
+        "OpenAi",
+        "Anthropic",
+        "ProviderId",
+        "ProductId",
+        "Wire",
+        "Transport",
+    ] {
+        assert!(
+            !shared.contains(forbidden),
+            "shared preparation helper gained concrete authority: {forbidden}"
+        );
+    }
+    for (name, driver) in [("openai", openai), ("anthropic", anthropic)] {
+        for required in [
+            "CommonRequestFacts::scan(&plan.planned)",
+            "standard_json_sse_header_operations()",
+            "HttpResponseRequirements::event_stream(",
+            "ProtocolFactDecisions",
+        ] {
+            assert!(
+                driver.contains(required),
+                "{name} misses shared primitive: {required}"
+            );
+        }
+        for forbidden in [
+            "header::CONTENT_TYPE",
+            "header::ACCEPT",
+            "ContentPart::Image",
+            "MessageRole::Tool",
+        ] {
+            assert!(
+                !driver.contains(forbidden),
+                "{name} restored shared preparation mechanism: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn structured_terminal_mechanism_is_shared_but_terminal_recognition_stays_protocol_owned() {
+    let protocol = production_source("src/protocol/mod.rs");
+    let shared = production_source("src/protocol/structured_terminal.rs");
+    let openai = production_source("src/protocol/openai_chat/response/machine.rs");
+    let anthropic = production_source("src/protocol/anthropic_messages/response/machine.rs");
+    let collector = production_source("src/domain/event.rs");
+
+    assert!(protocol.contains("mod structured_terminal;"));
+    assert!(!protocol.contains("pub(crate) mod structured_terminal;"));
+    for required in [
+        "struct StructuredTerminal",
+        "push_answer_text",
+        "validate_before_done",
+        "is_validated",
+        "text_buffer: Option<String>",
+        "schema_limits: SchemaLimits",
+        "byte_limit: usize",
+    ] {
+        assert!(
+            shared.contains(required),
+            "missing terminal mechanism: {required}"
+        );
+    }
+    for (name, machine, marker) in [
+        ("openai", openai, "event.data() == \"[DONE]\""),
+        ("anthropic", anthropic, "fn message_stop("),
+    ] {
+        assert!(machine.contains("StructuredTerminal::new("));
+        assert!(machine.contains("validate_before_done("));
+        assert!(
+            machine.contains(marker),
+            "{name} lost protocol terminal recognition"
+        );
+        assert!(!machine.contains("validate_structured_response("));
+    }
+    assert!(collector.contains("validate_structured_output(&message, response_format)?"));
+    assert!(collector.contains("validate_structured_response("));
+}
+
+#[test]
+fn provider_product_runtime_registry_identity_is_exact_and_fail_closed() {
+    let registry = production_source("src/provider/registry.rs");
+    let error = production_source("src/error.rs");
+    let selector = production_source("src/provider/factory.rs");
+
+    for required in [
+        "ProviderRegistration::from_definition",
+        "ProviderRegistryFailure::AmbiguousProductSelection",
+        "select one exact product",
+        "Some(runtime.product_id()) != metadata.product_id.as_ref()",
+        "Some(runtime.protocol_id()) != metadata.protocol_id.as_ref()",
+        "registration.compiler.as_ref().clone()",
+    ] {
+        assert!(
+            registry.contains(required),
+            "registry lost exact identity rule: {required}"
+        );
+    }
+    assert!(error.contains("AmbiguousProductSelection"));
+    assert!(selector.contains("Every source is explicit"));
+    for forbidden in ["host_str()", "EndpointDetection", "detect_provider"] {
+        assert!(
+            !selector.contains(forbidden),
+            "provider selector restored inference: {forbidden}"
+        );
+    }
+
+    for path in [
+        "src/provider/profiles/official_openai.rs",
+        "src/provider/profiles/official_anthropic.rs",
+        "crates/philo-presets/src/openrouter.rs",
+        "crates/philo-presets/src/deepseek.rs",
+        "crates/philo-presets/src/zai.rs",
+    ] {
+        let source = production_source(path);
+        assert!(
+            source.contains("ProviderDefinition"),
+            "{path} bypasses the unique definition builder path"
+        );
+    }
+}
+
+#[test]
+fn responses_readiness_has_extension_slots_without_placeholder_support() {
+    let kind = production_source("src/plan/policy.rs");
+    let dispatch = production_source("src/protocol/mod.rs");
+    let binding = production_source("src/provider/protocol_contract/binding.rs");
+    let contracts = production_source("src/provider/protocol_contract/mod.rs");
+    let options = production_source("src/protocol_options/mod.rs");
+    let shared_stream = production_source("src/protocol/response_stream.rs");
+    let source_identity = production_source("src/domain/content.rs");
+
+    for (owner, source, required) in [
+        ("plan", &kind, "enum ProtocolKind"),
+        ("dispatch", &dispatch, "enum ProtocolDispatch"),
+        ("operation", &dispatch, "enum ProtocolOperation"),
+        ("response", &dispatch, "enum ProtocolResponsePlan"),
+        ("binding", &binding, "struct ValidatedProtocolBinding"),
+        ("contract", &contracts, "enum ResolvedProtocolContract"),
+        ("options", &options, "enum ProtocolOptions"),
+    ] {
+        assert!(
+            source.contains(required),
+            "missing third-protocol extension slot in {owner}: {required}"
+        );
+    }
+    assert!(dispatch.contains("mod response_stream;"));
+    assert!(shared_stream.contains("struct SseMachineStream"));
+    validate_closed_protocol_options(&options).unwrap();
+
+    for (file, text) in production_sources_under("src") {
+        for forbidden in [
+            "OpenAiResponses",
+            "openai_responses",
+            "PreviousResponseId",
+            "previous_response_id",
+            "ContinuationState",
+            "BackgroundJob",
+            "FileUpload",
+            "HostedTool",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "{file} claims deferred Responses support through {forbidden}"
+            );
+        }
+    }
+
+    let identity_state = source_identity
+        .split("pub struct SourceIdentity {")
+        .nth(1)
+        .unwrap()
+        .split("impl SourceIdentity")
+        .next()
+        .unwrap();
+    assert!(source_identity.contains("This is not conversation or response continuation state"));
+    assert!(
+        source_identity.contains("This comparison does not authorize conversation continuation")
+    );
+    assert!(identity_state.contains("provider: ProviderId"));
+    assert!(identity_state.contains("protocol: ProtocolId"));
+    assert!(!identity_state.contains("ProductId"));
+    assert!(!identity_state.contains("continuation"));
 }
 
 #[test]
@@ -1566,6 +1970,16 @@ fn deliberate_extra_root_export_is_rejected() {
 fn deliberate_sibling_dependency_is_rejected() {
     let mutated = "[dependencies]\nphilo-config = { path = \"crates/philo-config\" }\n";
     assert!(validate_core_dependencies(mutated).is_err());
+}
+
+#[test]
+fn deliberate_sideways_sibling_dependency_is_rejected() {
+    let mutated = concat!(
+        "[dependencies]\n",
+        "philo = { path = \"../..\" }\n",
+        "philo-compat = { path = \"../philo-compat\" }\n",
+    );
+    assert!(validate_sibling_dependencies(mutated).is_err());
 }
 
 #[test]

@@ -3,20 +3,19 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::domain::{ProtocolId, ProviderId, ResourceLimits};
+use crate::domain::{ProviderId, ResourceLimits};
 use crate::error::LlmError;
 use crate::transport::SseConfig;
 
-use super::super::ResolvedProtocolContract;
 use super::super::auth::{ApiKey, AuthProvider, BearerAuth, BearerCredential, ClientIdentity};
 use super::super::capability::{
-    ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
+    ModelCapabilityProfile, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::super::catalog::{ModelCatalog, ProductId};
 use super::super::endpoint::{CredentialAudience, EndpointConfig, resolve_test_only};
 use super::super::headers::DynamicHeaderPolicy;
 use super::super::profile::{ProviderProfile, ProviderProfileParts};
-use super::super::protocol_contract::CompatProfile;
+use super::super::protocol_contract::{CompatProfile, ValidatedProtocolBinding};
 use super::super::runtime::ProviderRuntime;
 use super::super::{IdempotencyPolicy, RateLimitPolicy};
 
@@ -25,6 +24,7 @@ use super::super::{IdempotencyPolicy, RateLimitPolicy};
 #[derive(Clone, Debug)]
 pub struct TestOnlyProfile {
     profile: ProviderProfile,
+    protocol_binding_error: bool,
 }
 
 impl TestOnlyProfile {
@@ -38,7 +38,7 @@ impl TestOnlyProfile {
             profile: ProviderProfile::from_parts(ProviderProfileParts {
                 provider_id: ProviderId::new("test-only")?,
                 product_id: ProductId::new("chat-completions")?,
-                protocol_id: ProtocolId::new("openai-chat-completions")?,
+                protocol: ValidatedProtocolBinding::openai_chat(),
                 endpoint,
                 credential_binding: audience.into(),
                 auth: Arc::new(BearerAuth::new(credential)),
@@ -50,8 +50,6 @@ impl TestOnlyProfile {
                 model_capabilities: BTreeMap::new(),
                 catalog: ModelCatalog::default(),
                 model_protocol_contracts: BTreeMap::new(),
-                dialect: ProtocolDialect::OpenAiChatCompletions,
-                protocol_contract: ResolvedProtocolContract::strict_openai_chat(),
                 transport: ProviderTransportOptions::secure_defaults(),
                 resource_limits: ResourceLimits::official(),
                 sse: SseConfig::default(),
@@ -60,6 +58,7 @@ impl TestOnlyProfile {
                 idempotency: IdempotencyPolicy::standard_header(),
                 test_only: true,
             })?,
+            protocol_binding_error: false,
         })
     }
 
@@ -77,10 +76,8 @@ impl TestOnlyProfile {
     #[must_use]
     pub fn with_anthropic_messages(mut self) -> Self {
         self.profile.product_id = ProductId::new("messages").expect("static product ID is valid");
-        self.profile.protocol_id =
-            ProtocolId::new("anthropic-messages").expect("static protocol ID is valid");
-        self.profile.dialect = ProtocolDialect::AnthropicMessages;
-        self.profile.protocol_contract = ResolvedProtocolContract::strict_anthropic_messages();
+        self.profile.protocol = ValidatedProtocolBinding::anthropic_messages();
+        self.protocol_binding_error = false;
         self.profile.capabilities = ProviderCapabilities::official_anthropic();
         self
     }
@@ -120,9 +117,13 @@ impl TestOnlyProfile {
     /// Replaces the resolved compatibility contract for an offline test runtime.
     #[must_use]
     pub fn with_compat(mut self, compat: CompatProfile) -> Self {
-        self.profile.protocol_contract = crate::provider::ResolvedProtocolContract::OpenAiChat(
+        let contract = crate::provider::ResolvedProtocolContract::OpenAiChat(
             crate::provider::OpenAiChatContract::from_compat(compat),
         );
+        match self.profile.protocol.clone().with_contract(contract) {
+            Ok(protocol) => self.profile.protocol = protocol,
+            Err(_) => self.protocol_binding_error = true,
+        }
         self
     }
 
@@ -183,6 +184,11 @@ impl TestOnlyProfile {
 
     /// Builds the test runtime.
     pub fn build(self) -> Result<ProviderRuntime, LlmError> {
+        if self.protocol_binding_error {
+            return Err(LlmError::Configuration(
+                "test-only compatibility contract does not match protocol binding".to_owned(),
+            ));
+        }
         ProviderRuntime::build(self.profile)
     }
 }

@@ -15,6 +15,7 @@ use crate::error::{
     UnsupportedResponseSemantics,
 };
 use crate::plan::ResponseLimits;
+use crate::protocol::structured_terminal::StructuredTerminal;
 use crate::provider::AnthropicUsageCompat;
 use crate::transport::SseEvent;
 
@@ -87,9 +88,8 @@ impl fmt::Debug for BlockState {
     }
 }
 
-pub(super) struct MessagesStateMachine {
+pub(crate) struct MessagesStateMachine {
     context: AnthropicMessagesStreamContext,
-    response_format: ResponseFormat,
     limits: ResponseLimits,
     phase: Phase,
     blocks: BTreeMap<u32, BlockState>,
@@ -98,7 +98,8 @@ pub(super) struct MessagesStateMachine {
     next_content_index: u32,
     tool_calls: usize,
     all_tool_argument_bytes: usize,
-    text: String,
+    terminal: StructuredTerminal,
+    answer_text_bytes: usize,
     thinking_text_bytes: usize,
     opaque_thinking_bytes: usize,
     usage_snapshot: Option<UsageWire>,
@@ -119,7 +120,7 @@ impl fmt::Debug for MessagesStateMachine {
             .field("next_content_index", &self.next_content_index)
             .field("tool_calls", &self.tool_calls)
             .field("tool_argument_bytes", &self.all_tool_argument_bytes)
-            .field("text_bytes", &self.text.len())
+            .field("answer_text_bytes", &self.answer_text_bytes)
             .field("thinking_text_bytes", &self.thinking_text_bytes)
             .field("opaque_thinking_bytes", &self.opaque_thinking_bytes)
             .field("usage_seen", &self.usage_snapshot.is_some())
@@ -139,7 +140,6 @@ impl MessagesStateMachine {
     ) -> Self {
         Self {
             context,
-            response_format,
             limits,
             phase: Phase::AwaitMessageStart,
             blocks: BTreeMap::new(),
@@ -148,7 +148,12 @@ impl MessagesStateMachine {
             next_content_index: 0,
             tool_calls: 0,
             all_tool_argument_bytes: 0,
-            text: String::new(),
+            terminal: StructuredTerminal::new(
+                response_format,
+                SchemaLimits::official(),
+                limits.max_structured_output_bytes,
+            ),
+            answer_text_bytes: 0,
             thinking_text_bytes: 0,
             opaque_thinking_bytes: 0,
             usage_snapshot: None,
@@ -567,14 +572,8 @@ impl MessagesStateMachine {
             .finish_reason
             .clone()
             .ok_or_else(|| Self::protocol("Anthropic message_stop is missing a finish reason"))?;
-        crate::domain::structured::validate_structured_response(
-            &self.response_format,
-            &reason,
-            &self.text,
-            self.tool_calls > 0,
-            false,
-            SchemaLimits::official(),
-        )?;
+        self.terminal
+            .validate_before_done(&reason, self.tool_calls > 0, false)?;
         self.phase = Phase::Terminal;
         Ok(Vec::new())
     }
@@ -586,8 +585,7 @@ impl MessagesStateMachine {
         events: &mut Vec<AssistantEvent>,
     ) -> Result<(), LlmError> {
         let next = self
-            .text
-            .len()
+            .answer_text_bytes
             .checked_add(text.len())
             .ok_or_else(|| Self::protocol("Anthropic text size overflow"))?;
         if next > self.limits.max_structured_output_bytes {
@@ -595,7 +593,8 @@ impl MessagesStateMachine {
                 "Anthropic response text exceeds resource limit",
             ));
         }
-        self.text.push_str(&text);
+        self.answer_text_bytes = next;
+        self.terminal.push_answer_text(&text)?;
         if !text.is_empty() {
             events.push(AssistantEvent::TextDelta { index, delta: text });
         }
@@ -676,7 +675,7 @@ impl MessagesStateMachine {
     }
 
     pub(super) fn finish(&self) -> Result<Vec<AssistantEvent>, LlmError> {
-        if self.phase == Phase::Terminal {
+        if self.phase == Phase::Terminal && self.terminal.is_validated() {
             Ok(vec![AssistantEvent::Done {
                 finish_reason: self.finish_reason.clone().ok_or_else(|| {
                     Self::protocol("Anthropic terminal is missing a finish reason")

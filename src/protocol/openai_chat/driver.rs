@@ -1,18 +1,18 @@
 //! Concrete `OpenAI` Chat Completions request/response driver.
 #![allow(clippy::trivially_copy_pass_by_ref, clippy::unused_self)]
 
-use http::{HeaderValue, Method, header};
+use http::Method;
 
-use crate::domain::{ContentPart, MessageRole, ThinkingRequest};
 use crate::error::LlmError;
 use crate::plan::ResolvedCallPlan;
-use crate::provider::HeaderOperation;
 
 use super::request::encode_planned_request;
+use crate::protocol::preparation::{
+    CommonRequestFacts, ProtocolFactDecisions, request_facts, standard_json_sse_header_operations,
+};
 use crate::protocol::{
-    ExpectedContentType, HttpResponseRequirements, MaxOutputTokensSource, OpenAiChatResponsePlan,
-    PreparedCall, ProtocolOperation, ProtocolRequestParts, ProtocolResponsePlan, RequestFacts,
-    ResponseFormatKind, ResponsePlan,
+    HttpResponseRequirements, MaxOutputTokensSource, OpenAiChatResponsePlan, PreparedCall,
+    ProtocolOperation, ProtocolRequestParts, ProtocolResponsePlan, ResponsePlan,
 };
 
 /// Stateless `OpenAI` Chat Completions protocol implementation.
@@ -28,36 +28,27 @@ impl OpenAiChatDriver {
             )
         })?;
         let body = encode_planned_request(plan)?;
-        let protocol_headers = vec![
-            HeaderOperation::set(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            ),
-            HeaderOperation::set(
-                header::ACCEPT,
-                HeaderValue::from_static("text/event-stream"),
-            ),
-        ];
-        let contains_images = plan.planned.messages.iter().any(|message| {
-            message
-                .content()
-                .iter()
-                .any(|part| matches!(part, ContentPart::Image(_)))
-        });
+        let common = CommonRequestFacts::scan(&plan.planned);
+        let max_output_tokens_source = if common.max_output_tokens_requested() {
+            MaxOutputTokensSource::Request
+        } else if plan.policy.limits.model.default_max_output_tokens.is_some() {
+            MaxOutputTokensSource::ModelDefault
+        } else {
+            MaxOutputTokensSource::Omitted
+        };
 
         Ok(PreparedCall {
             target: plan.policy.target.clone(),
             request: ProtocolRequestParts {
                 method: Method::POST,
                 operation: ProtocolOperation::ChatCompletions,
-                protocol_headers,
+                protocol_headers: standard_json_sse_header_operations(),
                 body,
             },
             response: ResponsePlan {
-                http: HttpResponseRequirements {
-                    content_type: ExpectedContentType::EventStream,
-                    max_error_body_bytes: plan.policy.limits.transport.max_http_error_body_bytes,
-                },
+                http: HttpResponseRequirements::event_stream(
+                    plan.policy.limits.transport.max_http_error_body_bytes,
+                ),
                 protocol: ProtocolResponsePlan::OpenAiChat(OpenAiChatResponsePlan {
                     model: plan.planned.model.clone(),
                     response_format: plan.policy.response_format.clone(),
@@ -66,29 +57,13 @@ impl OpenAiChatDriver {
                     sse: plan.policy.limits.transport.sse,
                 }),
             },
-            facts: RequestFacts {
-                contains_tools: !plan.planned.options.tools().is_empty()
-                    || plan.planned.messages.iter().any(|message| {
-                        message.role() == MessageRole::Tool
-                            || message
-                                .content()
-                                .iter()
-                                .any(|part| matches!(part, ContentPart::ToolCall(_)))
-                    }),
-                contains_images,
-                reasoning_enabled: !matches!(
-                    plan.planned.options.reasoning(),
-                    ThinkingRequest::ProviderDefault
-                ),
-                response_format: ResponseFormatKind::from(plan.planned.options.response_format()),
-                max_output_tokens_source: if plan.planned.options.max_output_tokens().is_some() {
-                    MaxOutputTokensSource::Request
-                } else if plan.policy.limits.model.default_max_output_tokens.is_some() {
-                    MaxOutputTokensSource::ModelDefault
-                } else {
-                    MaxOutputTokensSource::Omitted
+            facts: request_facts(
+                common,
+                ProtocolFactDecisions {
+                    reasoning_enabled: common.reasoning_requested(),
+                    max_output_tokens_source,
                 },
-            },
+            ),
             execution: plan.execution.clone(),
         })
     }
@@ -127,6 +102,21 @@ mod tests {
         assert_eq!(body["stream"], true);
         assert_eq!(body["stream_options"]["include_usage"], true);
         assert_eq!(prepared.request.protocol_headers.len(), 2);
+        assert_eq!(
+            prepared.request.operation,
+            crate::protocol::ProtocolOperation::ChatCompletions
+        );
+        assert_eq!(
+            prepared.response.http.content_type,
+            crate::protocol::ExpectedContentType::EventStream
+        );
+        assert!(!prepared.facts.contains_tools);
+        assert!(!prepared.facts.contains_images);
+        assert!(!prepared.facts.reasoning_enabled);
+        assert_eq!(
+            prepared.facts.max_output_tokens_source,
+            crate::protocol::MaxOutputTokensSource::Omitted
+        );
     }
 
     #[test]

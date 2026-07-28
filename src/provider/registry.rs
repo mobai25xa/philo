@@ -301,10 +301,12 @@ impl ProviderRegistry {
                 )
             })?;
             if matching.next().is_some() {
-                return Err(LlmError::Configuration(
-                    "provider has multiple products; select one with build_product_deployment"
-                        .to_owned(),
-                ));
+                return Err(ProviderRegistryError::new(
+                    ProviderRegistryFailure::AmbiguousProductSelection,
+                    Some(provider_id.as_str()),
+                    "provider has multiple products; select one exact product",
+                )
+                .into());
             }
             registration.compiler.as_ref().clone()
         };
@@ -340,7 +342,7 @@ impl ProviderRegistry {
             )
             .into());
         }
-        let factory = {
+        let (metadata, factory) = {
             let registrations = self.read()?;
             let key = RegistrationKey {
                 provider_id: provider_id.clone(),
@@ -353,10 +355,16 @@ impl ProviderRegistry {
                     "provider product is not registered",
                 )
             })?;
-            registration.compiler.as_ref().clone()
+            (
+                registration.metadata.clone(),
+                registration.compiler.as_ref().clone(),
+            )
         };
         let runtime = factory.build_deployment(deployment, resolver)?;
-        if runtime.provider_id() != provider_id || runtime.product_id() != product_id {
+        if runtime.provider_id() != &metadata.provider_id
+            || Some(runtime.product_id()) != metadata.product_id.as_ref()
+            || Some(runtime.protocol_id()) != metadata.protocol_id.as_ref()
+        {
             return Err(ProviderRegistryError::new(
                 ProviderRegistryFailure::FactoryProviderMismatch,
                 Some(provider_id.as_str()),

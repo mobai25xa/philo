@@ -305,12 +305,12 @@ mod tests {
                 .with_max_output_tokens(128)
                 .with_protocol_options(options),
         );
-        let body: Value =
-            serde_json::from_slice(&AnthropicMessagesDriver.prepare(&plan).unwrap().request.body)
-                .unwrap();
+        let prepared = AnthropicMessagesDriver.prepare(&plan).unwrap();
+        let body: Value = serde_json::from_slice(&prepared.request.body).unwrap();
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert_eq!(body["thinking"]["display"], "summarized");
         assert_eq!(body["output_config"]["effort"], "high");
+        assert!(prepared.facts.reasoning_enabled);
     }
 
     #[test]

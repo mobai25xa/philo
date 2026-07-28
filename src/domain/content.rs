@@ -219,6 +219,11 @@ pub enum ImageDetail {
 }
 
 /// Source identity required before opaque reasoning can be considered for replay.
+///
+/// This is not conversation or response continuation state. It identifies the
+/// source of opaque thinking only; a future continuation contract would also
+/// need an exact product, endpoint/audience, storage-policy provenance, and its
+/// own redacted protocol-scoped state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceIdentity {
     provider: ProviderId,
@@ -265,7 +270,9 @@ impl SourceIdentity {
         self.generation_id.as_ref()
     }
 
-    /// Reports whether this identity shares provider, model, and protocol with `other`.
+    /// Reports whether opaque reasoning shares provider, model, and protocol with `other`.
+    ///
+    /// This comparison does not authorize conversation continuation.
     pub fn matches_source(&self, other: &Self) -> bool {
         self.provider == other.provider
             && self.model == other.model

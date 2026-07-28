@@ -340,6 +340,8 @@ pub enum ProviderRegistryFailure {
     DuplicateRegistration,
     /// The requested registration is absent.
     RegistrationNotFound,
+    /// A provider has several products and no exact product was selected.
+    AmbiguousProductSelection,
     /// A factory returned a runtime for a different provider identifier.
     FactoryProviderMismatch,
     /// Registry synchronization state is unavailable after a poisoned lock.

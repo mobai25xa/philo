@@ -1,18 +1,9 @@
-use std::collections::VecDeque;
-use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use futures_core::Stream;
-
 use super::machine::MessagesStateMachine;
-use crate::domain::{
-    AssistantEvent, LocalRequestId, ProviderRequestId, ResponseFormat, SourceIdentity,
-};
-use crate::error::LlmError;
+use crate::domain::{LocalRequestId, ProviderRequestId, ResponseFormat, SourceIdentity};
 use crate::plan::ResponseLimits;
+use crate::protocol::response_stream::{SseEventMachine, SseMachineStream};
 use crate::provider::AnthropicMessagesContract;
-use crate::transport::{ByteStream, SseConfig, SseDecoder};
+use crate::transport::{ByteStream, SseConfig, SseEvent};
 
 #[derive(Clone, Debug)]
 pub(crate) struct AnthropicMessagesStreamContext {
@@ -43,85 +34,26 @@ pub(crate) fn decode_anthropic_messages_stream(
     limits: ResponseLimits,
     contract: AnthropicMessagesContract,
 ) -> AnthropicMessagesEventStream {
-    let max_events_per_poll = sse.max_events_per_poll();
-    AnthropicMessagesEventStream {
-        source: SseDecoder::with_config(body, sse),
-        machine: MessagesStateMachine::new(context, response_format, limits, contract.usage),
-        pending: VecDeque::new(),
-        max_events_per_poll,
-        terminal: false,
+    SseMachineStream::new(
+        body,
+        sse,
+        MessagesStateMachine::new(context, response_format, limits, contract.usage),
+    )
+}
+
+/// Anthropic-specific machine carried by the shared SSE stream driver.
+pub(crate) type AnthropicMessagesEventStream = SseMachineStream<MessagesStateMachine>;
+
+impl SseEventMachine for MessagesStateMachine {
+    fn accept(
+        &mut self,
+        event: &SseEvent,
+    ) -> Result<Vec<crate::domain::AssistantEvent>, crate::error::LlmError> {
+        MessagesStateMachine::accept(self, event)
     }
-}
 
-pub(crate) struct AnthropicMessagesEventStream {
-    source: SseDecoder,
-    machine: MessagesStateMachine,
-    pending: VecDeque<Result<AssistantEvent, LlmError>>,
-    max_events_per_poll: usize,
-    terminal: bool,
-}
-
-impl fmt::Debug for AnthropicMessagesEventStream {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AnthropicMessagesEventStream")
-            .field("machine", &self.machine)
-            .field("pending_events", &self.pending.len())
-            .field("max_events_per_poll", &self.max_events_per_poll)
-            .field("terminal", &self.terminal)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Stream for AnthropicMessagesEventStream {
-    type Item = Result<AssistantEvent, LlmError>;
-
-    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let stream = self.get_mut();
-        if let Some(item) = stream.pending.pop_front() {
-            return Poll::Ready(Some(item));
-        }
-        if stream.terminal {
-            return Poll::Ready(None);
-        }
-
-        let mut processed = 0;
-        loop {
-            if processed >= stream.max_events_per_poll {
-                context.waker().wake_by_ref();
-                return Poll::Pending;
-            }
-            match Pin::new(&mut stream.source).poll_next(context) {
-                Poll::Ready(Some(Ok(event))) => match stream.machine.accept(&event) {
-                    Ok(events) => {
-                        processed += 1;
-                        stream.pending.extend(events.into_iter().map(Ok));
-                        if let Some(item) = stream.pending.pop_front() {
-                            return Poll::Ready(Some(item));
-                        }
-                    }
-                    Err(error) => {
-                        stream.terminal = true;
-                        return Poll::Ready(Some(Err(error)));
-                    }
-                },
-                Poll::Ready(Some(Err(error))) => {
-                    stream.terminal = true;
-                    return Poll::Ready(Some(Err(error.into_llm_error())));
-                }
-                Poll::Ready(None) => {
-                    stream.terminal = true;
-                    return match stream.machine.finish() {
-                        Ok(events) => {
-                            stream.pending.extend(events.into_iter().map(Ok));
-                            Poll::Ready(stream.pending.pop_front())
-                        }
-                        Err(error) => Poll::Ready(Some(Err(error))),
-                    };
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
+    fn finish(&mut self) -> Result<Vec<crate::domain::AssistantEvent>, crate::error::LlmError> {
+        MessagesStateMachine::finish(self)
     }
 }
 
@@ -132,7 +64,7 @@ mod tests {
 
     use crate::domain::{
         AssistantEvent, LocalRequestId, ModelId, ProtocolId, ProviderId, ProviderRequestId,
-        ResourceLimits, ResponseFormat, SourceIdentity, TokenCount,
+        ResourceLimits, ResponseFormat, SourceIdentity, StructuredSchema, TokenCount, ToolSchema,
     };
     use crate::error::LlmError;
     use crate::plan::ResponseLimits;
@@ -175,11 +107,27 @@ mod tests {
         chunks: Vec<Bytes>,
         limits: ResponseLimits,
     ) -> Vec<Result<AssistantEvent, LlmError>> {
-        decode_with_usage_compat(chunks, limits, AnthropicUsageCompat::StrictStableFields).await
+        decode_with_format_and_usage_compat(
+            chunks,
+            ResponseFormat::Text,
+            limits,
+            AnthropicUsageCompat::StrictStableFields,
+        )
+        .await
     }
 
     async fn decode_with_usage_compat(
         chunks: Vec<Bytes>,
+        limits: ResponseLimits,
+        usage_compat: AnthropicUsageCompat,
+    ) -> Vec<Result<AssistantEvent, LlmError>> {
+        decode_with_format_and_usage_compat(chunks, ResponseFormat::Text, limits, usage_compat)
+            .await
+    }
+
+    async fn decode_with_format_and_usage_compat(
+        chunks: Vec<Bytes>,
+        response_format: ResponseFormat,
         limits: ResponseLimits,
         usage_compat: AnthropicUsageCompat,
     ) -> Vec<Result<AssistantEvent, LlmError>> {
@@ -194,7 +142,7 @@ mod tests {
                     ProtocolId::new("anthropic-messages").unwrap(),
                 ),
             ),
-            ResponseFormat::Text,
+            response_format,
             SseConfig::default(),
             limits,
             crate::provider::AnthropicMessagesContract::strict_official()
@@ -202,6 +150,13 @@ mod tests {
         )
         .collect()
         .await
+    }
+
+    fn structured_text(text: &str) -> Bytes {
+        Bytes::from(format!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_structured\",\"model\":\"claude-test\",\"usage\":{{}}}}}}\n\nevent: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":{}}}}}\n\nevent: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\nevent: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{}}}}\n\nevent: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n",
+            serde_json::to_string(text).unwrap()
+        ))
     }
 
     async fn decode_one(input: &'static [u8]) -> Vec<Result<AssistantEvent, LlmError>> {
@@ -241,6 +196,82 @@ mod tests {
                 .filter(|event| matches!(event, AssistantEvent::Done { .. }))
                 .count(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_structured_json_fails_before_done() {
+        let results = decode_with_format_and_usage_compat(
+            vec![structured_text("not-json")],
+            ResponseFormat::JsonObject,
+            ResponseLimits::from(ResourceLimits::official()),
+            AnthropicUsageCompat::StrictStableFields,
+        )
+        .await;
+        assert!(matches!(
+            results.last(),
+            Some(Err(LlmError::StructuredOutput(error)))
+                if error.reason() == crate::error::StructuredOutputFailure::InvalidJson
+        ));
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::Done { .. })))
+        );
+    }
+
+    #[tokio::test]
+    async fn structured_schema_violation_fails_before_done() {
+        let format = ResponseFormat::JsonSchema(
+            StructuredSchema::new(
+                "answer",
+                None,
+                ToolSchema::new(serde_json::json!({
+                    "type": "object",
+                    "properties": { "ok": { "type": "boolean" } },
+                    "required": ["ok"],
+                    "additionalProperties": false
+                }))
+                .unwrap(),
+                true,
+            )
+            .unwrap(),
+        );
+        let results = decode_with_format_and_usage_compat(
+            vec![structured_text("{\"ok\":\"wrong\"}")],
+            format,
+            ResponseLimits::from(ResourceLimits::official()),
+            AnthropicUsageCompat::StrictStableFields,
+        )
+        .await;
+        assert!(matches!(
+            results.last(),
+            Some(Err(LlmError::StructuredOutput(error)))
+                if error.reason() == crate::error::StructuredOutputFailure::SchemaViolation
+        ));
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::Done { .. })))
+        );
+    }
+
+    #[tokio::test]
+    async fn structured_output_limit_fails_during_accumulation_before_done() {
+        let mut limits = ResponseLimits::from(ResourceLimits::official());
+        limits.max_structured_output_bytes = 2;
+        let results = decode_with_format_and_usage_compat(
+            vec![structured_text("{\"ok\":true}")],
+            ResponseFormat::JsonObject,
+            limits,
+            AnthropicUsageCompat::StrictStableFields,
+        )
+        .await;
+        assert!(matches!(results.last(), Some(Err(LlmError::Protocol(_)))));
+        assert!(
+            !results
+                .iter()
+                .any(|item| matches!(item, Ok(AssistantEvent::Done { .. })))
         );
     }
 
