@@ -10,6 +10,7 @@
 //! The layering that used to produce them (sparse patches, source precedence)
 //! is a tradeoff and lives in the `philo-compat` crate.
 
+mod binding;
 mod history;
 mod profile;
 mod request;
@@ -23,12 +24,16 @@ pub use response::{
     ToolArgumentsCompat, UsageCompat,
 };
 
+pub(crate) use binding::ValidatedProtocolBinding;
+
 use std::fmt;
 
 use crate::domain::{
-    DialectPolicy, HistoryPolicy, MissingToolResultPolicy, ThinkingReplayPolicy,
-    UnsupportedContentPolicy,
+    CapabilityStatus, DialectPolicy, HistoryPolicy, MissingToolResultPolicy, PolicySource,
+    ThinkingReplayPolicy, UnsupportedContentPolicy,
 };
+use crate::error::{LlmError, ValidationError, ValidationReason};
+use crate::protocol_options::ProtocolOptions;
 
 use super::capability::ProtocolDialect;
 
@@ -104,6 +109,52 @@ impl ResolvedProtocolContract {
                 unsupported_content: contract.unsupported_content,
                 thinking_replay: contract.thinking_replay,
             },
+        }
+    }
+
+    /// Validates protocol-scoped request options against the resolved contract
+    /// and exact model capabilities selected for this call.
+    pub(crate) fn validate_options(
+        &self,
+        options: Option<&ProtocolOptions>,
+        capabilities: &super::ProviderCapabilities,
+    ) -> Result<(), LlmError> {
+        match (self, options) {
+            (_, None) | (Self::OpenAiChat(_), Some(ProtocolOptions::OpenAiChat(_))) => Ok(()),
+            (Self::AnthropicMessages(_), Some(ProtocolOptions::AnthropicMessages(options))) => {
+                AnthropicMessagesContract::validate_options(options, capabilities)
+            }
+            (Self::OpenAiChat(_), Some(ProtocolOptions::AnthropicMessages(_)))
+            | (Self::AnthropicMessages(_), Some(ProtocolOptions::OpenAiChat(_))) => {
+                Err(ValidationError::new(
+                    "protocol_options",
+                    ValidationReason::Conflict,
+                    "protocol-scoped options do not match the selected runtime protocol",
+                )
+                .into())
+            }
+        }
+    }
+
+    /// Rejects a resolved contract that contradicts the capabilities it will
+    /// run under, without exposing concrete contract variants to the runtime.
+    pub(crate) fn validate_capabilities(
+        &self,
+        capabilities: &super::ProviderCapabilities,
+    ) -> Result<(), LlmError> {
+        match self {
+            Self::OpenAiChat(contract) => contract.compat().validate_against(capabilities),
+            Self::AnthropicMessages(_) => Ok(()),
+        }
+    }
+
+    /// Returns the stable source used by the plan's protocol provenance summary.
+    pub(crate) fn provenance_source(&self) -> PolicySource {
+        match self {
+            Self::OpenAiChat(contract) => contract
+                .compat()
+                .source(CompatField::RequestMaxOutputTokens),
+            Self::AnthropicMessages(_) => PolicySource::ProtocolDefault,
         }
     }
 }
@@ -237,5 +288,135 @@ impl AnthropicMessagesContract {
     pub(crate) const fn with_usage_compat(mut self, usage: AnthropicUsageCompat) -> Self {
         self.usage = usage;
         self
+    }
+
+    fn validate_options(
+        options: &crate::protocol_options::AnthropicMessagesOptions,
+        capabilities: &super::ProviderCapabilities,
+    ) -> Result<(), LlmError> {
+        if options.adaptive_thinking().is_some() {
+            validate_protocol_capability(
+                "protocol_options.anthropic.adaptive_thinking",
+                capabilities.adaptive_thinking,
+            )?;
+        }
+        if options.effort().is_some() {
+            validate_protocol_capability(
+                "protocol_options.anthropic.effort",
+                capabilities.adaptive_thinking_effort,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_protocol_capability(
+    field: &'static str,
+    status: CapabilityStatus,
+) -> Result<(), LlmError> {
+    match status {
+        CapabilityStatus::Supported => Ok(()),
+        CapabilityStatus::Unsupported => Err(ValidationError::new(
+            field,
+            ValidationReason::CapabilityUnsupported,
+            "selected model does not support this protocol-scoped option",
+        )
+        .into()),
+        CapabilityStatus::Unknown => Err(ValidationError::new(
+            field,
+            ValidationReason::CapabilityUnknown,
+            "selected model support for this protocol-scoped option is unknown",
+        )
+        .into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::{CapabilityStatus, PolicySource};
+    use crate::error::{LlmError, ValidationReason};
+    use crate::protocol_options::{
+        AnthropicEffort, AnthropicMessagesOptions, AnthropicThinkingDisplay, OpenAiChatOptions,
+    };
+
+    use super::{CompatField, ResolvedProtocolContract};
+
+    #[test]
+    fn anthropic_contract_owns_option_capability_errors_and_priority() {
+        let contract = ResolvedProtocolContract::strict_anthropic_messages();
+        let options = AnthropicMessagesOptions::new()
+            .with_adaptive_thinking(AnthropicThinkingDisplay::Omitted)
+            .with_effort(AnthropicEffort::High)
+            .into();
+        let mut capabilities = crate::provider::ProviderCapabilities::conservative_messages();
+        capabilities.adaptive_thinking = CapabilityStatus::Unsupported;
+        capabilities.adaptive_thinking_effort = CapabilityStatus::Unknown;
+
+        let error = contract
+            .validate_options(Some(&options), &capabilities)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LlmError::Validation(ref error)
+                if error.field() == "protocol_options.anthropic.adaptive_thinking"
+                    && error.reason() == ValidationReason::CapabilityUnsupported
+        ));
+    }
+
+    #[test]
+    fn contract_rejects_wrong_options_before_variant_specific_policy() {
+        let contract = ResolvedProtocolContract::strict_anthropic_messages();
+        let options = OpenAiChatOptions::new().into();
+        let capabilities = crate::provider::ProviderCapabilities::conservative_messages();
+
+        let error = contract
+            .validate_options(Some(&options), &capabilities)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LlmError::Validation(ref error)
+                if error.field() == "protocol_options"
+                    && error.reason() == ValidationReason::Conflict
+        ));
+    }
+
+    #[test]
+    fn protocol_provenance_summary_is_variant_neutral_to_callers() {
+        let compat = super::CompatProfile::openai_chat_default().with_max_output_tokens(
+            super::MaxOutputTokensWireFormat::MaxTokens,
+            PolicySource::ModelProfile,
+        );
+        let openai =
+            ResolvedProtocolContract::OpenAiChat(super::OpenAiChatContract::from_compat(compat));
+        assert_eq!(openai.provenance_source(), PolicySource::ModelProfile);
+        assert_eq!(
+            openai
+                .openai_chat()
+                .unwrap()
+                .compat()
+                .source(CompatField::RequestMaxOutputTokens),
+            PolicySource::ModelProfile
+        );
+        assert_eq!(
+            ResolvedProtocolContract::strict_anthropic_messages().provenance_source(),
+            PolicySource::ProtocolDefault
+        );
+    }
+
+    #[test]
+    fn openai_contract_owns_resolved_compat_capability_validation() {
+        let compat = super::CompatProfile::openai_chat_default().with_tool_arguments(
+            super::ToolArgumentsCompat::StringOrObject,
+            PolicySource::ProviderProfile,
+        );
+        let contract =
+            ResolvedProtocolContract::OpenAiChat(super::OpenAiChatContract::from_compat(compat));
+        let capabilities = crate::provider::ProviderCapabilities::conservative_chat_completions();
+
+        assert!(matches!(
+            contract.validate_capabilities(&capabilities),
+            Err(LlmError::Configuration(message))
+                if message == "tool argument compatibility requires explicit function tool support"
+        ));
     }
 }

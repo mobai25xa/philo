@@ -26,7 +26,7 @@ use super::headers::{
     DynamicHeaderPolicy, HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource,
 };
 use super::profile::{ProviderProfile, ProviderProfileParts};
-use super::protocol_contract::{AnthropicUsageCompat, CompatProfile};
+use super::protocol_contract::{AnthropicUsageCompat, CompatProfile, ValidatedProtocolBinding};
 use super::secret::{SecretReference, SecretResolver};
 use super::{IdempotencyPolicy, OpenAiChatContract, RateLimitPolicy, ResolvedProtocolContract};
 
@@ -126,9 +126,7 @@ impl AuthScheme {
 pub struct ProviderDefinition {
     provider_id: ProviderId,
     product_id: ProductId,
-    protocol_id: ProtocolId,
-    dialect: ProtocolDialect,
-    protocol_contract: ResolvedProtocolContract,
+    protocol: ValidatedProtocolBinding,
     endpoint: EndpointConfig,
     credential_binding: CredentialBinding,
     auth_scheme: AuthScheme,
@@ -195,7 +193,7 @@ impl ProviderDefinition {
 
     /// Returns the explicitly selected protocol identity.
     pub const fn protocol_id(&self) -> &ProtocolId {
-        &self.protocol_id
+        self.protocol.id()
     }
 
     /// Returns the endpoint-bound credential restriction.
@@ -299,7 +297,7 @@ impl ProviderDefinition {
         ProviderProfile::from_parts(ProviderProfileParts {
             provider_id: self.provider_id.clone(),
             product_id: self.product_id.clone(),
-            protocol_id: self.protocol_id.clone(),
+            protocol: self.protocol.clone(),
             endpoint: self.endpoint.clone(),
             credential_binding: self.credential_binding.clone(),
             auth: deployment.auth,
@@ -311,8 +309,6 @@ impl ProviderDefinition {
             model_capabilities: self.model_capabilities.clone(),
             catalog: self.catalog.clone(),
             model_protocol_contracts: self.model_protocol_contracts.clone(),
-            dialect: self.dialect,
-            protocol_contract: self.protocol_contract.clone(),
             transport: self.transport,
             resource_limits: deployment.resource_limits,
             sse: deployment.sse,
@@ -340,8 +336,7 @@ impl fmt::Debug for ProviderDefinition {
             .debug_struct("ProviderDefinition")
             .field("provider_id", &self.provider_id)
             .field("product_id", &self.product_id)
-            .field("protocol_id", &self.protocol_id)
-            .field("protocol_contract", &self.protocol_contract)
+            .field("protocol", &self.protocol)
             .field("endpoint", &self.endpoint)
             .field("credential_binding", &self.credential_binding)
             .field("auth_scheme", &self.auth_scheme)
@@ -517,9 +512,9 @@ impl ResolvedProviderDeployment {
 pub struct ProviderDefinitionBuilder {
     provider_id: ProviderId,
     product_id: ProductId,
-    protocol_id: ProtocolId,
-    dialect: ProtocolDialect,
-    protocol_contract: ResolvedProtocolContract,
+    draft_protocol_id: ProtocolId,
+    draft_dialect: ProtocolDialect,
+    draft_protocol_contract: ResolvedProtocolContract,
     endpoint: Option<EndpointConfig>,
     credential_binding: Option<CredentialBinding>,
     bind_to_endpoint_origin: bool,
@@ -541,16 +536,16 @@ impl ProviderDefinitionBuilder {
     fn new(
         provider_id: ProviderId,
         product_id: ProductId,
-        protocol_id: ProtocolId,
-        dialect: ProtocolDialect,
-        protocol_contract: ResolvedProtocolContract,
+        draft_protocol_id: ProtocolId,
+        draft_dialect: ProtocolDialect,
+        draft_protocol_contract: ResolvedProtocolContract,
     ) -> Self {
         Self {
             provider_id,
             product_id,
-            protocol_id,
-            dialect,
-            protocol_contract,
+            draft_protocol_id,
+            draft_dialect,
+            draft_protocol_contract,
             endpoint: None,
             credential_binding: None,
             bind_to_endpoint_origin: false,
@@ -664,7 +659,7 @@ impl ProviderDefinitionBuilder {
     /// one of these (FR-004).
     #[must_use]
     pub fn with_openai_chat_compat(mut self, compat: CompatProfile) -> Self {
-        self.protocol_contract =
+        self.draft_protocol_contract =
             ResolvedProtocolContract::OpenAiChat(OpenAiChatContract::from_compat(compat));
         self
     }
@@ -697,7 +692,7 @@ impl ProviderDefinitionBuilder {
 
     /// Adds the protected Anthropic API version and removes beta opt-ins.
     pub fn with_anthropic_version(mut self, version: &str) -> Result<Self, LlmError> {
-        if self.dialect != ProtocolDialect::AnthropicMessages
+        if self.draft_dialect != ProtocolDialect::AnthropicMessages
             || version.is_empty()
             || version.len() > 64
             || !version
@@ -734,23 +729,24 @@ impl ProviderDefinitionBuilder {
         mut self,
         usage: AnthropicUsageCompat,
     ) -> Result<Self, LlmError> {
-        let ResolvedProtocolContract::AnthropicMessages(contract) = self.protocol_contract else {
+        let ResolvedProtocolContract::AnthropicMessages(contract) = self.draft_protocol_contract
+        else {
             return Err(configuration(
                 "Anthropic usage compatibility requires an Anthropic Messages definition",
             ));
         };
-        self.protocol_contract =
+        self.draft_protocol_contract =
             ResolvedProtocolContract::AnthropicMessages(contract.with_usage_compat(usage));
         Ok(self)
     }
 
     /// Validates and freezes this secret-free definition.
     pub fn build(self) -> Result<ProviderDefinition, LlmError> {
-        if !self.protocol_contract.matches_dialect(self.dialect) {
-            return Err(configuration(
-                "protocol dialect does not match resolved protocol contract",
-            ));
-        }
+        let protocol = ValidatedProtocolBinding::new(
+            self.draft_protocol_id,
+            self.draft_dialect,
+            self.draft_protocol_contract,
+        )?;
         let endpoint = self
             .endpoint
             .ok_or_else(|| configuration("provider definition requires an endpoint"))?;
@@ -770,15 +766,10 @@ impl ProviderDefinitionBuilder {
                 ));
             }
         };
-        validate_catalog(
-            &catalog,
-            &self.provider_id,
-            &self.product_id,
-            &self.protocol_id,
-        )?;
+        validate_catalog(&catalog, &self.provider_id, &self.product_id, protocol.id())?;
         validate_model_capabilities(&self.model_capabilities)?;
 
-        if matches!(self.dialect, ProtocolDialect::AnthropicMessages)
+        if matches!(protocol.dialect(), ProtocolDialect::AnthropicMessages)
             && !self.model_compat.is_empty()
         {
             return Err(configuration(
@@ -789,7 +780,7 @@ impl ProviderDefinitionBuilder {
         // FR-004: a contract that contradicts its capabilities is rejected when
         // the definition is built, not when the first request is planned.
         let mut model_protocol_contracts = BTreeMap::new();
-        if let Some(contract) = self.protocol_contract.openai_chat() {
+        if let Some(contract) = protocol.contract().openai_chat() {
             contract.compat().validate_against(&capabilities)?;
         }
         for (model, compat) in self.model_compat {
@@ -805,14 +796,14 @@ impl ProviderDefinitionBuilder {
                 model_capabilities.apply_catalog(&entry.capabilities);
             }
             compat.validate_against(&model_capabilities)?;
-            model_protocol_contracts.insert(
-                model,
-                ResolvedProtocolContract::OpenAiChat(OpenAiChatContract::from_compat(compat)),
-            );
+            let contract =
+                ResolvedProtocolContract::OpenAiChat(OpenAiChatContract::from_compat(compat));
+            protocol.validate_contract(&contract)?;
+            model_protocol_contracts.insert(model, contract);
         }
 
         validate_header_owners(&auth_scheme, &self.provider_headers, &self.model_headers)?;
-        if matches!(self.dialect, ProtocolDialect::AnthropicMessages)
+        if matches!(protocol.dialect(), ProtocolDialect::AnthropicMessages)
             && !self
                 .provider_headers
                 .iter()
@@ -835,9 +826,7 @@ impl ProviderDefinitionBuilder {
         Ok(ProviderDefinition {
             provider_id: self.provider_id,
             product_id: self.product_id,
-            protocol_id: self.protocol_id,
-            dialect: self.dialect,
-            protocol_contract: self.protocol_contract,
+            protocol,
             endpoint,
             credential_binding,
             auth_scheme,
@@ -1088,6 +1077,33 @@ mod tests {
     }
 
     #[test]
+    fn definition_profile_and_runtime_share_one_binding_identity() {
+        let definition = openai_builder()
+            .with_endpoint(endpoint())
+            .bind_credential_to_endpoint_origin()
+            .with_auth_scheme(AuthScheme::bearer())
+            .with_capabilities(ProviderCapabilities::official_openai())
+            .allow_unregistered_models()
+            .build()
+            .unwrap();
+        let auth = Arc::new(BearerAuth::new(BearerCredential::new(
+            ApiKey::new("shared-binding-key").unwrap(),
+            definition.credential_binding().clone(),
+        )));
+        let profile = definition
+            .compile_resolved(ResolvedProviderDeployment::new(
+                auth,
+                ClientIdentity::default(),
+            ))
+            .unwrap();
+        assert_eq!(definition.protocol, profile.protocol);
+
+        let runtime = crate::provider::ProviderRuntime::build(profile).unwrap();
+        assert_eq!(runtime.protocol_id(), definition.protocol_id());
+        assert_eq!(runtime.dialect(), definition.protocol.dialect());
+    }
+
+    #[test]
     fn header_owner_conflicts_and_binding_drift_are_rejected() {
         let conflict = openai_builder()
             .with_endpoint(endpoint())
@@ -1130,8 +1146,11 @@ mod tests {
 
     #[test]
     fn contract_mismatch_limits_and_debug_fail_safely() {
-        let mut mismatch = openai_builder();
-        mismatch.protocol_contract = ResolvedProtocolContract::strict_anthropic_messages();
+        let mismatch = ProviderDefinition::anthropic_messages(
+            ProviderId::new("mismatched-protocol").unwrap(),
+            ProductId::new("messages").unwrap(),
+        )
+        .with_openai_chat_compat(CompatProfile::openai_chat_default());
         assert!(
             mismatch
                 .with_endpoint(endpoint())

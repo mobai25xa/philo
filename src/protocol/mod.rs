@@ -22,7 +22,10 @@ pub(crate) type EventStream =
 
 pub(crate) mod anthropic_messages;
 pub(crate) mod openai_chat;
+mod preparation;
 mod response;
+mod response_stream;
+mod structured_terminal;
 
 pub(crate) use response::ResponseSession;
 
@@ -118,6 +121,21 @@ pub(crate) struct RequestFacts {
     pub(crate) max_output_tokens_source: MaxOutputTokensSource,
 }
 
+impl RequestFacts {
+    fn from_common(
+        common: preparation::CommonRequestFacts,
+        decisions: preparation::ProtocolFactDecisions,
+    ) -> Self {
+        Self {
+            contains_tools: common.contains_tools,
+            contains_images: common.contains_images,
+            reasoning_enabled: decisions.reasoning_enabled,
+            response_format: common.response_format,
+            max_output_tokens_source: decisions.max_output_tokens_source,
+        }
+    }
+}
+
 /// Value-free source of the resolved output-token request field.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,6 +186,15 @@ pub(crate) enum ProtocolResponsePlan {
 pub(crate) struct HttpResponseRequirements {
     pub(crate) content_type: ExpectedContentType,
     pub(crate) max_error_body_bytes: usize,
+}
+
+impl HttpResponseRequirements {
+    fn event_stream(max_error_body_bytes: usize) -> Self {
+        Self {
+            content_type: ExpectedContentType::EventStream,
+            max_error_body_bytes,
+        }
+    }
 }
 
 /// Expected successful response media family.

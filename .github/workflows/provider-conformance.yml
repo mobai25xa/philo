@@ -16,6 +16,7 @@ on:
         options:
           - openrouter
           - custom-openrouter-definition
+          - deepseek
           - zai-standard
           - custom-zai-anthropic-definition
           - zai-coding
@@ -65,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PHILO_PROVIDER_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$PHILO_PROVIDER" =~ ^(openrouter|custom-openrouter-definition|zai-standard|custom-zai-anthropic-definition|zai-coding)$ ]]
+          [[ "$PHILO_PROVIDER" =~ ^(openrouter|custom-openrouter-definition|deepseek|zai-standard|custom-zai-anthropic-definition|zai-coding)$ ]]
           test "${#PHILO_PROVIDER_MODEL}" -le 128
           [[ "$PHILO_PROVIDER_MODEL" =~ ^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$ ]]
           if [[ "$PHILO_PROVIDER" == "custom-openrouter-definition" ]]; then
@@ -109,6 +110,12 @@ jobs:
               cargo test --test custom_provider_online_smoke -- --ignored --nocapture
               ;;
           esac
+      - name: Run DeepSeek protected suite
+        if: inputs.provider == 'deepseek'
+        env:
+          # Environment secret from Settings > Environments > provider-conformance.
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: cargo test --test provider_online_smoke -- --ignored --nocapture
       - name: Run Z.AI Coding protected suite
         if: inputs.provider == 'zai-coding'
         env:

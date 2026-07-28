@@ -157,10 +157,10 @@ fn hosted_workflow_exposes_only_the_selected_secret_to_the_test_process() {
     assert!(workflow.contains("github.event_name == 'workflow_dispatch' && inputs.subject_commit"));
     assert!(!workflow.contains("env:\n      OPENAI_API_KEY"));
     assert!(!workflow.contains("secrets.OPENAI_API_KEY"));
-    assert!(!workflow.contains("secrets.DEEPSEEK_API_KEY"));
     assert!(!workflow.contains("docs/apikey.md"));
     for secret in [
         "secrets.OPENROUTER_API_KEY",
+        "secrets.DEEPSEEK_API_KEY",
         "secrets.ZAI_API_KEY",
         "secrets.ZAI_CODING_API_KEY",
     ] {
@@ -171,4 +171,21 @@ fn hosted_workflow_exposes_only_the_selected_secret_to_the_test_process() {
     assert!(workflow.contains("nvidia/nemotron-3-ultra-550b-a55b:free"));
     assert!(workflow.contains("glm-4.7-flash"));
     assert!(workflow.contains("--test custom_provider_online_smoke"));
+}
+
+#[test]
+fn official_anthropic_workflow_is_exact_candidate_and_value_free() {
+    let workflow = include_str!("../.github/workflows/anthropic-smoke.yml");
+    assert!(!workflow.contains("pull_request_target"));
+    assert!(workflow.contains("permissions:\n  contents: read"));
+    assert!(workflow.contains("environment: official-anthropic-smoke"));
+    assert!(workflow.contains("ref: ${{ inputs.subject_commit }}"));
+    assert!(workflow.contains("test \"$(git rev-parse HEAD)\""));
+    assert!(workflow.contains("cargo test --all-features --test anthropic_smoke -- --ignored"));
+    assert_eq!(workflow.matches("secrets.ANTHROPIC_API_KEY").count(), 1);
+    assert!(workflow.contains(
+        "Run URL: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+    ));
+    assert!(workflow.contains("Prompt, output, API key, thinking, tool arguments"));
+    assert!(!workflow.contains("docs/apikey.md"));
 }

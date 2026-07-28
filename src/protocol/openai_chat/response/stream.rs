@@ -1,16 +1,9 @@
-use std::collections::VecDeque;
-use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use futures_core::Stream;
-
 use super::machine::ChatStateMachine;
-use crate::domain::{AssistantEvent, LocalRequestId, ModelRef, ProviderRequestId, ResponseFormat};
-use crate::error::LlmError;
+use crate::domain::{LocalRequestId, ModelRef, ProviderRequestId, ResponseFormat};
 use crate::plan::ResponseLimits;
+use crate::protocol::response_stream::{SseEventMachine, SseMachineStream};
 use crate::provider::ResponseCompat;
-use crate::transport::{ByteStream, SseConfig, SseDecoder};
+use crate::transport::{ByteStream, SseConfig, SseEvent};
 
 /// Stable request context supplied by the client orchestration layer.
 #[derive(Clone, Debug)]
@@ -62,85 +55,25 @@ pub(crate) fn decode_openai_chat_stream_with_policy(
     limits: ResponseLimits,
     compat: ResponseCompat,
 ) -> OpenAiChatEventStream {
-    let max_events_per_poll = sse.max_events_per_poll();
-    OpenAiChatEventStream {
-        source: SseDecoder::with_config(body, sse),
-        machine: ChatStateMachine::new_with_format(context, response_format, limits, compat),
-        pending: VecDeque::new(),
-        max_events_per_poll,
-        terminal: false,
+    SseMachineStream::new(
+        body,
+        sse,
+        ChatStateMachine::new_with_format(context, response_format, limits, compat),
+    )
+}
+
+/// OpenAI-specific machine carried by the shared SSE stream driver.
+pub(crate) type OpenAiChatEventStream = SseMachineStream<ChatStateMachine>;
+
+impl SseEventMachine for ChatStateMachine {
+    fn accept(
+        &mut self,
+        event: &SseEvent,
+    ) -> Result<Vec<crate::domain::AssistantEvent>, crate::error::LlmError> {
+        ChatStateMachine::accept(self, event)
     }
-}
 
-/// Stream adapter joining the protocol-neutral SSE decoder to Chat semantics.
-pub(crate) struct OpenAiChatEventStream {
-    source: SseDecoder,
-    machine: ChatStateMachine,
-    pending: VecDeque<Result<AssistantEvent, LlmError>>,
-    max_events_per_poll: usize,
-    terminal: bool,
-}
-
-impl fmt::Debug for OpenAiChatEventStream {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("OpenAiChatEventStream")
-            .field("machine", &self.machine)
-            .field("pending_events", &self.pending.len())
-            .field("max_events_per_poll", &self.max_events_per_poll)
-            .field("terminal", &self.terminal)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Stream for OpenAiChatEventStream {
-    type Item = Result<AssistantEvent, LlmError>;
-
-    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let stream = self.get_mut();
-        if let Some(item) = stream.pending.pop_front() {
-            return Poll::Ready(Some(item));
-        }
-        if stream.terminal {
-            return Poll::Ready(None);
-        }
-
-        let mut events_processed = 0;
-        loop {
-            if events_processed >= stream.max_events_per_poll {
-                context.waker().wake_by_ref();
-                return Poll::Pending;
-            }
-            match Pin::new(&mut stream.source).poll_next(context) {
-                Poll::Ready(Some(Ok(event))) => match stream.machine.accept(&event) {
-                    Ok(events) => {
-                        events_processed += 1;
-                        stream.pending.extend(events.into_iter().map(Ok));
-                        if let Some(item) = stream.pending.pop_front() {
-                            return Poll::Ready(Some(item));
-                        }
-                    }
-                    Err(error) => {
-                        stream.terminal = true;
-                        return Poll::Ready(Some(Err(error)));
-                    }
-                },
-                Poll::Ready(Some(Err(error))) => {
-                    stream.terminal = true;
-                    return Poll::Ready(Some(Err(error.into_llm_error())));
-                }
-                Poll::Ready(None) => {
-                    stream.terminal = true;
-                    match stream.machine.finish() {
-                        Ok(events) => {
-                            stream.pending.extend(events.into_iter().map(Ok));
-                            return Poll::Ready(stream.pending.pop_front());
-                        }
-                        Err(error) => return Poll::Ready(Some(Err(error))),
-                    }
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
+    fn finish(&mut self) -> Result<Vec<crate::domain::AssistantEvent>, crate::error::LlmError> {
+        ChatStateMachine::finish(self)
     }
 }

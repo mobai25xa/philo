@@ -17,6 +17,7 @@ use super::capability::{
 use super::catalog::{ModelCatalog, ProductId};
 use super::endpoint::{CredentialBinding, EndpointConfig, resolve_official, resolve_test_only};
 use super::headers::{DynamicHeaderPolicy, HeaderOperation};
+use super::protocol_contract::ValidatedProtocolBinding;
 use super::{IdempotencyPolicy, RateLimitPolicy};
 
 /// Declarative provider configuration validated into a [`super::runtime::ProviderRuntime`].
@@ -24,7 +25,7 @@ use super::{IdempotencyPolicy, RateLimitPolicy};
 pub struct ProviderProfile {
     pub(super) provider_id: ProviderId,
     pub(super) product_id: ProductId,
-    pub(super) protocol_id: ProtocolId,
+    pub(super) protocol: ValidatedProtocolBinding,
     pub(super) endpoint: EndpointConfig,
     pub(super) credential_binding: CredentialBinding,
     pub(super) auth: Arc<dyn AuthProvider>,
@@ -36,8 +37,6 @@ pub struct ProviderProfile {
     pub(super) model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     pub(super) catalog: ModelCatalog,
     pub(super) model_protocol_contracts: BTreeMap<ModelId, ResolvedProtocolContract>,
-    pub(super) dialect: ProtocolDialect,
-    pub(super) protocol_contract: ResolvedProtocolContract,
     pub(super) transport: ProviderTransportOptions,
     pub(super) resource_limits: ResourceLimits,
     pub(super) sse: SseConfig,
@@ -51,7 +50,7 @@ pub struct ProviderProfile {
 pub(super) struct ProviderProfileParts {
     pub(super) provider_id: ProviderId,
     pub(super) product_id: ProductId,
-    pub(super) protocol_id: ProtocolId,
+    pub(super) protocol: ValidatedProtocolBinding,
     pub(super) endpoint: EndpointConfig,
     pub(super) credential_binding: CredentialBinding,
     pub(super) auth: Arc<dyn AuthProvider>,
@@ -63,8 +62,6 @@ pub(super) struct ProviderProfileParts {
     pub(super) model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     pub(super) catalog: ModelCatalog,
     pub(super) model_protocol_contracts: BTreeMap<ModelId, ResolvedProtocolContract>,
-    pub(super) dialect: ProtocolDialect,
-    pub(super) protocol_contract: ResolvedProtocolContract,
     pub(super) transport: ProviderTransportOptions,
     pub(super) resource_limits: ResourceLimits,
     pub(super) sse: SseConfig,
@@ -89,28 +86,8 @@ impl ProviderProfile {
                 ));
             }
         }
-        match parts.dialect {
-            ProtocolDialect::OpenAiChatCompletions
-                if parts.protocol_id.as_str() == "openai-chat-completions" => {}
-            ProtocolDialect::OpenAiChatCompletions => {
-                return Err(LlmError::Configuration(
-                    "OpenAI Chat dialect requires the openai-chat-completions protocol id"
-                        .to_owned(),
-                ));
-            }
-            ProtocolDialect::AnthropicMessages
-                if parts.protocol_id.as_str() == "anthropic-messages" => {}
-            ProtocolDialect::AnthropicMessages => {
-                return Err(LlmError::Configuration(
-                    "Anthropic Messages dialect requires the anthropic-messages protocol id"
-                        .to_owned(),
-                ));
-            }
-        }
-        if !parts.protocol_contract.matches_dialect(parts.dialect) {
-            return Err(LlmError::Configuration(
-                "protocol dialect does not match resolved protocol contract".to_owned(),
-            ));
+        for contract in parts.model_protocol_contracts.values() {
+            parts.protocol.validate_contract(contract)?;
         }
         let endpoint = if parts.test_only {
             resolve_test_only(&parts.endpoint)?
@@ -137,7 +114,7 @@ impl ProviderProfile {
         Ok(Self {
             provider_id: parts.provider_id,
             product_id: parts.product_id,
-            protocol_id: parts.protocol_id,
+            protocol: parts.protocol,
             endpoint: parts.endpoint,
             credential_binding: parts.credential_binding,
             auth: parts.auth,
@@ -149,8 +126,6 @@ impl ProviderProfile {
             model_capabilities: parts.model_capabilities,
             catalog: parts.catalog,
             model_protocol_contracts: parts.model_protocol_contracts,
-            dialect: parts.dialect,
-            protocol_contract: parts.protocol_contract,
             transport: parts.transport,
             resource_limits: parts.resource_limits,
             sse: parts.sse,
@@ -168,7 +143,7 @@ impl ProviderProfile {
 
     /// Returns protocol identifier.
     pub fn protocol_id(&self) -> &ProtocolId {
-        &self.protocol_id
+        self.protocol.id()
     }
 
     /// Returns exact provider product identifier.
@@ -188,7 +163,7 @@ impl ProviderProfile {
 
     /// Returns dialect.
     pub fn dialect(&self) -> ProtocolDialect {
-        self.dialect
+        self.protocol.dialect()
     }
 
     /// Returns transport options.
@@ -216,13 +191,12 @@ impl fmt::Debug for ProviderProfile {
         f.debug_struct("ProviderProfile")
             .field("provider_id", &self.provider_id)
             .field("product_id", &self.product_id)
-            .field("protocol_id", &self.protocol_id)
+            .field("protocol", &self.protocol)
             .field("endpoint", &self.endpoint)
             .field("credential_binding", &self.credential_binding)
             .field("auth", &"[REDACTED]")
             .field("client_identity", &self.client_identity)
             .field("capabilities", &self.capabilities)
-            .field("dialect", &self.dialect)
             .field("transport", &self.transport)
             .field("test_only", &self.test_only)
             .finish_non_exhaustive()
@@ -240,7 +214,7 @@ mod tests {
         ProviderProfileParts {
             provider_id: ProviderId::new("official-openai").unwrap(),
             product_id: ProductId::new("chat-completions").unwrap(),
-            protocol_id: ProtocolId::new("openai-chat-completions").unwrap(),
+            protocol: ValidatedProtocolBinding::openai_chat(),
             endpoint: EndpointConfig::base_and_path(
                 "https://api.openai.com/v1",
                 "/chat/completions",
@@ -259,8 +233,6 @@ mod tests {
             model_capabilities: BTreeMap::<ModelId, ModelCapabilityProfile>::new(),
             catalog: ModelCatalog::default(),
             model_protocol_contracts: BTreeMap::new(),
-            dialect: ProtocolDialect::OpenAiChatCompletions,
-            protocol_contract: ResolvedProtocolContract::strict_openai_chat(),
             transport: ProviderTransportOptions::secure_defaults(),
             resource_limits: ResourceLimits::official(),
             sse: SseConfig::default(),
@@ -276,11 +248,10 @@ mod tests {
         assert!(ProviderProfile::from_parts(official_parts(0)).is_err());
 
         let mut mismatched = official_parts(16 * 1024);
-        mismatched.protocol_id = ProtocolId::new("wrong-protocol").unwrap();
-        assert!(ProviderProfile::from_parts(mismatched).is_err());
-
-        let mut mismatched = official_parts(16 * 1024);
-        mismatched.protocol_contract = ResolvedProtocolContract::strict_anthropic_messages();
+        mismatched.model_protocol_contracts.insert(
+            ModelId::new("mismatch-model").unwrap(),
+            ResolvedProtocolContract::strict_anthropic_messages(),
+        );
         assert!(ProviderProfile::from_parts(mismatched).is_err());
     }
 }

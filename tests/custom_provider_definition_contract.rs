@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use philo::error::ProviderRegistryFailure;
 use philo::provider::auth::ApiKey;
 use philo::provider::capability::ProviderCapabilities;
 use philo::provider::catalog::ProductId;
@@ -81,15 +82,17 @@ fn success(body: &'static [u8]) -> MockResponse {
 }
 
 #[test]
-fn same_provider_can_register_two_explicit_products_and_protocols() {
+fn two_products_for_one_provider_require_explicit_product_selection() {
     let provider_id = ProviderId::new("custom-gateway").unwrap();
     let openai = openai_definition(provider_id.clone());
     let anthropic = anthropic_definition(provider_id.clone());
+    let openai_protocol = openai.protocol_id().clone();
+    let anthropic_protocol = anthropic.protocol_id().clone();
     let registry = ProviderRegistry::new();
-    registry
+    let chat_registration = registry
         .register(ProviderRegistration::from_definition(openai).unwrap())
         .unwrap();
-    registry
+    let messages_registration = registry
         .register(ProviderRegistration::from_definition(anthropic).unwrap())
         .unwrap();
 
@@ -113,14 +116,32 @@ fn same_provider_can_register_two_explicit_products_and_protocols() {
         )
         .unwrap();
 
-    assert_eq!(chat.protocol_id().as_str(), "openai-chat-completions");
-    assert_eq!(messages.protocol_id().as_str(), "anthropic-messages");
-    assert_eq!(resolver.calls(), 2);
-    assert!(
-        registry
-            .build_deployment(&provider_id, &deployment, &resolver)
-            .is_err()
+    assert_eq!(chat_registration.provider_id(), chat.provider_id());
+    assert_eq!(chat_registration.product_id(), Some(chat.product_id()));
+    assert_eq!(chat_registration.protocol_id(), Some(chat.protocol_id()));
+    assert_eq!(messages_registration.provider_id(), messages.provider_id());
+    assert_eq!(
+        messages_registration.product_id(),
+        Some(messages.product_id())
     );
+    assert_eq!(
+        messages_registration.protocol_id(),
+        Some(messages.protocol_id())
+    );
+    assert_eq!(chat.protocol_id(), &openai_protocol);
+    assert_eq!(messages.protocol_id(), &anthropic_protocol);
+    assert_eq!(resolver.calls(), 2);
+    let ambiguous = registry
+        .build_deployment(&provider_id, &deployment, &resolver)
+        .unwrap_err();
+    assert!(matches!(
+        ambiguous,
+        philo::LlmError::ProviderRegistry(ref error)
+            if error.reason() == ProviderRegistryFailure::AmbiguousProductSelection
+    ));
+    let debug = format!("{ambiguous:?}");
+    assert!(!debug.contains("CUSTOM_PROVIDER_KEY"));
+    assert!(!debug.contains("custom-provider-secret-value"));
     assert_eq!(resolver.calls(), 2);
     assert!(
         registry

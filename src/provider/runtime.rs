@@ -33,16 +33,16 @@ use super::headers::{
     HeaderPipeline, HeaderSource, ResolvedHeaders,
 };
 use super::profile::ProviderProfile;
+use super::protocol_contract::ValidatedProtocolBinding;
 use super::{IdempotencyPolicy, RateLimitPolicy};
-use crate::plan::{CallPolicySnapshot, ProtocolKind, ResolvedLimits, ResolvedTarget};
+use crate::plan::{CallPolicySnapshot, ResolvedLimits, ResolvedTarget};
 
 /// Immutable, concurrency-safe provider runtime.
 #[derive(Clone)]
 pub struct ProviderRuntime {
     provider_id: ProviderId,
     product_id: ProductId,
-    protocol_id: ProtocolId,
-    protocol_kind: ProtocolKind,
+    protocol: ValidatedProtocolBinding,
     endpoint: ResolvedEndpoint,
     endpoint_config: EndpointConfig,
     endpoint_mode: EndpointMode,
@@ -55,8 +55,6 @@ pub struct ProviderRuntime {
     model_capabilities: BTreeMap<ModelId, ModelCapabilityProfile>,
     catalog: ModelCatalog,
     model_protocol_contracts: BTreeMap<ModelId, ResolvedProtocolContract>,
-    dialect: ProtocolDialect,
-    protocol_contract: ResolvedProtocolContract,
     transport: ProviderTransportOptions,
     resource_limits: crate::domain::ResourceLimits,
     sse: SseConfig,
@@ -82,7 +80,7 @@ impl ProviderRuntime {
         for entry in profile.catalog.entries() {
             if entry.key.provider_id != profile.provider_id
                 || entry.key.product_id != profile.product_id
-                || entry.protocol_id != profile.protocol_id
+                || &entry.protocol_id != profile.protocol.id()
             {
                 return Err(LlmError::Configuration(
                     "catalog entry does not match provider product protocol".to_owned(),
@@ -96,37 +94,13 @@ impl ProviderRuntime {
                 ));
             }
         }
-        let protocol_kind = match profile.dialect {
-            ProtocolDialect::OpenAiChatCompletions
-                if profile.protocol_id.as_str() == "openai-chat-completions" =>
-            {
-                ProtocolKind::OpenAiChatCompletions
-            }
-            ProtocolDialect::OpenAiChatCompletions => {
-                return Err(LlmError::Configuration(
-                    "OpenAI Chat dialect requires the openai-chat-completions protocol id"
-                        .to_owned(),
-                ));
-            }
-            ProtocolDialect::AnthropicMessages
-                if profile.protocol_id.as_str() == "anthropic-messages" =>
-            {
-                ProtocolKind::AnthropicMessages
-            }
-            ProtocolDialect::AnthropicMessages => {
-                return Err(LlmError::Configuration(
-                    "Anthropic Messages dialect requires the anthropic-messages protocol id"
-                        .to_owned(),
-                ));
-            }
-        };
-        if !profile.protocol_contract.matches_dialect(profile.dialect) {
-            return Err(LlmError::Configuration(
-                "protocol dialect does not match resolved protocol contract".to_owned(),
-            ));
+        for contract in profile.model_protocol_contracts.values() {
+            profile.protocol.validate_contract(contract)?;
         }
-        if matches!(profile.dialect, ProtocolDialect::AnthropicMessages)
-            && !profile.model_protocol_contracts.is_empty()
+        if matches!(
+            profile.protocol.dialect(),
+            ProtocolDialect::AnthropicMessages
+        ) && !profile.model_protocol_contracts.is_empty()
         {
             return Err(LlmError::Configuration(
                 "Anthropic Messages profiles cannot carry OpenAI compatibility policy".to_owned(),
@@ -188,8 +162,7 @@ impl ProviderRuntime {
         Ok(Self {
             provider_id: profile.provider_id,
             product_id: profile.product_id,
-            protocol_id: profile.protocol_id,
-            protocol_kind,
+            protocol: profile.protocol,
             endpoint,
             endpoint_config: profile.endpoint,
             endpoint_mode,
@@ -202,8 +175,6 @@ impl ProviderRuntime {
             model_capabilities: profile.model_capabilities,
             catalog: profile.catalog,
             model_protocol_contracts: profile.model_protocol_contracts,
-            dialect: profile.dialect,
-            protocol_contract: profile.protocol_contract,
             transport: profile.transport,
             resource_limits: profile.resource_limits,
             sse: profile.sse,
@@ -221,7 +192,7 @@ impl ProviderRuntime {
 
     /// Returns protocol identifier.
     pub fn protocol_id(&self) -> &ProtocolId {
-        &self.protocol_id
+        self.protocol.id()
     }
 
     /// Returns the exact provider product identifier.
@@ -272,7 +243,7 @@ impl ProviderRuntime {
 
     /// Returns dialect.
     pub fn dialect(&self) -> ProtocolDialect {
-        self.dialect
+        self.protocol.dialect()
     }
 
     /// Returns transport options.
@@ -306,7 +277,7 @@ impl ProviderRuntime {
             .into());
         }
         if let Some(options) = request.options().protocol_options()
-            && options.protocol_id() != self.protocol_id.as_str()
+            && options.protocol_id() != self.protocol.id().as_str()
         {
             return Err(crate::error::ValidationError::new(
                 "protocol_options",
@@ -319,31 +290,14 @@ impl ProviderRuntime {
         let entry = self.model_entry(request.model().model());
         let capabilities = self.capabilities_for(request.model().model());
         capabilities.validate()?;
-        if let Some(options) = request
-            .options()
-            .protocol_options()
-            .and_then(crate::protocol_options::ProtocolOptions::anthropic_messages)
-        {
-            if options.adaptive_thinking().is_some() {
-                validate_protocol_capability(
-                    "protocol_options.anthropic.adaptive_thinking",
-                    capabilities.adaptive_thinking,
-                )?;
-            }
-            if options.effort().is_some() {
-                validate_protocol_capability(
-                    "protocol_options.anthropic.effort",
-                    capabilities.adaptive_thinking_effort,
-                )?;
-            }
-        }
         // FR-004: the contract was resolved and validated when the definition
         // was built. Planning a request selects one; it never merges.
         let protocol = self
             .model_protocol_contracts
             .get(request.model().model())
-            .unwrap_or(&self.protocol_contract)
+            .unwrap_or_else(|| self.protocol.contract())
             .clone();
+        protocol.validate_options(request.options().protocol_options(), &capabilities)?;
         let model_limits = entry.map(|entry| entry.limits).unwrap_or_default();
         let limits = ResolvedLimits::compile(
             model_limits.apply_to(self.resource_limits),
@@ -357,8 +311,8 @@ impl ProviderRuntime {
             target: ResolvedTarget {
                 provider_id: self.provider_id.clone(),
                 product_id: self.product_id.clone(),
-                protocol_id: self.protocol_id.clone(),
-                protocol_kind: self.protocol_kind,
+                protocol_id: self.protocol.id().clone(),
+                protocol_kind: self.protocol.kind(),
                 domain_model: request.model().model().clone(),
                 provider_model: entry.map_or_else(
                     || ProviderModelId::new(request.model().model().as_str()),
@@ -497,7 +451,7 @@ impl ProviderRuntime {
                         self.provider_id.clone(),
                         self.product_id.clone(),
                         attempt.model_id.clone(),
-                        self.protocol_id.clone(),
+                        self.protocol.id().clone(),
                         attempt.local_request_id.clone(),
                         attempt.attempt_number,
                         attempt.facts.contains_tools,
@@ -545,7 +499,7 @@ impl ProviderRuntime {
         &self,
         target: &ResolvedTarget,
     ) -> Result<ResolvedEndpoint, LlmError> {
-        if target.provider_id != self.provider_id || target.protocol_id != self.protocol_id {
+        if target.provider_id != self.provider_id || &target.protocol_id != self.protocol.id() {
             return Err(LlmError::Configuration(
                 "prepared call target does not match provider runtime".to_owned(),
             ));
@@ -564,27 +518,6 @@ impl ProviderRuntime {
             EndpointMode::Production => resolve_official_for(&self.endpoint_config, values),
             EndpointMode::TestOnly => resolve_test_only_for(&self.endpoint_config, values),
         }
-    }
-}
-
-fn validate_protocol_capability(
-    field: &'static str,
-    status: crate::domain::CapabilityStatus,
-) -> Result<(), LlmError> {
-    match status {
-        crate::domain::CapabilityStatus::Supported => Ok(()),
-        crate::domain::CapabilityStatus::Unsupported => Err(crate::error::ValidationError::new(
-            field,
-            crate::error::ValidationReason::CapabilityUnsupported,
-            "selected model does not support this protocol-scoped option",
-        )
-        .into()),
-        crate::domain::CapabilityStatus::Unknown => Err(crate::error::ValidationError::new(
-            field,
-            crate::error::ValidationReason::CapabilityUnknown,
-            "selected model support for this protocol-scoped option is unknown",
-        )
-        .into()),
     }
 }
 
@@ -608,15 +541,12 @@ fn validate_contracts(profile: &ProviderProfile) -> Result<(), LlmError> {
         }
         capabilities
     };
-    if let Some(contract) = profile.protocol_contract.openai_chat() {
-        contract.compat().validate_against(&profile.capabilities)?;
-    }
+    profile
+        .protocol
+        .contract()
+        .validate_capabilities(&profile.capabilities)?;
     for (model, contract) in &profile.model_protocol_contracts {
-        if let Some(contract) = contract.openai_chat() {
-            contract
-                .compat()
-                .validate_against(&capabilities_for(model))?;
-        }
+        contract.validate_capabilities(&capabilities_for(model))?;
     }
     Ok(())
 }
@@ -639,14 +569,13 @@ impl fmt::Debug for ProviderRuntime {
         f.debug_struct("ProviderRuntime")
             .field("provider_id", &self.provider_id)
             .field("product_id", &self.product_id)
-            .field("protocol_id", &self.protocol_id)
+            .field("protocol", &self.protocol)
             .field("endpoint", &self.endpoint)
             .field("auth", &"[REDACTED]")
             .field("client_identity", &self.client_identity)
             .field("capabilities", &self.capabilities)
             .field("model_capability_count", &self.model_capabilities.len())
             .field("catalog_entry_count", &self.catalog.entries().count())
-            .field("dialect", &self.dialect)
             .field("transport", &self.transport)
             .field("resource_limits", &self.resource_limits)
             .field("sse", &self.sse)
