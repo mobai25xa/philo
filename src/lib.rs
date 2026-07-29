@@ -1,20 +1,22 @@
-//! `philo` is a secure, streaming-first Rust SDK for LLM applications.
+//! `philo` is a secure, streaming-first Rust SDK for LLM applications. It exposes
+//! provider-independent requests and events while keeping protocol wire types,
+//! credentials, retries, and network policy behind typed boundaries.
 //!
-//! The foundation implements the frozen `philo/openai-chat-p1` contract and the
-//! provider-independent domain follows `philo/openai-chat-p2`. The crate
-//! exposes provider-independent domain types, a validated official provider runtime,
-//! and [`LlmClient`] streaming/completion entry points. The request adapter and
-//! `OpenAI` Chat wire/state types remain private; callers do not need reqwest, JSON,
-//! or SSE implementation details.
+//! Official `OpenAI` Chat Completions is part of the Stable candidate. Anthropic
+//! Messages, companion packages, provider presets, and protocol-specific thinking
+//! remain Experimental until their stated release gates pass. Bounded raw body
+//! extensions are explicit escape hatches: their safety contract is Stable, but
+//! their Provider semantics are not portable.
 //!
-//! Protocol adapters support official `OpenAI` Chat Completions and official Anthropic
-//! Messages. They share the provider-independent domain while keeping wire types,
-//! protocol-specific options, authentication, and streaming state isolated.
+//! Unknown model capabilities fail closed. The SDK validates Tool calls but never
+//! authorizes or executes them. See the repository README for the minimal call,
+//! Provider selection, maintained examples, and security boundary.
 //!
 //! # Stability
 //!
-//! The public API is experimental during the `0.x` series. The phase-one behavior
-//! contract is frozen, but Rust type layouts may change with release notes.
+//! The public API remains pre-1.0 until the first protected Stable tag creates its
+//! API baseline. Stable-candidate items follow the repository compatibility policy;
+//! Experimental items may change in a Minor release with migration notes.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -25,29 +27,23 @@ pub const SDK_NAME: &str = "philo";
 /// The version of this crate build.
 pub const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The identifier of the frozen phase-one behavior contract.
-pub const PHASE_ONE_CONTRACT_ID: &str = "philo/openai-chat-p1";
+/// The identifier of the current `OpenAI` Chat behavior contract.
+pub const OPENAI_CHAT_CONTRACT_ID: &str = "philo/openai-chat";
 
-/// The version of the frozen phase-one behavior contract.
-pub const PHASE_ONE_CONTRACT_VERSION: &str = "1.0.0";
+/// The version of the current `OpenAI` Chat behavior contract.
+pub const OPENAI_CHAT_CONTRACT_VERSION: &str = "1.1.0";
 
-/// The identifier of the frozen phase-two behavior contract.
-pub const PHASE_TWO_CONTRACT_ID: &str = "philo/openai-chat-p2";
+/// The identifier of the production reliability contract.
+pub const RELIABILITY_CONTRACT_ID: &str = "philo/reliability";
 
-/// The version of the frozen phase-two behavior contract.
-pub const PHASE_TWO_CONTRACT_VERSION: &str = "1.1.0";
-
-/// The identifier of the phase-four production reliability contract.
-pub const PHASE_FOUR_RELIABILITY_CONTRACT_ID: &str = "philo/reliability-p4";
-
-/// The version of the phase-four production reliability contract.
-pub const PHASE_FOUR_RELIABILITY_CONTRACT_VERSION: &str = "1.0.0";
+/// The version of the production reliability contract.
+pub const RELIABILITY_CONTRACT_VERSION: &str = "1.0.0";
 
 /// The identifier of the versioned provider configuration schema.
 pub const PROVIDER_CONFIG_SCHEMA_ID: &str = "philo/provider-config";
 
 /// The current version of the provider configuration schema.
-pub const PROVIDER_CONFIG_SCHEMA_VERSION: &str = "1.0";
+pub const PROVIDER_CONFIG_SCHEMA_VERSION: &str = "1.1";
 
 pub mod client;
 pub mod domain;
@@ -63,7 +59,7 @@ pub mod transport;
 
 // The crate root exports only what a first request needs: construct a runtime,
 // build a request, stream it, handle the error. Everything else stays public at
-// its owning module path — see `docs/philo/stage/suggest/fix_root/01-public-surface-reduction.md`.
+// its owning module path; see `docs/maintenance/public-api-inventory.md`.
 pub use client::{AssistantStream, LlmClient, RequestControl};
 pub use domain::{
     AssistantEvent, AssistantMessage, ContentPart, FinishReason, GenerateRequest,
@@ -77,6 +73,13 @@ pub use provider::{
     ProviderDefinition, ProviderDefinitionBuilder, ProviderDeploymentConfig, ProviderRuntime,
 };
 pub use transport::{ReqwestTransport, Transport};
+
+#[cfg(test)]
+extern crate self as philo;
+
+#[cfg(test)]
+#[path = "../tests/support/http_server.rs"]
+mod test_http_server;
 
 #[cfg(test)]
 mod tests {
@@ -101,21 +104,18 @@ mod tests {
     };
 
     use super::{
-        PHASE_FOUR_RELIABILITY_CONTRACT_ID, PHASE_FOUR_RELIABILITY_CONTRACT_VERSION,
-        PHASE_ONE_CONTRACT_ID, PHASE_ONE_CONTRACT_VERSION, PHASE_TWO_CONTRACT_ID,
-        PHASE_TWO_CONTRACT_VERSION, SDK_NAME, SDK_VERSION,
+        OPENAI_CHAT_CONTRACT_ID, OPENAI_CHAT_CONTRACT_VERSION, RELIABILITY_CONTRACT_ID,
+        RELIABILITY_CONTRACT_VERSION, SDK_NAME, SDK_VERSION,
     };
 
     #[test]
     fn published_metadata_matches_frozen_decisions() {
         assert_eq!(SDK_NAME, "philo");
         assert_eq!(SDK_VERSION, env!("CARGO_PKG_VERSION"));
-        assert_eq!(PHASE_ONE_CONTRACT_ID, "philo/openai-chat-p1");
-        assert_eq!(PHASE_ONE_CONTRACT_VERSION, "1.0.0");
-        assert_eq!(PHASE_TWO_CONTRACT_ID, "philo/openai-chat-p2");
-        assert_eq!(PHASE_TWO_CONTRACT_VERSION, "1.1.0");
-        assert_eq!(PHASE_FOUR_RELIABILITY_CONTRACT_ID, "philo/reliability-p4");
-        assert_eq!(PHASE_FOUR_RELIABILITY_CONTRACT_VERSION, "1.0.0");
+        assert_eq!(OPENAI_CHAT_CONTRACT_ID, "philo/openai-chat");
+        assert_eq!(OPENAI_CHAT_CONTRACT_VERSION, "1.1.0");
+        assert_eq!(RELIABILITY_CONTRACT_ID, "philo/reliability");
+        assert_eq!(RELIABILITY_CONTRACT_VERSION, "1.0.0");
     }
 
     #[test]

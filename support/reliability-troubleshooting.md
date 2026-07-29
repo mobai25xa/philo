@@ -26,6 +26,6 @@ secret, follow the application's retention/deletion process, and inspect its
 formatter/exporter. The SDK can keep its own errors/events value-free; it cannot
 erase downstream logs, crash dumps, process memory, or third-party telemetry.
 
-Verification commands are listed in the Phase 4 evidence README. Reproduce with
+Verification commands are listed in the performance workflow. Reproduce with
 MockTransport or loopback first; ordinary CI must remain offline and must not call
 a paid provider.

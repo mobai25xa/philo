@@ -1,4 +1,4 @@
-//! Token accounting and local cost estimation for phase-two semantics.
+//! Token accounting and local cost estimation.
 #![allow(
     clippy::missing_errors_doc,
     clippy::must_use_candidate,
@@ -288,7 +288,7 @@ fn merge_token_count(
 pub struct CurrencyCode(String);
 
 impl CurrencyCode {
-    /// Creates a currency code. Phase-two price fixtures use `USD`.
+    /// Creates a currency code. Price fixtures use `USD`.
     pub fn new(value: impl Into<String>) -> Result<Self, CostError> {
         let value = value.into();
         if value.len() != 3

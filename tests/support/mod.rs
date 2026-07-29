@@ -2,3 +2,5 @@
 
 pub mod conformance;
 pub mod http_server;
+pub mod mock_transport;
+pub mod provider;

@@ -1,9 +1,10 @@
 # The core crate is also the workspace root. Everything under `crates/` is a
 # responsibility that was adjudicated *out* of the core. Production dependency
 # edges point from those crates to philo; root dev-dependencies compose them only
-# for integration tests and test-only feature activation.
+# for integration tests.
 [workspace]
-members = ["crates/*"]
+members = ["crates/philo-config", "crates/philo-presets"]
+exclude = ["fuzz"]
 
 [workspace.lints.rust]
 missing_docs = "deny"
@@ -17,29 +18,47 @@ pedantic = { level = "warn", priority = -1 }
 
 [package]
 name = "philo"
-version = "0.1.0-alpha.1"
+version = "1.0.0-rc.1"
 edition = "2024"
 rust-version = "1.97.1"
 description = "A secure, streaming-first Rust SDK for multi-provider LLM applications"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/mobai25xa/philo"
+documentation = "https://docs.rs/philo"
 keywords = ["llm", "openai", "sdk", "streaming"]
 categories = ["api-bindings", "asynchronous"]
-publish = false
-exclude = ["src/provider/profiles/test_only.rs"]
+publish = ["crates-io"]
+exclude = [
+    ".gitattributes",
+    ".github/**",
+    ".gitignore",
+    "benches/**",
+    "compatibility/**",
+    "deny.toml",
+    "docs/**",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+    "support/**",
+    "tests/**",
+    "tools/**",
+    "src/client/http_e2e_tests.rs",
+    "src/client/release_tests.rs",
+    "src/provider/profiles/test_only.rs",
+    "src/transport/contract_tests.rs",
+]
 
 [[bench]]
-name = "phase4_sdk"
+name = "sdk_bench"
 harness = false
 
 [[bench]]
-name = "phase4_client_soak"
+name = "client_soak"
 harness = false
 
 [features]
 default = ["rustls-tls"]
 rustls-tls = ["reqwest/rustls-tls", "dep:rustls"]
-test-util = []
 tracing = ["dep:tracing"]
 
 [dependencies]
@@ -62,10 +81,8 @@ url = { version = "2.5", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
-philo-compat = { path = "crates/philo-compat" }
 philo-config = { path = "crates/philo-config" }
 philo-presets = { path = "crates/philo-presets" }
-philo-test-support = { path = "crates/philo-test-support" }
 proptest = "1.6"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "test-util", "time"] }
 toml = "0.8"

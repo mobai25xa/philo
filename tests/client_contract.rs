@@ -1,5 +1,7 @@
 //! End-to-end client orchestration, lifecycle, and observability contracts.
 
+mod support;
+
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -16,21 +18,21 @@ use philo::error::{HistoryFailure, SchemaFailure, StructuredOutputFailure};
 use philo::observability::{
     LifecycleErrorCategory, LifecycleEvent, LifecycleEventKind, LifecycleObserver,
 };
-use philo::provider::TestOnlyProfile;
 use philo::provider::capability::ModelCapabilityProfile;
 use philo::provider::headers::HeaderSource;
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
     AssistantEvent, ContentPart, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
     LlmError, Message, MessageRole, ModelId, ModelRef, RequestControl, Usage,
 };
 use serde_json::Value;
+use support::mock_transport::{MockBodyItem, MockExchange, MockResponse, MockTransport};
+use support::provider::TestProvider;
 use tokio::time::sleep;
 
 const API_KEY: &str = "philo-client-api-key-canary";
 const PROMPT_CANARY: &str = "philo-client-prompt-canary";
 const OUTPUT_CANARY: &str = "philo-client-output-canary";
-const ENDPOINT: &str = "http://127.0.0.1:41991/v1/chat/completions";
+const ENDPOINT: &str = "https://test.invalid/v1/chat/completions";
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -39,7 +41,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 fn runtime() -> philo::ProviderRuntime {
-    TestOnlyProfile::localhost(ENDPOINT, API_KEY)
+    TestProvider::new(ENDPOINT, API_KEY)
         .unwrap()
         .build()
         .unwrap()
@@ -183,7 +185,7 @@ async fn client_body_uses_planner_normalized_history() {
 
 #[tokio::test]
 async fn stream_and_complete_share_response_session_structured_failure() {
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, API_KEY)
+    let runtime = TestProvider::new(ENDPOINT, API_KEY)
         .unwrap()
         .with_model_capabilities(
             ModelCapabilityProfile::new(ModelId::new("gpt-test").unwrap())
@@ -667,7 +669,7 @@ async fn concurrent_calls_have_distinct_local_ids() {
 }
 
 fn runtime_with_model_capabilities(profile: ModelCapabilityProfile) -> philo::ProviderRuntime {
-    TestOnlyProfile::localhost(ENDPOINT, API_KEY)
+    TestProvider::new(ENDPOINT, API_KEY)
         .unwrap()
         .with_model_capabilities(profile)
         .build()
@@ -708,7 +710,7 @@ fn cyclic_schema_is_unrepresentable_at_the_client_boundary() {
     let mock = MockTransport::scripted([success_exchange("unused", "unused", "unused")]);
     let _client = LlmClient::new(runtime(), mock.clone());
     let fixture: Value = serde_json::from_slice(include_bytes!(
-        "fixtures/phase-2/repair/schema/self-ref.json"
+        "fixtures/domain/schema/regression/self-ref.json"
     ))
     .unwrap();
     let error = ToolSchema::new(fixture).unwrap_err();
@@ -720,7 +722,7 @@ fn cyclic_schema_is_unrepresentable_at_the_client_boundary() {
 #[tokio::test]
 async fn schema_violation_is_identical_for_stream_and_complete_and_never_emits_done() {
     let fixture = Bytes::from_static(include_bytes!(
-        "fixtures/phase-2/repair/response/structured-schema-violation.sse"
+        "fixtures/protocol/openai_chat/stream/regression/structured-schema-violation.sse"
     ));
     let mock = MockTransport::scripted([
         MockExchange::response(MockResponse::new(
@@ -784,7 +786,7 @@ async fn schema_violation_is_identical_for_stream_and_complete_and_never_emits_d
 #[tokio::test]
 async fn duplicate_tool_id_fails_in_response_session_for_stream_and_complete() {
     let fixture = Bytes::from_static(include_bytes!(
-        "fixtures/phase-2/repair/response/duplicate-tool-id.sse"
+        "fixtures/protocol/openai_chat/stream/regression/duplicate-tool-id.sse"
     ));
     let mock = MockTransport::scripted([
         MockExchange::response(MockResponse::new(
@@ -820,7 +822,7 @@ async fn duplicate_tool_id_fails_in_response_session_for_stream_and_complete() {
 #[tokio::test]
 async fn empty_usage_is_ignored_through_complete() {
     let fixture = Bytes::from_static(include_bytes!(
-        "fixtures/phase-2/repair/response/empty-usage.sse"
+        "fixtures/protocol/openai_chat/stream/regression/empty-usage.sse"
     ));
     let mock = MockTransport::scripted([MockExchange::response(MockResponse::new(
         StatusCode::OK,

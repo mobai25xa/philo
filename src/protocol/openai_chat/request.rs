@@ -330,49 +330,58 @@ mod tests {
     use crate::execution::planner::CallPlanner;
     use crate::protocol::ProtocolOperation;
     use crate::protocol::openai_chat::OpenAiChatDriver;
-    use crate::provider::{ModelCapabilityProfile, TestOnlyProfile};
+    use crate::provider::ModelCapabilityProfile;
+    use crate::provider::profiles::TestProvider;
 
     const MINIMAL: &str =
-        include_str!("../../../tests/fixtures/requests/openai_chat/minimal-user.json");
+        include_str!("../../../tests/fixtures/protocol/openai_chat/request/minimal-user.json");
     const ALL_ROLES: &str =
-        include_str!("../../../tests/fixtures/requests/openai_chat/all-roles.json");
+        include_str!("../../../tests/fixtures/protocol/openai_chat/request/all-roles.json");
     const TEMPERATURE_ONLY: &str =
-        include_str!("../../../tests/fixtures/requests/openai_chat/temperature-only.json");
+        include_str!("../../../tests/fixtures/protocol/openai_chat/request/temperature-only.json");
     const MAX_TOKENS_ONLY: &str =
-        include_str!("../../../tests/fixtures/requests/openai_chat/max-tokens-only.json");
+        include_str!("../../../tests/fixtures/protocol/openai_chat/request/max-tokens-only.json");
     const ALL_OPTIONS: &str =
-        include_str!("../../../tests/fixtures/requests/openai_chat/all-options.json");
-    const TOOL_MINIMAL_AUTO: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-minimal-auto.json");
-    const TOOL_NONE: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-none.json");
-    const TOOL_REQUIRED: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-required.json");
-    const TOOL_SPECIFIC: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-specific.json");
-    const TOOL_STRICT: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-strict.json");
-    const PARALLEL_TOOLS: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/tools/parallel-tools-enabled.json");
-    const TOOL_DESCRIPTION_OMITTED: &str = include_str!(
-        "../../../tests/fixtures/phase-2/requests/tools/tool-description-omitted.json"
+        include_str!("../../../tests/fixtures/protocol/openai_chat/request/all-options.json");
+    const TOOL_MINIMAL_AUTO: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/tools/tool-minimal-auto.json"
     );
-    const TOOL_SCHEMA_NESTED: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/tools/tool-schema-nested.json");
-    const IMAGE_URL: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/multimodal/text-one-url-image.json");
-    const IMAGE_INLINE: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/multimodal/text-inline-image.json");
+    const TOOL_NONE: &str =
+        include_str!("../../../tests/fixtures/protocol/openai_chat/request/tools/tool-none.json");
+    const TOOL_REQUIRED: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/tools/tool-required.json"
+    );
+    const TOOL_SPECIFIC: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/tools/tool-specific.json"
+    );
+    const TOOL_STRICT: &str =
+        include_str!("../../../tests/fixtures/protocol/openai_chat/request/tools/tool-strict.json");
+    const PARALLEL_TOOLS: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/tools/parallel-tools-enabled.json"
+    );
+    const TOOL_DESCRIPTION_OMITTED: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/tools/tool-description-omitted.json"
+    );
+    const TOOL_SCHEMA_NESTED: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/tools/tool-schema-nested.json"
+    );
+    const IMAGE_URL: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/multimodal/text-one-url-image.json"
+    );
+    const IMAGE_INLINE: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/multimodal/text-inline-image.json"
+    );
     const IMAGE_INTERLEAVED: &str = include_str!(
-        "../../../tests/fixtures/phase-2/requests/multimodal/text-image-interleaved.json"
+        "../../../tests/fixtures/protocol/openai_chat/request/multimodal/text-image-interleaved.json"
     );
     const REASONING_HIGH: &str = include_str!(
-        "../../../tests/fixtures/phase-2/requests/thinking/reasoning-effort-high.json"
+        "../../../tests/fixtures/protocol/openai_chat/request/thinking/reasoning-effort-high.json"
     );
-    const JSON_OBJECT: &str =
-        include_str!("../../../tests/fixtures/phase-2/requests/structured-output/json-object.json");
+    const JSON_OBJECT: &str = include_str!(
+        "../../../tests/fixtures/protocol/openai_chat/request/structured-output/json-object.json"
+    );
     const JSON_SCHEMA_STRICT: &str = include_str!(
-        "../../../tests/fixtures/phase-2/requests/structured-output/json-schema-strict.json"
+        "../../../tests/fixtures/protocol/openai_chat/request/structured-output/json-schema-strict.json"
     );
 
     fn capabilities() -> ModelCapabilityProfile {
@@ -444,7 +453,7 @@ mod tests {
         capabilities: ModelCapabilityProfile,
         key: &str,
     ) -> crate::protocol::PreparedCall {
-        let runtime = TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/chat/completions", key)
+        let runtime = TestProvider::localhost("http://127.0.0.1:8787/v1/chat/completions", key)
             .unwrap()
             .with_model_capabilities(capabilities)
             .build()
@@ -777,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn p1_text_request_remains_unchanged_when_tools_are_absent() {
+    fn text_request_remains_unchanged_when_tools_are_absent() {
         golden(
             &encoded_value(&request(vec![Message::user("Hello")]), capabilities()),
             MINIMAL,

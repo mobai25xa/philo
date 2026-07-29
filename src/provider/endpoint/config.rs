@@ -173,7 +173,7 @@ pub fn resolve_official_for(
 
 /// Resolves a localhost-only test endpoint.
 #[doc(hidden)]
-pub fn resolve_test_only(config: &EndpointConfig) -> Result<ResolvedEndpoint, LlmError> {
+pub(crate) fn resolve_test_only(config: &EndpointConfig) -> Result<ResolvedEndpoint, LlmError> {
     config.resolve(EndpointMode::TestOnly, None)
 }
 

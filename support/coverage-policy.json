@@ -1,0 +1,28 @@
+{
+  "schema": "philo/coverage-policy",
+  "version": 1,
+  "overall": {
+    "minimum_line_percent": 70.0,
+    "baseline_line_percent": 70.0
+  },
+  "risk_groups": [
+    {
+      "name": "protocol-state-machines",
+      "path_patterns": ["/src/protocol/openai_chat/response/", "/src/protocol/anthropic_messages/response/"],
+      "minimum_line_percent": 80.0,
+      "minimum_branch_percent": 60.0
+    },
+    {
+      "name": "endpoint-auth-headers-redaction",
+      "path_patterns": ["/src/provider/endpoint/", "/src/provider/auth/", "/src/provider/headers/", "/src/provider/secret.rs", "/src/error.rs"],
+      "minimum_line_percent": 80.0,
+      "minimum_branch_percent": 60.0
+    },
+    {
+      "name": "retry-history-schema",
+      "path_patterns": ["/src/execution/reliability/", "/src/domain/history/", "/src/domain/schema/"],
+      "minimum_line_percent": 75.0,
+      "minimum_branch_percent": 55.0
+    }
+  ]
+}

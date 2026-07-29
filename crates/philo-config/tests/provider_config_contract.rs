@@ -1,7 +1,6 @@
 //! Versioned provider configuration, deterministic merge, and secret-boundary contracts.
 
 use std::cell::Cell;
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,8 +11,8 @@ use philo::provider::profiles::OfficialOpenAiProfile;
 use philo::provider::secret::{SecretReference, SecretResolver};
 use philo_config::{
     ClientIdentityConfig, ConfigSchemaVersion, ConfigSource, ConfigSourceKind, ConfigValue,
-    EndpointSpec, FieldState, ListMerge, MapMerge, NamedConfigValue, NamedListMerge,
-    ProviderConfigDocument, ProviderConfigField, ProviderConfigLayer, ProviderConfigSnapshot,
+    EndpointSpec, FieldState, ProviderConfigDocument, ProviderConfigField, ProviderConfigLayer,
+    ProviderConfigSnapshot,
 };
 
 const KEY_CANARY: &str = "philo-config-secret-canary-1734";
@@ -148,56 +147,8 @@ fn unset_remove_and_empty_are_not_conflated() {
 }
 
 #[test]
-fn list_and_map_merge_are_order_stable() {
-    assert_eq!(
-        ListMerge::Append(vec![3, 4]).apply(vec![1, 2]),
-        vec![1, 2, 3, 4]
-    );
-    assert_eq!(ListMerge::Remove.apply(vec![1, 2]), Vec::<i32>::new());
-
-    let base = vec![
-        NamedConfigValue::new("a", 1).unwrap(),
-        NamedConfigValue::new("b", 2).unwrap(),
-    ];
-    let merged = NamedListMerge::MergeById(vec![
-        NamedConfigValue::new("c", 3).unwrap(),
-        NamedConfigValue::new("b", 20).unwrap(),
-    ])
-    .apply(base)
-    .unwrap();
-    assert_eq!(
-        merged
-            .iter()
-            .map(|entry| (entry.id(), *entry.value()))
-            .collect::<Vec<_>>(),
-        vec![("a", 1), ("b", 20), ("c", 3)]
-    );
-    let duplicate = NamedListMerge::Append(vec![NamedConfigValue::new("a", 4).unwrap()])
-        .apply(vec![NamedConfigValue::new("a", 1).unwrap()])
-        .unwrap_err();
-    assert_eq!(duplicate.reason(), ProviderConfigFailure::MergeConflict);
-
-    let base = BTreeMap::from([("b".to_owned(), 2), ("a".to_owned(), 1)]);
-    let merged =
-        MapMerge::Merge(BTreeMap::from([("b".to_owned(), 20), ("c".to_owned(), 3)])).apply(base);
-    assert_eq!(
-        merged.into_iter().collect::<Vec<_>>(),
-        vec![
-            ("a".to_owned(), 1),
-            ("b".to_owned(), 20),
-            ("c".to_owned(), 3),
-        ]
-    );
-}
-
-#[test]
 fn unknown_major_unknown_field_and_invalid_cross_field_fail_before_secret_resolution() {
-    let unknown_major = ProviderConfigDocument::from_json(&fixture("unknown-major.json")).unwrap();
-    let error = ProviderConfigLayer::from_document(
-        unknown_major,
-        ConfigSource::user_config("file/v2", "unknown-major.json").unwrap(),
-    )
-    .unwrap_err();
+    let error = ProviderConfigDocument::from_json(&fixture("unknown-major.json")).unwrap_err();
     assert_eq!(error.reason(), ProviderConfigFailure::InvalidVersion);
 
     let error = ProviderConfigLayer::from_json(
@@ -236,6 +187,21 @@ fn unknown_major_unknown_field_and_invalid_cross_field_fail_before_secret_resolu
         .unwrap_err();
     assert!(matches!(error, philo::LlmError::ProviderConfig(_)));
     assert_eq!(resolver.calls.get(), 0);
+}
+
+#[test]
+fn previous_minor_is_migrated_and_writer_emits_only_current_schema() {
+    let previous = ProviderConfigDocument::from_json(&fixture("official-user.json")).unwrap();
+    assert_eq!(previous.schema_version, ConfigSchemaVersion::CURRENT);
+
+    let json = previous.to_current_json().unwrap();
+    assert!(json.contains("\"minor\": 1"));
+    let roundtrip = ProviderConfigDocument::from_json(&json).unwrap();
+    assert_eq!(roundtrip, previous);
+    assert_eq!(
+        ConfigSchemaVersion::PREVIOUS.minor + 1,
+        ConfigSchemaVersion::CURRENT.minor
+    );
 }
 
 #[test]
@@ -374,6 +340,31 @@ fn oversized_and_unknown_configuration_fail_before_resolution() {
 fn the_moved_fixture_manifest_stays_complete_and_credential_free() {
     let root = fixture_root().parent().unwrap().to_path_buf();
     let manifest = fs::read_to_string(root.join("manifest.toml")).unwrap();
+    let parsed: toml::Value = toml::from_str(&manifest).unwrap();
+    assert_eq!(parsed["schema_version"].as_integer(), Some(3));
+    let entries = parsed["fixture"].as_array().unwrap();
+    assert_eq!(entries.len(), 3);
+    for entry in entries {
+        assert_eq!(entry["contract_id"].as_str(), Some("philo/provider-config"));
+        assert_eq!(entry["contract_version"].as_str(), Some("1.1"));
+        assert_eq!(entry["source"].as_str(), Some("synthetic"));
+        assert_eq!(entry["public_allowed"].as_bool(), Some(true));
+        for field in [
+            "category",
+            "protocol",
+            "captured_at",
+            "reviewed_at",
+            "redaction_status",
+            "sanitized_at",
+            "license_or_permission",
+            "expected_summary",
+        ] {
+            assert!(
+                entry[field].as_str().is_some(),
+                "missing fixture field {field}"
+            );
+        }
+    }
 
     let mut declared = manifest
         .lines()

@@ -9,17 +9,12 @@ use futures_util::{StreamExt as _, stream};
 use philo::error::BodySummary;
 use philo::transport::ByteStream;
 use philo::transport::SseDecoder;
-use philo::{
-    PHASE_ONE_CONTRACT_ID, PHASE_ONE_CONTRACT_VERSION, PHASE_TWO_CONTRACT_ID,
-    PHASE_TWO_CONTRACT_VERSION, PROVIDER_CONFIG_SCHEMA_ID, PROVIDER_CONFIG_SCHEMA_VERSION,
-};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct FixtureManifest {
     schema_version: u32,
-    contract_id: String,
-    contract_version: String,
+    reviewed_at: String,
     fixture: Vec<FixtureEntry>,
 }
 
@@ -27,14 +22,24 @@ struct FixtureManifest {
 struct FixtureEntry {
     id: String,
     path: String,
+    category: String,
+    format_version: u32,
     purpose: String,
     source: String,
-    contract_id: Option<String>,
+    contract_id: String,
+    protocol: String,
+    provider: Option<String>,
+    product: Option<String>,
     source_url: Option<String>,
-    captured_at: Option<String>,
-    sanitized_at: Option<String>,
+    captured_at: String,
+    reviewed_at: String,
+    redaction_status: String,
+    sanitized_at: String,
+    license_or_permission: String,
+    public_allowed: bool,
     expected: String,
     expected_error: Option<String>,
+    expected_summary: String,
     contract_version: String,
     notes: String,
 }
@@ -71,9 +76,8 @@ fn collect_files(root: &Path, directory: &Path, output: &mut BTreeSet<String>) {
 fn every_fixture_is_uniquely_described_and_present() {
     let root = fixture_root();
     let manifest = read_manifest();
-    assert_eq!(manifest.schema_version, 2);
-    assert_eq!(manifest.contract_id, PHASE_ONE_CONTRACT_ID);
-    assert_eq!(manifest.contract_version, PHASE_ONE_CONTRACT_VERSION);
+    assert_eq!(manifest.schema_version, 3);
+    assert_eq!(manifest.reviewed_at, "2026-07-29");
 
     let mut ids = BTreeSet::new();
     let mut paths = BTreeSet::<String>::new();
@@ -90,23 +94,37 @@ fn every_fixture_is_uniquely_described_and_present() {
         );
         assert!(!fixture.purpose.trim().is_empty());
         assert!(!fixture.notes.trim().is_empty());
-        if fixture.path.starts_with("phase-2/repair/") {
-            assert_eq!(fixture.contract_id.as_deref(), Some(PHASE_TWO_CONTRACT_ID));
-            assert_eq!(fixture.contract_version, PHASE_TWO_CONTRACT_VERSION);
-        } else if fixture.path.starts_with("provider-config/") {
-            assert_eq!(
-                fixture.contract_id.as_deref(),
-                Some(PROVIDER_CONFIG_SCHEMA_ID)
-            );
-            assert_eq!(fixture.contract_version, PROVIDER_CONFIG_SCHEMA_VERSION);
-        } else {
-            assert!(fixture.contract_id.is_none());
-            assert_eq!(fixture.contract_version, PHASE_ONE_CONTRACT_VERSION);
-        }
+        assert!(!fixture.expected_summary.trim().is_empty());
+        assert!(!fixture.contract_id.trim().is_empty());
+        assert!(!fixture.contract_version.trim().is_empty());
+        assert_eq!(fixture.format_version, 1);
+        assert!(fixture.path.starts_with(&format!("{}/", fixture.category)));
+        assert!(
+            fixture
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        );
+        assert!(!fixture.id.starts_with('-'));
+        assert!(!fixture.id.ends_with('-'));
+        assert!(matches!(
+            fixture.protocol.as_str(),
+            "openai-chat-completions"
+                | "anthropic-messages"
+                | "provider-independent"
+                | "transport-independent"
+        ));
+        assert_eq!(fixture.provider.is_some(), fixture.product.is_some());
         assert!(matches!(
             fixture.source.as_str(),
             "synthetic" | "official-doc-example" | "sanitized-observation"
         ));
+        assert_eq!(fixture.captured_at.len(), 10);
+        assert_eq!(fixture.reviewed_at.len(), 10);
+        assert_eq!(fixture.sanitized_at.len(), 10);
+        assert!(!fixture.redaction_status.trim().is_empty());
+        assert!(!fixture.license_or_permission.trim().is_empty());
+        assert!(fixture.public_allowed);
         assert!(matches!(fixture.expected.as_str(), "success" | "error"));
         assert_eq!(
             fixture.expected == "error",
@@ -114,8 +132,6 @@ fn every_fixture_is_uniquely_described_and_present() {
         );
         if fixture.source == "sanitized-observation" {
             assert!(fixture.source_url.is_some());
-            assert!(fixture.captured_at.is_some());
-            assert!(fixture.sanitized_at.is_some());
         }
 
         let relative = Path::new(&fixture.path);
@@ -158,7 +174,7 @@ fn fixture_tree_contains_no_credential_canaries() {
 #[tokio::test]
 async fn encoded_binary_and_crlf_fixtures_replay_deterministically() {
     let root = fixture_root();
-    let hex = fs::read_to_string(root.join("errors/non-utf8.hex")).unwrap();
+    let hex = fs::read_to_string(root.join("transport/error/non-utf8.hex")).unwrap();
     let binary: Vec<u8> = hex
         .trim()
         .as_bytes()
@@ -173,7 +189,8 @@ async fn encoded_binary_and_crlf_fixtures_replay_deterministically() {
     );
 
     let escaped =
-        fs::read_to_string(root.join("responses/openai_chat/crlf-heartbeat.escaped-sse")).unwrap();
+        fs::read_to_string(root.join("protocol/openai_chat/stream/crlf-heartbeat.escaped-sse"))
+            .unwrap();
     let replay = escaped.replace("\\r", "\r").replace("\\n", "\n");
     assert!(replay.contains("\r\n"));
     let chunks: Vec<_> = replay
@@ -196,9 +213,10 @@ async fn encoded_binary_and_crlf_fixtures_replay_deterministically() {
 #[test]
 fn profile_fixtures_freeze_official_and_test_only_boundaries() {
     let root = fixture_root();
-    let official: toml::Value =
-        toml::from_str(&fs::read_to_string(root.join("profiles/official-openai.toml")).unwrap())
-            .unwrap();
+    let official: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join("provider/profiles/official-openai.toml")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         official["base_url"].as_str(),
         Some("https://api.openai.com/v1")
@@ -210,9 +228,10 @@ fn profile_fixtures_freeze_official_and_test_only_boundaries() {
     );
     assert_eq!(official["test_only"].as_bool(), Some(false));
 
-    let local: toml::Value =
-        toml::from_str(&fs::read_to_string(root.join("profiles/local-test-only.toml")).unwrap())
-            .unwrap();
+    let local: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join("provider/profiles/local-test-only.toml")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(local["kind"].as_str(), Some("local-test-only"));
     assert!(
         local["endpoint"]

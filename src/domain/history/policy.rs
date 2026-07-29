@@ -12,7 +12,7 @@ pub enum MissingToolResultPolicy {
 pub enum UnsupportedContentPolicy {
     /// Reject the history immediately.
     Reject,
-    /// Drop the part and record a diagnostic (phase-three input only).
+    /// Drop the part and record a diagnostic for compatible dialect input.
     DropWithDiagnostic,
 }
 
@@ -37,7 +37,7 @@ pub struct HistoryPolicy {
 }
 
 impl HistoryPolicy {
-    /// Official `OpenAI` phase-two history policy.
+    /// Official `OpenAI` history policy.
     pub const fn official_openai() -> Self {
         Self {
             missing_tool_result: MissingToolResultPolicy::Reject,

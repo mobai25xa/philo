@@ -25,16 +25,19 @@
 //!
 //! The core has exactly one construction path and does not know this crate
 //! exists.
+//!
+//! # Stability
+//!
+//! This companion crate is **Experimental** during the 0.x series. Its schema,
+//! merge, provenance, and migration rules follow `COMPATIBILITY.md`, but they
+//! are not part of the core crate's 1.0 Stable surface.
 
 mod merge;
 mod schema;
 mod source;
 mod validate;
 
-pub use merge::{
-    ListMerge, MapMerge, NamedConfigValue, NamedListMerge, ProviderConfigField,
-    ProviderConfigLayer, ProviderConfigSnapshot,
-};
+pub use merge::{ProviderConfigField, ProviderConfigLayer, ProviderConfigSnapshot};
 pub use schema::{
     ClientIdentityConfig, ConfigSchemaVersion, ConfigValue, CredentialAudienceSpec, EndpointSpec,
     ProviderConfigDocument,

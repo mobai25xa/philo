@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
+use crate::support::provider::TestProvider;
 use philo::ProviderRuntime;
-use philo::provider::TestOnlyProfile;
 use philo::provider::profiles::OfficialOpenAiProfile;
 use philo_presets::{
     DeepSeekProfile, OpenRouterAttribution, OpenRouterProfile, ZaiCodingProfile, ZaiStandardProfile,
@@ -52,7 +52,7 @@ impl ConformanceProfile {
                 .build()
                 .unwrap(),
             Self::TestOnly => {
-                TestOnlyProfile::localhost("http://127.0.0.1:41994/v1/chat/completions", credential)
+                TestProvider::new("https://test.invalid/v1/chat/completions", credential)
                     .unwrap()
                     .build()
                     .unwrap()
@@ -209,7 +209,7 @@ fn official() -> ConformanceCase {
         profile: ConformanceProfile::OfficialOpenAi,
         capabilities,
         online,
-        fixture_manifest: "provider-compat/official-openai/manifest.toml",
+        fixture_manifest: "provider/compat/official-openai/manifest.toml",
         request_id_expected: true,
         generation_id_expected: true,
         usage_expected: true,
@@ -262,7 +262,7 @@ fn third_party(
         product,
         exact_model: model,
         profile_version: "3.0.0-experimental",
-        catalog_version: "p3-001-reviewed-2026-07-23",
+        catalog_version: "provider-catalog-reviewed-2026-07-23",
         compat_version: "openai-chat-compatible-v1",
         endpoint_shape: "provider-https-exact-product",
         expected_endpoint: endpoint,
@@ -291,7 +291,7 @@ fn openrouter() -> ConformanceCase {
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         ConformanceProfile::OpenRouter,
         "https://openrouter.ai/api/v1/chat/completions",
-        "provider-compat/openrouter/manifest.toml",
+        "provider/compat/openrouter/manifest.toml",
         &[
             ("http-referer", "https://philo.example"),
             ("x-openrouter-title", "philo conformance"),
@@ -311,7 +311,7 @@ fn deepseek() -> ConformanceCase {
         "deepseek-v4-flash",
         ConformanceProfile::DeepSeek,
         "https://api.deepseek.com/chat/completions",
-        "provider-compat/deepseek/manifest.toml",
+        "provider/compat/deepseek/manifest.toml",
         &[],
         true,
         true,
@@ -327,7 +327,7 @@ fn zai_standard() -> ConformanceCase {
         "glm-4.7-flash",
         ConformanceProfile::ZaiStandard,
         "https://api.z.ai/api/paas/v4/chat/completions",
-        "provider-compat/zai-standard/manifest.toml",
+        "provider/compat/zai-standard/manifest.toml",
         &[("accept-language", "en-US")],
         false,
         true,
@@ -343,7 +343,7 @@ fn zai_coding() -> ConformanceCase {
         "glm-4.7-flash",
         ConformanceProfile::ZaiCoding,
         "https://api.z.ai/api/coding/paas/v4/chat/completions",
-        "provider-compat/zai-coding/manifest.toml",
+        "provider/compat/zai-coding/manifest.toml",
         &[("accept-language", "en-US")],
         false,
         true,
@@ -374,14 +374,14 @@ fn test_only() -> ConformanceCase {
         catalog_version: "synthetic-default",
         compat_version: "openai-chat-default-v1",
         endpoint_shape: "loopback-http-exact-origin",
-        expected_endpoint: "http://127.0.0.1:41994/v1/chat/completions",
+        expected_endpoint: "https://test.invalid/v1/chat/completions",
         auth_shape: "bearer-header-test-only",
         header_shape: "json-sse-client-identity",
         expected_headers: &[],
         profile: ConformanceProfile::TestOnly,
         capabilities,
         online,
-        fixture_manifest: "provider-compat/test-only/manifest.toml",
+        fixture_manifest: "provider/compat/test-only/manifest.toml",
         request_id_expected: false,
         generation_id_expected: false,
         usage_expected: true,

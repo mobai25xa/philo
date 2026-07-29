@@ -1,4 +1,4 @@
-# Phase 3 provider limitations
+# Provider limitations
 
 All entries in this document remain `Experimental`. Offline contract evidence
 exists for all four products. Hosted protected online evidence covers OpenRouter,

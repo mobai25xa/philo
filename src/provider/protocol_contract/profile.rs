@@ -1,10 +1,8 @@
 //! Resolved `OpenAI` Chat compatibility contract and field provenance.
 //!
-//! This is the *resolved* form. Deciding which declaration layer wins — the
-//! sparse patch, the precedence order, the per-leaf overlay — is a tradeoff and
-//! lives in `philo-compat` (FR-004). What lives here is the answer: an
-//! immutable contract fixed when the provider definition is built, carried
-//! unchanged into every request on that definition.
+//! This is the *resolved* form. The core does not merge sparse configuration
+//! layers. It accepts one immutable contract when the provider definition is
+//! built and carries that contract unchanged into every request.
 
 use std::collections::BTreeMap;
 

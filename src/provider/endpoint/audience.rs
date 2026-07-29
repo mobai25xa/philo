@@ -21,8 +21,8 @@ pub enum CredentialAudience {
     ZaiStandard,
     /// Z.AI Coding Plan API at `https://api.z.ai:443`.
     ZaiCoding,
-    /// Exact origin used only by the explicit test profile.
-    #[doc(hidden)]
+    /// Exact origin used only by crate tests.
+    #[cfg(test)]
     TestOnlyExactOrigin(Origin),
 }
 
@@ -83,6 +83,7 @@ impl CredentialBinding {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn exact_origin_for_test(origin: Origin) -> Self {
         Self {
             origin,
@@ -141,6 +142,7 @@ impl From<&CredentialAudience> for CredentialBinding {
             CredentialAudience::ZaiCoding => {
                 Self::official_with_path("api.z.ai", "/api/coding/paas/v4/", "zai-coding")
             }
+            #[cfg(test)]
             CredentialAudience::TestOnlyExactOrigin(origin) => {
                 Self::exact_origin_for_test(origin.clone())
             }

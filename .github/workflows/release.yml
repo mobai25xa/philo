@@ -1,0 +1,354 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      subject_commit:
+        description: Full candidate SHA; every evidence run must use this SHA
+        required: true
+        type: string
+      version:
+        description: Cargo version, for example 1.0.0-rc.1 or 1.0.0
+        required: true
+        type: string
+      ci_run_id:
+        description: Successful CI run for the candidate
+        required: true
+        type: string
+      fuzz_run_id:
+        description: Successful scheduled fuzz run for the candidate
+        required: true
+        type: string
+      performance_run_id:
+        description: Successful Linux release-soak run for the candidate
+        required: true
+        type: string
+      openai_canary_run_id:
+        description: Successful official OpenAI Canary run for the candidate
+        required: true
+        type: string
+      anthropic_canary_run_id:
+        description: Successful official Anthropic Canary run for the candidate
+        required: true
+        type: string
+      api_reviewer:
+        description: Non-author API inventory reviewer
+        required: true
+        type: string
+      release_reviewer:
+        description: Release and compatibility policy reviewer
+        required: true
+        type: string
+      mode:
+        description: Dry-run has no registry, tag, or release writes
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - publish
+
+concurrency:
+  group: release-${{ inputs.subject_commit }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Same-candidate gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: release-candidate
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      PHILO_CANDIDATE_SHA: ${{ inputs.subject_commit }}
+      PHILO_VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      artifact_name: ${{ steps.identity.outputs.artifact_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.subject_commit }}
+          fetch-depth: 0
+      - name: Verify candidate identity and reviewers
+        id: identity
+        shell: bash
+        env:
+          API_REVIEWER: ${{ inputs.api_reviewer }}
+          RELEASE_REVIEWER: ${{ inputs.release_reviewer }}
+        run: |
+          set -euo pipefail
+          [[ "$PHILO_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PHILO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)\.[0-9]+)?$ ]]
+          [[ "$API_REVIEWER" =~ ^[A-Za-z0-9_.-]+$ ]]
+          [[ "$RELEASE_REVIEWER" =~ ^[A-Za-z0-9_.-]+$ ]]
+          test "$API_REVIEWER" != "$RELEASE_REVIEWER"
+          test "$(git rev-parse HEAD)" = "$PHILO_CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          cargo_version="$(sed -n '/^\[package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          test "$cargo_version" = "$PHILO_VERSION"
+          grep -Eq "^## (\[$PHILO_VERSION\]|$PHILO_VERSION)$" CHANGELOG.md
+          echo "artifact_name=philo-$PHILO_VERSION-$PHILO_CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Verify all hosted evidence belongs to the candidate
+        id: runs
+        shell: bash
+        env:
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          FUZZ_RUN_ID: ${{ inputs.fuzz_run_id }}
+          PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
+          OPENAI_CANARY_RUN_ID: ${{ inputs.openai_canary_run_id }}
+          ANTHROPIC_CANARY_RUN_ID: ${{ inputs.anthropic_canary_run_id }}
+        run: |
+          set -euo pipefail
+          verify_run() {
+            local id="$1"
+            local output_name="$2"
+            [[ "$id" =~ ^[0-9]+$ ]]
+            local run
+            run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id")"
+            test "$(jq -r .head_sha <<<"$run")" = "$PHILO_CANDIDATE_SHA"
+            test "$(jq -r .conclusion <<<"$run")" = "success"
+            echo "$output_name=$(jq -r .html_url <<<"$run")" >> "$GITHUB_OUTPUT"
+          }
+          verify_run "$CI_RUN_ID" ci_url
+          verify_run "$FUZZ_RUN_ID" fuzz_url
+          verify_run "$PERFORMANCE_RUN_ID" performance_url
+          verify_run "$OPENAI_CANARY_RUN_ID" openai_canary_url
+          verify_run "$ANTHROPIC_CANARY_RUN_ID" anthropic_canary_url
+
+          ci_artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID/artifacts")"
+          jq -e --arg name "coverage-$PHILO_CANDIDATE_SHA" '.artifacts | any(.name == $name and .expired == false)' <<<"$ci_artifacts"
+          jq -e --arg name "compatibility-$PHILO_CANDIDATE_SHA" '.artifacts | any(.name == $name and .expired == false)' <<<"$ci_artifacts"
+
+          performance_artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PERFORMANCE_RUN_ID/artifacts")"
+          jq -e --arg name "performance-$PHILO_CANDIDATE_SHA-release" '.artifacts | any(.name == $name and .expired == false)' <<<"$performance_artifacts"
+      - name: Download OpenAI Canary result
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: canary-${{ inputs.subject_commit }}-official-openai
+          path: target/release-gate/evidence/openai
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.openai_canary_run_id }}
+      - name: Download Anthropic Canary result
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: canary-${{ inputs.subject_commit }}-official-anthropic
+          path: target/release-gate/evidence/anthropic
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.anthropic_canary_run_id }}
+      - name: Download Linux release soak
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: performance-${{ inputs.subject_commit }}-release
+          path: target/release-gate/evidence/performance
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.performance_run_id }}
+      - name: Validate Canary and resource evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in official-openai official-anthropic; do
+            result="target/release-gate/evidence/${target#official-}/canary-result.json"
+            jq -e \
+              --arg sha "$PHILO_CANDIDATE_SHA" \
+              --arg target "$target" \
+              '.schema == "philo/provider-canary-result" and .candidate_sha == $sha and .target == $target and .case == "full" and .classification == "stable-blocker" and .outcome == "success" and .content_values_recorded == false' \
+              "$result"
+          done
+          grep -q '"profile":"release"' target/release-gate/evidence/performance/soak-result.jsonl
+          grep -q '"resource_metrics_available":true' target/release-gate/evidence/performance/soak-result.jsonl
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: . -> target
+      - name: Verify licenses and advisories
+        uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+        with:
+          manifest-path: Cargo.toml
+          command: check
+      - name: Package and dry-run publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo package -p philo --locked
+          cargo publish -p philo --locked --dry-run
+          package="target/package/philo-$PHILO_VERSION.crate"
+          test -f "$package"
+          tar -tzf "$package" | grep -q "^philo-$PHILO_VERSION/README.md$"
+          if tar -tzf "$package" | grep -Eq "^philo-$PHILO_VERSION/(tests|docs|support|tools|benches|compatibility)/|^philo-$PHILO_VERSION/src/.+(_tests|test_only)\\.rs$|^philo-$PHILO_VERSION/(deny|rustfmt|rust-toolchain)\\.(toml|yml)$|^philo-$PHILO_VERSION/\\.gitignore$"; then
+            echo "repository-only content leaked into the package" >&2
+            exit 1
+          fi
+      - name: Run an external consumer against packaged source
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer="$RUNNER_TEMP/philo-release-consumer"
+          mkdir -p "$consumer/source"
+          tar -xzf "target/package/philo-$PHILO_VERSION.crate" -C "$consumer/source"
+          cargo init --bin --name philo-release-consumer "$consumer/app"
+          printf '\nphilo = { path = "%s" }\n' "$consumer/source/philo-$PHILO_VERSION" >> "$consumer/app/Cargo.toml"
+          cat > "$consumer/app/src/main.rs" <<'RS'
+          use philo::{GenerateRequest, Message, ModelRef, SDK_VERSION};
+
+          fn main() -> Result<(), philo::LlmError> {
+              let _request = GenerateRequest::new(
+                  ModelRef::new("official-openai", "candidate-model")?,
+                  vec![Message::user("candidate")],
+              );
+              println!("{SDK_VERSION}");
+              Ok(())
+          }
+          RS
+          cargo run --manifest-path "$consumer/app/Cargo.toml"
+      - name: Build release manifest, SBOM, and release notes
+        id: manifest
+        shell: pwsh
+        run: |
+          ./tools/build-release-evidence.ps1 `
+            -CandidateSha '${{ inputs.subject_commit }}' `
+            -Version '${{ inputs.version }}' `
+            -SourcePackage "target/package/philo-${{ inputs.version }}.crate" `
+            -CiRunUrl '${{ steps.runs.outputs.ci_url }}' `
+            -FuzzRunUrl '${{ steps.runs.outputs.fuzz_url }}' `
+            -PerformanceRunUrl '${{ steps.runs.outputs.performance_url }}' `
+            -OpenAiCanaryRunUrl '${{ steps.runs.outputs.openai_canary_url }}' `
+            -AnthropicCanaryRunUrl '${{ steps.runs.outputs.anthropic_canary_url }}' `
+            -ApiReviewer '${{ inputs.api_reviewer }}' `
+            -ReleaseReviewer '${{ inputs.release_reviewer }}'
+      - name: Attest source package, SBOM, and manifest
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: |
+            target/package/philo-${{ inputs.version }}.crate
+            target/release-gate/philo-${{ inputs.version }}.spdx.json
+            target/release-gate/release-manifest.json
+      - name: Upload the sole candidate artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: |
+            target/package/philo-${{ inputs.version }}.crate
+            target/release-gate/philo-${{ inputs.version }}.spdx.json
+            target/release-gate/release-manifest.json
+            target/release-gate/release-notes.md
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record dry-run result
+        shell: bash
+        run: |
+          {
+            echo "## Release candidate Ready"
+            echo ""
+            echo "- Candidate: \`$PHILO_CANDIDATE_SHA\`"
+            echo "- Version: \`$PHILO_VERSION\`"
+            echo "- Mode: \`${{ inputs.mode }}\`"
+            echo "- External writes performed by this job: none"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish and verify
+    if: inputs.mode == 'publish'
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: stable-release
+    permissions:
+      actions: read
+      contents: write
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      PHILO_CANDIDATE_SHA: ${{ inputs.subject_commit }}
+      PHILO_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.subject_commit }}
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Download approved candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.candidate.outputs.artifact_name }}
+          path: target/approved-candidate
+      - name: Verify approved package digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="target/approved-candidate/package/philo-$PHILO_VERSION.crate"
+          manifest="target/approved-candidate/release-gate/release-manifest.json"
+          test "$(git rev-parse HEAD)" = "$PHILO_CANDIDATE_SHA"
+          test "$(sha256sum "$package" | cut -d' ' -f1)" = "$(jq -r .source.sha256 "$manifest")"
+          test "$(jq -r .candidate.sha "$manifest")" = "$PHILO_CANDIDATE_SHA"
+          test "$(jq -r .candidate.version "$manifest")" = "$PHILO_VERSION"
+          test "$(jq -r .status "$manifest")" = "Ready"
+      - name: Publish immutable crate
+        run: cargo publish -p philo --locked
+      - name: Verify registry checksum and external consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry_package="$RUNNER_TEMP/philo-$PHILO_VERSION.crate"
+          for attempt in $(seq 1 30); do
+            if curl --fail --location --silent --show-error \
+              "https://crates.io/api/v1/crates/philo/$PHILO_VERSION/download" \
+              --output "$registry_package"; then
+              break
+            fi
+            sleep 10
+          done
+          test -s "$registry_package"
+          expected="$(jq -r .source.sha256 target/approved-candidate/release-gate/release-manifest.json)"
+          test "$(sha256sum "$registry_package" | cut -d' ' -f1)" = "$expected"
+
+          consumer="$RUNNER_TEMP/philo-registry-consumer"
+          cargo init --bin --name philo-registry-consumer "$consumer"
+          printf '\nphilo = "=%s"\n' "$PHILO_VERSION" >> "$consumer/Cargo.toml"
+          cat > "$consumer/src/main.rs" <<'RS'
+          fn main() {
+              println!("{}", philo::SDK_VERSION);
+          }
+          RS
+          cargo run --manifest-path "$consumer/Cargo.toml"
+      - name: Create protected tag and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "philo-v$PHILO_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$PHILO_CANDIDATE_SHA" \
+            --title "philo $PHILO_VERSION" \
+            --notes-file target/approved-candidate/release-gate/release-notes.md \
+            target/approved-candidate/package/philo-$PHILO_VERSION.crate \
+            target/approved-candidate/release-gate/philo-$PHILO_VERSION.spdx.json \
+            target/approved-candidate/release-gate/release-manifest.json
+      - name: Verify published identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh release view "philo-v$PHILO_VERSION" --json targetCommitish --jq .targetCommitish)" = "$PHILO_CANDIDATE_SHA"
+          docs_ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --location --silent --show-error \
+              "https://docs.rs/philo/$PHILO_VERSION/philo/" --output /dev/null; then
+              docs_ready=true
+              break
+            fi
+            sleep 10
+          done
+          test "$docs_ready" = "true"
+          {
+            echo "## Stable release published"
+            echo ""
+            echo "- Candidate: \`$PHILO_CANDIDATE_SHA\`"
+            echo "- Version and tag: \`philo-v$PHILO_VERSION\`"
+            echo "- Registry consumer: passed"
+            echo "- Registry checksum: matched approved candidate"
+            echo "- docs.rs: reachable"
+          } >> "$GITHUB_STEP_SUMMARY"

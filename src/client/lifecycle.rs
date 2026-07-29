@@ -322,7 +322,7 @@ impl Drop for AssistantStream {
     }
 }
 
-/// Immutable, concurrency-safe phase-one client.
+/// Immutable, concurrency-safe client.
 #[derive(Clone)]
 pub struct LlmClient {
     runtime: Arc<ProviderRuntime>,

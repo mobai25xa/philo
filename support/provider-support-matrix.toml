@@ -1,26 +1,82 @@
-schema_version = 1
-generated_as_of = "2026-07-24"
+schema_version = 2
+generated_as_of = "2026-07-29"
 status_vocabulary = ["Supported", "Experimental", "Unsupported", "Unknown", "Stale"]
 evidence_level_vocabulary = ["OfflineContractVerified", "RealProviderVerified"]
+
+[[official_protocols]]
+provider_id = "official-openai"
+product_id = "chat-completions"
+protocol_id = "openai-chat-completions"
+stability_level = "Stable"
+exact_models = ["workflow-input-required"]
+evidence_source = ".github/workflows/canary.yml"
+offline_conformance = "Pass"
+last_canary_attempt = "2026-07-28"
+last_canary_success = "2026-07-28"
+reviewed_at = "2026-07-29"
+expires_at = "2026-10-29"
+owner = "OpenAI Chat Protocol"
+removal_policy = "Stable protocol support follows COMPATIBILITY.md; model support is reviewed per Canary input."
+known_limitations = ["responses-api-excluded", "exact-model-bound-by-candidate-evidence"]
+
+[[official_protocols.capabilities]]
+case = "streaming_text_tools_history_images_structured_output"
+status = "Supported"
+
+[[official_protocols.capabilities]]
+case = "visible_thinking"
+status = "Unsupported"
+
+[[official_protocols]]
+provider_id = "official-anthropic"
+product_id = "messages"
+protocol_id = "anthropic-messages"
+stability_level = "Experimental"
+exact_models = ["claude-sonnet-5", "claude-opus-5"]
+evidence_source = "tests/fixtures/protocol/anthropic_messages"
+offline_conformance = "Pass"
+last_canary_attempt = ""
+last_canary_success = ""
+reviewed_at = "2026-07-29"
+expires_at = "2026-08-29"
+owner = "Anthropic Messages Protocol"
+removal_policy = "Remain Experimental or degrade to Unknown when evidence expires; Stable promotion requires same-candidate Canary."
+known_limitations = ["same-candidate-canary-pending", "messages-streaming-only", "token-counting-excluded"]
+
+[[official_protocols.capabilities]]
+case = "streaming_text_tools_history_images_structured_output"
+status = "Experimental"
+
+[[official_protocols.capabilities]]
+case = "thinking_signature_replay"
+status = "Experimental"
 
 [[entries]]
 provider_id = "openrouter"
 product_id = "openrouter-chat"
+protocol_id = "openai-chat-completions"
+stability_level = "Experimental"
+workflow_id = "openrouter"
+owner = "Provider Compatibility"
 exact_model = "nvidia/nemotron-3-ultra-550b-a55b:free"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
-catalog_version = "p3-001-reviewed-2026-07-23"
+catalog_version = "provider-catalog-reviewed-2026-07-23"
 compat_version = "openai-chat-compatible-v1"
 catalog_status = "Experimental"
 effective_status = "Experimental"
 evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
-offline_evidence_id = "p3-012-real-providers"
-fixture_manifest = "provider-compat/openrouter/manifest.toml"
+offline_evidence_id = "third-party-offline-contracts"
+fixture_manifest = "provider/compat/openrouter/manifest.toml"
+evidence_source = "tests/fixtures/provider/compat/openrouter/manifest.toml"
 candidate_sha = "1f54a42176d3f1deaf1eb1bde2681e22a63662b4"
 run_url = "https://github.com/mobai25xa/philo/actions/runs/30106489910"
 online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
+last_canary_attempt = "2026-07-23"
+last_canary_success = "2026-07-23"
+removal_policy = "Degrade to Unknown when evidence expires; remove only with a migration note."
 limitations = ["hosted-protected-online", "optional-capabilities-unknown", "cost-native-finish-reasoning-not-public", "not-supported-until-full-gate"]
 
 [[entries.capabilities]]
@@ -46,21 +102,29 @@ evidence_id = "none"
 [[entries]]
 provider_id = "deepseek"
 product_id = "deepseek-chat-openai"
+protocol_id = "openai-chat-completions"
+stability_level = "Experimental"
+workflow_id = "deepseek"
+owner = "Provider Compatibility"
 exact_model = "deepseek-v4-flash"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
-catalog_version = "p3-001-reviewed-2026-07-23"
+catalog_version = "provider-catalog-reviewed-2026-07-23"
 compat_version = "openai-chat-compatible-v1"
 catalog_status = "Experimental"
 effective_status = "Experimental"
 evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
-offline_evidence_id = "p3-012-real-providers"
-fixture_manifest = "provider-compat/deepseek/manifest.toml"
+offline_evidence_id = "third-party-offline-contracts"
+fixture_manifest = "provider/compat/deepseek/manifest.toml"
+evidence_source = "tests/fixtures/provider/compat/deepseek/manifest.toml"
 candidate_sha = ""
 run_url = ""
 online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
+last_canary_attempt = "2026-07-23"
+last_canary_success = "2026-07-23"
+removal_policy = "Degrade to Unknown when evidence expires; remove only with a migration note."
 limitations = ["hosted-ci-pending", "optional-capabilities-unknown", "thinking-replay-not-enabled", "strict-beta-excluded", "local-online-not-hosted"]
 
 [[entries.capabilities]]
@@ -86,21 +150,29 @@ evidence_id = "none"
 [[entries]]
 provider_id = "zai"
 product_id = "zai-standard-api"
+protocol_id = "openai-chat-completions"
+stability_level = "Experimental"
+workflow_id = "zai-standard"
+owner = "Provider Compatibility"
 exact_model = "glm-4.7-flash"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
-catalog_version = "p3-001-reviewed-2026-07-23"
+catalog_version = "provider-catalog-reviewed-2026-07-23"
 compat_version = "openai-chat-compatible-v1"
 catalog_status = "Experimental"
 effective_status = "Experimental"
 evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
-offline_evidence_id = "p3-012-real-providers"
-fixture_manifest = "provider-compat/zai-standard/manifest.toml"
+offline_evidence_id = "third-party-offline-contracts"
+fixture_manifest = "provider/compat/zai-standard/manifest.toml"
+evidence_source = "tests/fixtures/provider/compat/zai-standard/manifest.toml"
 candidate_sha = "1f54a42176d3f1deaf1eb1bde2681e22a63662b4"
 run_url = "https://github.com/mobai25xa/philo/actions/runs/30106679021"
 online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
+last_canary_attempt = "2026-07-23"
+last_canary_success = "2026-07-23"
+removal_policy = "Degrade to Unknown when evidence expires; remove only with a migration note."
 limitations = ["hosted-protected-online", "optional-capabilities-unknown", "thinking-tool-stream-not-enabled", "not-supported-until-full-gate"]
 
 [[entries.capabilities]]
@@ -126,21 +198,29 @@ evidence_id = "none"
 [[entries]]
 provider_id = "zai"
 product_id = "zai-coding-plan"
+protocol_id = "openai-chat-completions"
+stability_level = "Experimental"
+workflow_id = "zai-coding"
+owner = "Provider Compatibility"
 exact_model = "glm-4.7-flash"
 profile_version = "3.0.0-experimental"
 contract_version = "provider-fixture-v1"
-catalog_version = "p3-001-reviewed-2026-07-23"
+catalog_version = "provider-catalog-reviewed-2026-07-23"
 compat_version = "openai-chat-compatible-v1"
 catalog_status = "Experimental"
 effective_status = "Experimental"
 evidence_levels = ["OfflineContractVerified", "RealProviderVerified"]
-offline_evidence_id = "p3-012-real-providers"
-fixture_manifest = "provider-compat/zai-coding/manifest.toml"
+offline_evidence_id = "third-party-offline-contracts"
+fixture_manifest = "provider/compat/zai-coding/manifest.toml"
+evidence_source = "tests/fixtures/provider/compat/zai-coding/manifest.toml"
 candidate_sha = "1f54a42176d3f1deaf1eb1bde2681e22a63662b4"
 run_url = "https://github.com/mobai25xa/philo/actions/runs/30138294979"
 online_status = "Pass"
 reviewed_at = "2026-07-23"
 expires_at = "2026-10-23"
+last_canary_attempt = "2026-07-23"
+last_canary_success = "2026-07-23"
+removal_policy = "Degrade to Unknown when evidence expires; remove only with a migration note."
 limitations = ["hosted-protected-online", "optional-capabilities-unknown", "coding-key-product-scoped", "thinking-tool-stream-not-enabled", "not-supported-until-full-gate"]
 
 [[entries.capabilities]]

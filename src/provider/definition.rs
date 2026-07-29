@@ -654,9 +654,7 @@ impl ProviderDefinitionBuilder {
 
     /// Installs the resolved `OpenAI` Chat compatibility contract.
     ///
-    /// The contract is already resolved: this builder performs no layering.
-    /// `philo-compat` is the crate that turns ordered sparse declarations into
-    /// one of these (FR-004).
+    /// The contract is already resolved; this builder performs no layering.
     #[must_use]
     pub fn with_openai_chat_compat(mut self, compat: CompatProfile) -> Self {
         self.draft_protocol_contract =

@@ -1,5 +1,7 @@
 //! Cross-protocol conformance compares common domain semantics, never wire equality.
 
+mod support;
+
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use philo::domain::content::{ImageContent, ImageDetail};
@@ -7,16 +9,16 @@ use philo::domain::ids::ToolName;
 use philo::domain::request::CapabilityStatus;
 use philo::domain::schema::ToolSchema;
 use philo::domain::tools::ToolDefinition;
-use philo::provider::TestOnlyProfile;
 use philo::provider::capability::ModelCapabilityProfile;
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
     AssistantMessage, ContentPart, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
     Message, MessageRole, ModelId, ModelRef,
 };
 use serde_json::json;
+use support::mock_transport::{MockBodyItem, MockExchange, MockResponse, MockTransport};
+use support::provider::TestProvider;
 
-const ENDPOINT: &str = "http://127.0.0.1:41996/v1/generate";
+const ENDPOINT: &str = "https://test.invalid/v1/generate";
 
 #[derive(Clone, Copy)]
 enum WireProtocol {
@@ -34,7 +36,7 @@ fn client(protocol: WireProtocol, response: MockResponse) -> (LlmClient, MockTra
         .with_vision_input(CapabilityStatus::Supported)
         .with_image_detail_original(CapabilityStatus::Unsupported)
         .with_response_format_json_schema(CapabilityStatus::Supported);
-    let profile = TestOnlyProfile::localhost(ENDPOINT, "conformance-key")
+    let profile = TestProvider::new(ENDPOINT, "conformance-key")
         .unwrap()
         .with_model_capabilities(capabilities);
     let profile = match protocol {
@@ -166,10 +168,10 @@ async fn stop_length_and_usage_map_to_the_same_domain_semantics() {
 #[tokio::test]
 async fn one_tool_call_preserves_common_name_arguments_and_finish() {
     let openai = sse(include_str!(
-        "fixtures/phase-2/streams/tool-calls/single-call.sse"
+        "fixtures/protocol/openai_chat/stream/tool-calls/single-call.sse"
     ));
     let anthropic = owned_sse(
-        include_str!("fixtures/phase-5/anthropic-messages/stream/tool-use.sse")
+        include_str!("fixtures/protocol/anthropic_messages/stream/tool-use.sse")
             .replace("lookup", "get_weather"),
     );
     let schema = ToolSchema::new(json!({
@@ -241,12 +243,14 @@ async fn common_https_image_input_is_encoded_without_sdk_download() {
 async fn truncated_streams_fail_closed_for_both_protocols() {
     let (openai, _) = client(
         WireProtocol::OpenAi,
-        sse(include_str!("fixtures/responses/openai_chat/truncated.sse")),
+        sse(include_str!(
+            "fixtures/protocol/openai_chat/stream/truncated.sse"
+        )),
     );
     let (anthropic, _) = client(
         WireProtocol::Anthropic,
         sse(include_str!(
-            "fixtures/phase-5/anthropic-messages/stream/truncated.sse"
+            "fixtures/protocol/anthropic_messages/stream/truncated.sse"
         )),
     );
     for result in [

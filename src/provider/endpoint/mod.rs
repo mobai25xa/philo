@@ -9,7 +9,7 @@ mod policy;
 mod template;
 
 pub use audience::{CredentialAudience, CredentialBinding};
-pub use config::{EndpointConfig, resolve_official, resolve_official_for, resolve_test_only};
+pub use config::{EndpointConfig, resolve_official, resolve_official_for};
 pub use mapping::ResolvedModelMapping;
 pub use origin::{EndpointResolutionDiagnostics, Origin, ResolvedEndpoint};
 pub use policy::{EndpointNetworkPolicy, RedirectPolicy};
@@ -18,4 +18,4 @@ pub use template::{
     EndpointQuerySource, EndpointTemplate, EndpointValues, QueryMergeRule,
 };
 
-pub(crate) use config::{EndpointMode, resolve_test_only_for};
+pub(crate) use config::{EndpointMode, resolve_test_only, resolve_test_only_for};

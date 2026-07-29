@@ -98,12 +98,13 @@ mod tests {
         ModelId, ModelRef, ResourceLimits, ToolArguments, ToolCall, ToolCallId, ToolName,
     };
     use crate::error::{HistoryFailure, LlmError, ValidationReason};
-    use crate::provider::{ModelCapabilityProfile, TestOnlyProfile};
+    use crate::provider::ModelCapabilityProfile;
+    use crate::provider::profiles::TestProvider;
 
     use super::CallPlanner;
 
     fn runtime() -> crate::provider::ProviderRuntime {
-        TestOnlyProfile::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
+        TestProvider::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
             .unwrap()
             .with_model_capabilities(
                 ModelCapabilityProfile::new(ModelId::new("gpt-test").unwrap())
@@ -196,12 +197,11 @@ mod tests {
             .with_max_total_text_bytes(4)
             .build()
             .unwrap();
-        let runtime =
-            TestOnlyProfile::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
-                .unwrap()
-                .with_resource_limits(limits)
-                .build()
-                .unwrap();
+        let runtime = TestProvider::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
+            .unwrap()
+            .with_resource_limits(limits)
+            .build()
+            .unwrap();
 
         let too_many =
             GenerateRequest::new(model(), vec![Message::user("one"), Message::user("two")]);

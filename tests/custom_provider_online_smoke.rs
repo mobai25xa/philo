@@ -521,7 +521,7 @@ async fn run_drop_cancellation(client: &LlmClient, target: CustomTarget, model: 
 }
 
 #[tokio::test]
-#[ignore = "requires a protected provider-conformance Environment and explicit approval"]
+#[ignore = "requires a protected provider-canary environment and explicit approval"]
 async fn protected_custom_provider_definition_smoke() {
     if std::env::var("PHILO_PROVIDER_ONLINE_ENABLED").as_deref() != Ok("true") {
         return;

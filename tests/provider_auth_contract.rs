@@ -1,4 +1,6 @@
-//! P3-006 authentication provider and credential lifecycle contracts.
+//! Authentication provider and credential lifecycle contracts.
+
+mod support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -6,7 +8,6 @@ use std::time::Duration;
 
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use philo::error::{CredentialError, CredentialFailure};
-use philo::provider::TestOnlyProfile;
 use philo::provider::auth::{
     ApiKey, ApiKeyHeaderAuth, AuthContext, AuthProvider, BearerAuth, BearerCredential,
     CredentialFuture, CredentialIdentity, DynamicAuth, DynamicCredential, DynamicCredentialCache,
@@ -14,12 +15,13 @@ use philo::provider::auth::{
 };
 use philo::provider::headers::{HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource};
 use philo::provider::profiles::OfficialOpenAiProfile;
-use philo::transport::mock::{MockExchange, MockResponse, MockTransport};
 use philo::{GenerateRequest, LlmClient, LlmError, Message, ModelRef, RequestControl};
+use support::mock_transport::{MockExchange, MockResponse, MockTransport};
+use support::provider::TestProvider;
 use tokio::time::Instant;
 
-const ENDPOINT: &str = "http://127.0.0.1:42006/v1/chat/completions";
-const SECRET: &str = "p3-006-dynamic-secret-canary";
+const ENDPOINT: &str = "https://test.invalid/v1/chat/completions";
+const SECRET: &str = "provider-auth-dynamic-secret-canary";
 
 fn request() -> GenerateRequest {
     GenerateRequest::new(
@@ -37,14 +39,12 @@ fn response() -> MockExchange {
     MockExchange::response(MockResponse::new(StatusCode::OK, headers, Vec::new()))
 }
 
-fn test_audience() -> philo::provider::endpoint::CredentialAudience {
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "bootstrap")
+fn test_audience() -> philo::provider::endpoint::CredentialBinding {
+    let runtime = TestProvider::new(ENDPOINT, "bootstrap")
         .unwrap()
         .build()
         .unwrap();
-    philo::provider::endpoint::CredentialAudience::TestOnlyExactOrigin(
-        runtime.endpoint().origin().clone(),
-    )
+    philo::provider::endpoint::CredentialBinding::exact_https_origin(runtime.endpoint()).unwrap()
 }
 
 #[test]
@@ -168,7 +168,7 @@ async fn same_dynamic_cache_key_refreshes_once_under_concurrency() {
         TenantId::new("tenant-a").unwrap(),
         CredentialIdentity::new("workload-a").unwrap(),
     );
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "unused")
+    let runtime = TestProvider::new(ENDPOINT, "unused")
         .unwrap()
         .with_auth_provider(auth)
         .build()
@@ -225,7 +225,7 @@ async fn shared_cache_isolates_tenant_and_credential_identity() {
         )
         .with_cache(cache.clone())
     };
-    let runtime_a = TestOnlyProfile::localhost(ENDPOINT, "unused")
+    let runtime_a = TestProvider::new(ENDPOINT, "unused")
         .unwrap()
         .with_auth_provider(make_auth(
             "tenant-a",
@@ -235,7 +235,7 @@ async fn shared_cache_isolates_tenant_and_credential_identity() {
         ))
         .build()
         .unwrap();
-    let runtime_b = TestOnlyProfile::localhost(ENDPOINT, "unused")
+    let runtime_b = TestProvider::new(ENDPOINT, "unused")
         .unwrap()
         .with_auth_provider(make_auth(
             "tenant-b",
@@ -279,7 +279,7 @@ async fn dynamic_timeout_and_cancellation_fail_before_transport() {
     )
     .with_callback_timeout(Duration::from_millis(5))
     .unwrap();
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "unused")
+    let runtime = TestProvider::new(ENDPOINT, "unused")
         .unwrap()
         .with_auth_provider(auth)
         .build()

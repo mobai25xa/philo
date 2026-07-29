@@ -18,7 +18,10 @@ pub struct ConfigSchemaVersion {
 
 impl ConfigSchemaVersion {
     /// The current configuration schema.
-    pub const CURRENT: Self = Self { major: 1, minor: 0 };
+    pub const CURRENT: Self = Self { major: 1, minor: 1 };
+
+    /// The immediately previous schema accepted by the migration path.
+    pub const PREVIOUS: Self = Self { major: 1, minor: 0 };
 
     /// Validates the compatibility policy for this schema.
     pub fn validate(self) -> Result<(), ProviderConfigError> {
@@ -166,7 +169,7 @@ pub struct ProviderConfigDocument {
 }
 
 impl ProviderConfigDocument {
-    /// Parses a JSON document while rejecting unknown fields.
+    /// Parses a JSON document, rejects unknown fields/majors, and migrates N-1.
     pub fn from_json(input: &str) -> Result<Self, ProviderConfigError> {
         if input.len() > 64 * 1024 {
             return Err(ProviderConfigError::new(
@@ -175,13 +178,35 @@ impl ProviderConfigDocument {
                 "provider configuration document exceeds 64 KiB",
             ));
         }
-        serde_json::from_str(input).map_err(|_| {
+        let document: Self = serde_json::from_str(input).map_err(|_| {
             ProviderConfigError::new(
                 "document",
                 ProviderConfigFailure::InvalidDocument,
                 "provider configuration document is not valid for the known schema",
             )
+        })?;
+        document.into_current()
+    }
+
+    /// Serializes the document using the current writer version.
+    pub fn to_current_json(&self) -> Result<String, ProviderConfigError> {
+        let mut current = self.clone().into_current()?;
+        current.schema_version = ConfigSchemaVersion::CURRENT;
+        serde_json::to_string_pretty(&current).map_err(|_| {
+            ProviderConfigError::new(
+                "document",
+                ProviderConfigFailure::InvalidDocument,
+                "provider configuration document could not be serialized",
+            )
         })
+    }
+
+    pub(crate) fn into_current(mut self) -> Result<Self, ProviderConfigError> {
+        self.schema_version.validate()?;
+        if self.schema_version <= ConfigSchemaVersion::CURRENT {
+            self.schema_version = ConfigSchemaVersion::CURRENT;
+        }
+        Ok(self)
     }
 }
 

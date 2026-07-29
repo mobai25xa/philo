@@ -1,5 +1,7 @@
 //! Public custom-provider definition and static registry compilation contract.
 
+mod support;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
@@ -12,12 +14,12 @@ use philo::provider::definition::AuthScheme;
 use philo::provider::endpoint::EndpointConfig;
 use philo::provider::registry::{ProviderRegistration, ProviderRegistry};
 use philo::provider::secret::{SecretReference, SecretResolver};
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
     GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef, ProviderDefinition,
     ProviderDeploymentConfig, ProviderId,
 };
 use proptest::prelude::*;
+use support::mock_transport::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 
 struct CountingResolver {
     calls: AtomicUsize,

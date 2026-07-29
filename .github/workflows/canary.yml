@@ -1,0 +1,233 @@
+name: Provider Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      subject_commit:
+        description: Full reviewed 40-character candidate SHA
+        required: true
+        type: string
+      target:
+        description: Allowlisted provider target
+        required: true
+        type: choice
+        options:
+          - official-openai
+          - official-anthropic
+          - openrouter
+          - custom-openrouter-definition
+          - deepseek
+          - zai-standard
+          - custom-zai-anthropic-definition
+          - zai-coding
+      model:
+        description: Exact reviewed model identifier
+        required: true
+        type: string
+      case:
+        description: Minimal drift case; optional capabilities apply to OpenAI only
+        required: true
+        default: text-and-usage
+        type: choice
+        options:
+          - text-and-usage
+          - tools
+          - structured
+          - vision
+          - full
+      image_url:
+        description: Public HTTPS image URL without credentials, query, or fragment
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-canary-${{ inputs.subject_commit }}-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: ${{ inputs.target }} / ${{ inputs.case }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: provider-canary
+    env:
+      PHILO_CANARY_SHA: ${{ inputs.subject_commit }}
+      PHILO_CANARY_TARGET: ${{ inputs.target }}
+      PHILO_CANARY_MODEL: ${{ inputs.model }}
+      PHILO_CANARY_CASE: ${{ inputs.case }}
+      PHILO_CANARY_IMAGE_URL: ${{ inputs.image_url }}
+      PHILO_PROVIDER_ONLINE_ENABLED: "true"
+      PHILO_PROVIDER: ${{ inputs.target }}
+      PHILO_PROVIDER_MODEL: ${{ inputs.model }}
+      PHILO_PROVIDER_CANDIDATE_SHA: ${{ inputs.subject_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.subject_commit }}
+      - name: Verify allowlisted inputs and exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PHILO_CANARY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PHILO_CANARY_TARGET" =~ ^(official-openai|official-anthropic|openrouter|custom-openrouter-definition|deepseek|zai-standard|custom-zai-anthropic-definition|zai-coding)$ ]]
+          [[ "$PHILO_CANARY_CASE" =~ ^(text-and-usage|tools|structured|vision|full)$ ]]
+          test "${#PHILO_CANARY_MODEL}" -le 128
+          [[ "$PHILO_CANARY_MODEL" =~ ^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$ ]]
+          test "$(git rev-parse HEAD)" = "$PHILO_CANARY_SHA"
+
+          case "$PHILO_CANARY_TARGET" in
+            custom-openrouter-definition)
+              test "$PHILO_CANARY_MODEL" = "nvidia/nemotron-3-ultra-550b-a55b:free"
+              ;;
+            custom-zai-anthropic-definition)
+              test "$PHILO_CANARY_MODEL" = "glm-4.7-flash"
+              ;;
+          esac
+
+          capabilities=""
+          case "$PHILO_CANARY_CASE" in
+            text-and-usage) capabilities="" ;;
+            tools) capabilities="tools" ;;
+            structured) capabilities="json_object,json_schema" ;;
+            vision) capabilities="vision" ;;
+            full) capabilities="tools,parallel_tools,json_object,json_schema,vision,reasoning_high" ;;
+          esac
+          echo "PHILO_OPENAI_CAPABILITIES=$capabilities" >> "$GITHUB_ENV"
+
+          if [[ "$capabilities" == *vision* ]]; then
+            test -n "$PHILO_CANARY_IMAGE_URL"
+            [[ "$PHILO_CANARY_IMAGE_URL" == https://* ]]
+            [[ "$PHILO_CANARY_IMAGE_URL" != *"?"* ]]
+            [[ "$PHILO_CANARY_IMAGE_URL" != *"#"* ]]
+            [[ "$PHILO_CANARY_IMAGE_URL" != *"@"* ]]
+          fi
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: . -> target
+      - name: Verify offline provider contracts
+        run: cargo test --all-features --test provider_conformance --test provider_diagnostics_contract
+      - name: Run official OpenAI Canary
+        id: official_openai
+        if: inputs.target == 'official-openai'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_SMOKE_ENABLED: "true"
+          OPENAI_SMOKE_COMMIT: ${{ inputs.subject_commit }}
+          OPENAI_SMOKE_MODEL: ${{ inputs.model }}
+          OPENAI_SMOKE_CAPABILITIES: ${{ env.PHILO_OPENAI_CAPABILITIES }}
+          OPENAI_SMOKE_IMAGE_URL: ${{ inputs.image_url }}
+        run: cargo test --all-features --test openai_smoke -- --nocapture
+      - name: Run official Anthropic Canary
+        id: official_anthropic
+        if: inputs.target == 'official-anthropic'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ inputs.model }}
+        run: cargo test --all-features --test anthropic_smoke -- --ignored --nocapture
+      - name: Run OpenRouter Canary
+        id: openrouter
+        if: inputs.target == 'openrouter' || inputs.target == 'custom-openrouter-definition'
+        continue-on-error: true
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.OPENROUTER_API_KEY }}
+        shell: bash
+        run: |
+          if [[ "$PHILO_CANARY_TARGET" == "openrouter" ]]; then
+            cargo test --test provider_online_smoke -- --ignored --nocapture
+          else
+            cargo test --test custom_provider_online_smoke -- --ignored --nocapture
+          fi
+      - name: Run DeepSeek Canary
+        id: deepseek
+        if: inputs.target == 'deepseek'
+        continue-on-error: true
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+      - name: Run Z.AI Standard Canary
+        id: zai_standard
+        if: inputs.target == 'zai-standard' || inputs.target == 'custom-zai-anthropic-definition'
+        continue-on-error: true
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.ZAI_API_KEY }}
+        shell: bash
+        run: |
+          if [[ "$PHILO_CANARY_TARGET" == "zai-standard" ]]; then
+            cargo test --test provider_online_smoke -- --ignored --nocapture
+          else
+            cargo test --test custom_provider_online_smoke -- --ignored --nocapture
+          fi
+      - name: Run Z.AI Coding Canary
+        id: zai_coding
+        if: inputs.target == 'zai-coding'
+        continue-on-error: true
+        env:
+          PHILO_PROVIDER_CREDENTIAL: ${{ secrets.ZAI_CODING_API_KEY }}
+        run: cargo test --test provider_online_smoke -- --ignored --nocapture
+      - name: Write value-free result
+        if: always()
+        env:
+          OFFICIAL_OPENAI_OUTCOME: ${{ steps.official_openai.outcome }}
+          OFFICIAL_ANTHROPIC_OUTCOME: ${{ steps.official_anthropic.outcome }}
+          OPENROUTER_OUTCOME: ${{ steps.openrouter.outcome }}
+          DEEPSEEK_OUTCOME: ${{ steps.deepseek.outcome }}
+          ZAI_STANDARD_OUTCOME: ${{ steps.zai_standard.outcome }}
+          ZAI_CODING_OUTCOME: ${{ steps.zai_coding.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          classification="warning"
+          case "$PHILO_CANARY_TARGET" in
+            official-openai)
+              classification="stable-blocker"
+              outcome="$OFFICIAL_OPENAI_OUTCOME"
+              ;;
+            official-anthropic)
+              classification="stable-blocker"
+              outcome="$OFFICIAL_ANTHROPIC_OUTCOME"
+              ;;
+            openrouter|custom-openrouter-definition)
+              outcome="$OPENROUTER_OUTCOME"
+              ;;
+            deepseek)
+              outcome="$DEEPSEEK_OUTCOME"
+              ;;
+            zai-standard|custom-zai-anthropic-definition)
+              outcome="$ZAI_STANDARD_OUTCOME"
+              ;;
+            zai-coding)
+              outcome="$ZAI_CODING_OUTCOME"
+              ;;
+          esac
+          jq -n \
+            --arg schema "philo/provider-canary-result" \
+            --arg candidate_sha "$PHILO_CANARY_SHA" \
+            --arg target "$PHILO_CANARY_TARGET" \
+            --arg case_id "$PHILO_CANARY_CASE" \
+            --arg classification "$classification" \
+            --arg outcome "$outcome" \
+            --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{schema:$schema,version:1,candidate_sha:$candidate_sha,target:$target,case:$case_id,classification:$classification,outcome:$outcome,run_url:$run_url,content_values_recorded:false}' \
+            > canary-result.json
+          {
+            echo "## Provider Canary"
+            echo ""
+            echo "- Candidate SHA: \`$PHILO_CANARY_SHA\`"
+            echo "- Target: \`$PHILO_CANARY_TARGET\`"
+            echo "- Case: \`$PHILO_CANARY_CASE\`"
+            echo "- Classification: \`$classification\`"
+            echo "- Outcome: \`$outcome\`"
+            echo "- Prompt, output, credentials, headers, bodies, tool arguments, thinking, image URL, and request IDs: not recorded"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Canary result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canary-${{ inputs.subject_commit }}-${{ inputs.target }}
+          path: canary-result.json
+          if-no-files-found: error
+          retention-days: 90

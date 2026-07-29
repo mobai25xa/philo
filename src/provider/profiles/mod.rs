@@ -7,11 +7,10 @@
 
 mod official_anthropic;
 mod official_openai;
-#[cfg(feature = "test-util")]
+#[cfg(test)]
 mod test_only;
 
 pub use official_anthropic::{OFFICIAL_ANTHROPIC_API_VERSION, OfficialAnthropicProfile};
 pub use official_openai::OfficialOpenAiProfile;
-#[doc(hidden)]
-#[cfg(feature = "test-util")]
-pub use test_only::TestOnlyProfile;
+#[cfg(test)]
+pub(crate) use test_only::TestProvider;

@@ -1,20 +1,22 @@
-//! P3-007 header ownership, identity, and dynamic policy contracts.
+//! Header ownership, identity, and dynamic policy contracts.
+
+mod support;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use philo::error::{HeaderPolicyError, HeaderPolicyFailure};
-use philo::provider::TestOnlyProfile;
 use philo::provider::headers::{
     ClientIdentity, ClientIdentityFragment, DynamicHeaderContext, DynamicHeaderFuture,
     DynamicHeaderPolicy, DynamicHeaderSource, HeaderLayer, HeaderOperation, HeaderPipeline,
     HeaderSource,
 };
-use philo::transport::mock::{MockExchange, MockResponse, MockTransport};
 use philo::{GenerateRequest, LlmClient, LlmError, Message, ModelRef};
+use support::mock_transport::{MockExchange, MockResponse, MockTransport};
+use support::provider::TestProvider;
 
-const ENDPOINT: &str = "http://127.0.0.1:42007/v1/chat/completions";
+const ENDPOINT: &str = "https://test.invalid/v1/chat/completions";
 
 fn request() -> GenerateRequest {
     GenerateRequest::new(
@@ -127,7 +129,7 @@ async fn dynamic_policy_sees_value_free_facts_and_applies_allowlisted_header() {
         delay: Duration::ZERO,
     });
     let policy = DynamicHeaderPolicy::new(source, vec![name.clone()]).unwrap();
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "header-key")
+    let runtime = TestProvider::new(ENDPOINT, "header-key")
         .unwrap()
         .with_dynamic_header_policy(policy)
         .build()
@@ -151,7 +153,7 @@ async fn dynamic_policy_illegal_sensitive_value_fails_before_io() {
         delay: Duration::ZERO,
     });
     let policy = DynamicHeaderPolicy::new(source, vec![name]).unwrap();
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "header-key")
+    let runtime = TestProvider::new(ENDPOINT, "header-key")
         .unwrap()
         .with_dynamic_header_policy(policy)
         .build()
@@ -181,7 +183,7 @@ async fn dynamic_policy_timeout_fails_before_io() {
         .unwrap()
         .with_timeout(Duration::from_millis(5))
         .unwrap();
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "header-key")
+    let runtime = TestProvider::new(ENDPOINT, "header-key")
         .unwrap()
         .with_dynamic_header_policy(policy)
         .build()

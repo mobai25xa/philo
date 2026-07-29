@@ -75,7 +75,7 @@ impl DeepSeekProfile {
             protocol_id,
             &model_id,
             "DeepSeek V4 Flash",
-            "p3-001-deepseek-official-docs",
+            "deepseek-official-docs-reviewed-2026-07-23",
         )?;
         let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
         let mut builder = ProviderDefinition::openai_chat(provider_id.clone(), product_id)

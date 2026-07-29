@@ -1,4 +1,5 @@
 //! Small loopback-only HTTP script server for offline contract tests.
+#![allow(dead_code, unreachable_pub)]
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -117,6 +118,14 @@ impl ResponsePlan {
         self.observe_disconnect = true;
         self
     }
+
+    pub fn incomplete_content_length(body: impl Into<Bytes>, declared_length: usize) -> Self {
+        let mut plan = Self::fixed(StatusCode::OK, body);
+        plan.declared_length = Some(declared_length);
+        plan.complete = false;
+        plan.observe_disconnect = true;
+        plan
+    }
 }
 
 pub struct ScriptedServer {
@@ -132,10 +141,32 @@ pub struct ServerResult {
     pub disconnects: usize,
 }
 
+impl std::ops::Deref for ServerResult {
+    type Target = [CapturedRequest];
+
+    fn deref(&self) -> &Self::Target {
+        &self.requests
+    }
+}
+
 impl ScriptedServer {
     pub async fn spawn(plans: Vec<ResponsePlan>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        Self::spawn_bound(listener, address, plans)
+    }
+
+    pub async fn spawn_with(plans: impl FnOnce(std::net::SocketAddr) -> Vec<ResponsePlan>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        Self::spawn_bound(listener, address, plans(address))
+    }
+
+    fn spawn_bound(
+        listener: TcpListener,
+        address: std::net::SocketAddr,
+        plans: Vec<ResponsePlan>,
+    ) -> Self {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let disconnects = Arc::new(AtomicUsize::new(0));
         let responses_started = Arc::new(AtomicUsize::new(0));
@@ -186,6 +217,20 @@ impl ScriptedServer {
             .await
             .expect("scripted server did not finish")
             .expect("scripted server task failed");
+        ServerResult {
+            requests: lock(&self.captured).clone(),
+            disconnects: self.disconnects.load(Ordering::SeqCst),
+        }
+    }
+
+    pub async fn finish_after_client_stop(mut self) -> ServerResult {
+        if timeout(Duration::from_secs(3), &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            let _ = self.task.await;
+        }
         ServerResult {
             requests: lock(&self.captured).clone(),
             disconnects: self.disconnects.load(Ordering::SeqCst),

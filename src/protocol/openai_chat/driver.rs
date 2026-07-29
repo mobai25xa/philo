@@ -75,7 +75,7 @@ mod tests {
 
     use crate::domain::{GenerateRequest, Message, ModelRef};
     use crate::execution::planner::CallPlanner;
-    use crate::provider::TestOnlyProfile;
+    use crate::provider::profiles::TestProvider;
 
     use super::OpenAiChatDriver;
 
@@ -83,11 +83,10 @@ mod tests {
 
     #[test]
     fn prepare_emits_owned_openai_request_parts() {
-        let runtime =
-            TestOnlyProfile::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
-                .unwrap()
-                .build()
-                .unwrap();
+        let runtime = TestProvider::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
+            .unwrap()
+            .build()
+            .unwrap();
         let request = GenerateRequest::new(
             ModelRef::new("test-only", "gpt-test").unwrap(),
             vec![Message::user("hello")],
@@ -121,11 +120,10 @@ mod tests {
 
     #[test]
     fn driver_rejects_another_protocol_contract() {
-        let runtime =
-            TestOnlyProfile::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
-                .unwrap()
-                .build()
-                .unwrap();
+        let runtime = TestProvider::localhost("http://127.0.0.1:8787/chat/completions", "test-key")
+            .unwrap()
+            .build()
+            .unwrap();
         let request = GenerateRequest::new(
             ModelRef::new("test-only", "gpt-test").unwrap(),
             vec![Message::user("hello")],

@@ -1,12 +1,12 @@
 use std::fs;
 use std::path::Path;
 
+use crate::support::mock_transport::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use philo::domain::ids::ToolName;
 use philo::domain::schema::ToolSchema;
 use philo::domain::tools::ToolDefinition;
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef};
 use serde_json::json;
 

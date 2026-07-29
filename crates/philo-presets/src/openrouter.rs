@@ -194,7 +194,7 @@ impl OpenRouterProfile {
             protocol_id,
             &model_id,
             "OpenRouter NVIDIA Nemotron 3 Ultra 550B A55B (free)",
-            "p3-001-openrouter-official-docs",
+            "openrouter-official-docs-reviewed-2026-07-23",
         )?;
         let auth_scheme = AuthScheme::from_auth_provider(self.auth.as_ref())?;
         let mut builder = ProviderDefinition::openai_chat(provider_id.clone(), product_id)

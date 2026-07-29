@@ -153,7 +153,7 @@ fn request_api_has_no_arbitrary_body_or_non_scope_controls() {
             "non-scope request control: {forbidden}"
         );
     }
-    // Phase-two freezes tools/tool_choice/parallel_tool_calls/reasoning/response_format.
+    // The stable capability contract includes tools, reasoning, and response formats.
     assert!(generation_options.contains("tools:"));
     assert!(generation_options.contains("tool_choice:"));
     assert!(generation_options.contains("parallel_tool_calls:"));
@@ -196,7 +196,6 @@ fn schema_history_and_provider_root_and_deep_paths_remain_compatible() {
     use philo::domain::schema::{SchemaLimits as DeepSchemaLimits, ToolSchema as DeepToolSchema};
     use philo::provider::{
         OfficialOpenAiProfile as DeepOfficialOpenAiProfile, ProviderProfile as DeepProviderProfile,
-        TestOnlyProfile,
     };
     use philo_presets::{
         DeepSeekProfile as DeepDeepSeekProfile, OpenRouterProfile as DeepOpenRouterProfile,
@@ -236,13 +235,6 @@ fn schema_history_and_provider_root_and_deep_paths_remain_compatible() {
         .unwrap()
         .profile()
         .unwrap();
-    assert!(
-        TestOnlyProfile::localhost(
-            "http://127.0.0.1:8787/v1/chat/completions",
-            "test-only-path-key",
-        )
-        .is_ok()
-    );
 }
 
 #[test]
@@ -382,8 +374,8 @@ fn model_catalog_and_typed_compat_have_root_and_deep_public_paths() {
     )
     .unwrap();
     let _: philo::provider::catalog::ModelCatalog = DeepModelCatalog::default();
-    // FR-004: the core exposes the *resolved* contract. Layering it out of
-    // ordered sparse declarations is `philo-compat`, not the core.
+    // The core exposes only the resolved contract and performs no sparse
+    // declaration layering.
     let resolved: philo::provider::protocol_contract::CompatProfile =
         DeepCompatProfile::openai_chat_default().with_max_output_tokens(
             DeepTokenFormat::MaxTokens,
@@ -464,7 +456,10 @@ fn capability_decisions_and_catalog_evidence_have_deep_public_paths() {
     let decision: DeepCapabilityStatus = entry.support_status;
     let evidence: &DeepCatalogSource = &entry.source;
     assert_eq!(decision, DeepCapabilityStatus::Supported);
-    assert_eq!(evidence.id().as_str(), "p3-001-openrouter-official-docs");
+    assert_eq!(
+        evidence.id().as_str(),
+        "openrouter-official-docs-reviewed-2026-07-23"
+    );
     assert!(!evidence.is_stale_on("2026-07-24").unwrap());
     assert_eq!(
         entry

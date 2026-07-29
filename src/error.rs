@@ -731,7 +731,7 @@ impl ProtocolError {
     }
 }
 
-/// A response semantic the current phase cannot represent.
+/// A response semantic the current protocol implementation cannot represent.
 #[derive(Clone, Eq, PartialEq, Error)]
 #[error("unsupported response semantics")]
 pub struct UnsupportedResponseSemantics {
@@ -874,7 +874,7 @@ pub enum SchemaFailure {
     NotAnObject,
     /// A supported keyword has an invalid type or combination.
     InvalidKeywordType,
-    /// A keyword is outside the frozen phase-two subset.
+    /// A keyword is outside the supported schema subset.
     UnsupportedKeyword,
     /// A remote `$ref` was present.
     RemoteReference,
@@ -1024,7 +1024,7 @@ pub enum HistoryFailure {
     TooManyMessages,
     /// Total text bytes exceeded the allowed limit.
     TextTooLarge,
-    /// The selected history policy is not implemented for phase two.
+    /// The selected history policy is not implemented for the active protocol.
     UnsupportedPolicy,
 }
 

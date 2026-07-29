@@ -1,12 +1,12 @@
 # Security Policy
 
-`philo` is not yet a stable release. Security-sensitive behavior is still treated as a release blocker.
+`philo` is not yet a stable release. Security-sensitive behavior is a release blocker.
 
 Do not include API keys, prompts, model outputs, complete headers, or unsanitized Provider responses in an issue, test fixture, log, or evidence record. Reports should contain the affected version, error category, redacted reproduction steps, and whether credentials may have been exposed.
 
 The repository does not yet define a private disclosure address. Until one is established, do not publish an active credential or exploit payload; notify the repository owner through the hosting platform's private security-reporting channel.
 
-The phase-one security contract requires a protected header pipeline, bounded cancellation and Drop behavior, default secret redaction, and typed extensions instead of arbitrary request-body overrides.
+The security contract requires a protected header pipeline, bounded cancellation and Drop behavior, default secret redaction, and typed extensions instead of arbitrary request-body overrides.
 
 ## Credential and Endpoint Policy
 
@@ -32,10 +32,10 @@ error bodies are read to a fixed limit and converted to a redacted summary.
 
 ## Smoke Policy
 
-Official smoke execution is opt-in through `.github/workflows/openai-smoke.yml`.
-It runs the sequential phase-two capability suite only when the exact commit, model,
-and reviewed capability set are explicit and `OPENAI_API_KEY` is supplied by the
-environment or protected CI secret store. The hosted workflow must use the
-`official-openai-smoke` protected environment and must never run secret-bearing code
-from an unreviewed commit. Smoke records must never include prompt/output text, the
-API key, image URLs, or ProviderRequestId/GenerationId values.
+Online Provider verification is opt-in through the single
+`.github/workflows/canary.yml` entry. It runs only when the exact commit, target,
+model, and reviewed case are explicit and the selected credential is supplied by
+the protected `provider-canary` environment. Secret-bearing code must never run
+from an unreviewed commit. The sole Canary result format never includes prompts,
+outputs, credentials, headers, bodies, Tool arguments, thinking, image URLs, or
+ProviderRequestId/GenerationId values.

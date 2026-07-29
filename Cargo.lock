@@ -578,17 +578,15 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "philo"
-version = "0.1.0-alpha.1"
+version = "1.0.0-rc.1"
 dependencies = [
  "base64",
  "bytes",
  "futures-core",
  "futures-util",
  "http",
- "philo-compat",
  "philo-config",
  "philo-presets",
- "philo-test-support",
  "proptest",
  "rand 0.9.5",
  "reqwest",
@@ -606,37 +604,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "philo-compat"
-version = "0.1.0-alpha.1"
-dependencies = [
- "philo",
-]
-
-[[package]]
 name = "philo-config"
-version = "0.1.0-alpha.1"
+version = "1.0.0-rc.1"
 dependencies = [
  "http",
  "philo",
  "serde",
  "serde_json",
  "tokio",
+ "toml",
 ]
 
 [[package]]
 name = "philo-presets"
-version = "0.1.0-alpha.1"
+version = "1.0.0-rc.1"
 dependencies = [
  "http",
  "philo",
  "url",
-]
-
-[[package]]
-name = "philo-test-support"
-version = "0.0.0"
-dependencies = [
- "philo",
 ]
 
 [[package]]

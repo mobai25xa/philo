@@ -3,7 +3,7 @@
 
 use crate::error::{ValidationError, ValidationReason};
 
-/// Fixed phase-two resource ceilings for Official `OpenAI` processing.
+/// Fixed resource ceilings for Official `OpenAI` processing.
 ///
 /// Official profile construction and public convenience validation may use
 /// [`Self::official`]. Planner, Driver, Executor, and `ResponseSession` consume
@@ -46,7 +46,7 @@ pub struct ResourceLimits {
 }
 
 impl ResourceLimits {
-    /// Official `OpenAI` production ceilings frozen by the phase-two contract.
+    /// Official `OpenAI` production ceilings frozen by the resource contract.
     pub const fn official() -> Self {
         Self {
             max_request_body_bytes: 64 * 1024 * 1024,

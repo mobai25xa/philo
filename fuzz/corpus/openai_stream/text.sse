@@ -1,0 +1,6 @@
+data: {"id":"seed","model":"fuzz-model","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}
+
+data: {"id":"seed","model":"fuzz-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

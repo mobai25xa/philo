@@ -20,7 +20,7 @@ use crate::error::{
     ToolValidationFailure, ValidationError, ValidationReason,
 };
 
-/// Official phase-two tool list limits.
+/// Official tool list limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ToolLimits {
     /// Maximum number of tools declared on one request.
@@ -30,7 +30,7 @@ pub struct ToolLimits {
 }
 
 impl ToolLimits {
-    /// Official `OpenAI` profile defaults frozen for phase two.
+    /// Official `OpenAI` profile defaults.
     pub const fn official() -> Self {
         Self {
             max_tools: 128,

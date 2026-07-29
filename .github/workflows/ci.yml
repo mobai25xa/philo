@@ -19,7 +19,7 @@ jobs:
     name: Format, lint, test, and docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
       - name: Verify and record the gate subject
@@ -32,13 +32,13 @@ jobs:
             echo "## Hosted CI"
             echo ""
             echo "- Subject commit: \`$actual\`"
-            echo "- Contract: \`philo/reliability-p4 1.0.0\`"
+            echo "- Contract: \`philo/reliability 1.0.0\`"
             echo "- Event: \`$GITHUB_EVENT_NAME\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: clippy,rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: . -> target
       - run: cargo fmt --check
@@ -46,6 +46,12 @@ jobs:
       - name: Architecture fitness gate
         run: cargo test -p philo --test architecture_fitness
       - run: cargo test --workspace --all-targets --all-features
+      - name: Compile examples explicitly
+        run: cargo check --examples --all-features
+      - name: Compile Stable public consumers
+        run: cargo check --manifest-path consumers/stable/Cargo.toml --workspace
+      - name: Compile Experimental public consumers
+        run: cargo check --manifest-path consumers/experimental/Cargo.toml --workspace
       - run: cargo doc --workspace --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
@@ -59,6 +65,35 @@ jobs:
             exit 1
           fi
 
+  compatibility:
+    name: API and behavior compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: . -> target
+      - name: Install API diff tool
+        uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2
+        with:
+          tool: cargo-semver-checks
+      - name: Check feature-aware API compatibility
+        shell: pwsh
+        run: ./tools/check-api-compatibility.ps1 -AllowBootstrap
+      - name: Check behavior and data ownership contracts
+        run: cargo test -p philo --test release_boundary_contract --test fixture_contract --test provider_diagnostics_contract
+      - name: Upload compatibility report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: compatibility-${{ env.PHILO_GATE_SUBJECT }}
+          path: target/compatibility
+          if-no-files-found: error
+
   platforms:
     name: Test ${{ matrix.os }}
     strategy:
@@ -67,11 +102,11 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: . -> target
       - run: cargo test --workspace --all-targets
@@ -83,68 +118,103 @@ jobs:
       # Override rust-toolchain.toml's development "stable" channel for this gate.
       RUSTUP_TOOLCHAIN: 1.97.1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.97.1
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: . -> target
           shared-key: msrv-1.97.1
       - run: rustc --version --verbose
       - run: cargo test --workspace --all-targets
+      - run: cargo check --manifest-path consumers/stable/Cargo.toml --workspace
+      - run: cargo check --manifest-path consumers/experimental/Cargo.toml --workspace
 
   features:
     name: Feature combinations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: . -> target
       - run: cargo check --workspace --no-default-features
       - run: cargo check --workspace --all-features
       - run: cargo test --workspace --all-targets --no-default-features
+      - run: cargo check --manifest-path consumers/stable/Cargo.toml --workspace --no-default-features
+      - run: cargo check --manifest-path consumers/stable/Cargo.toml --workspace --all-features
 
   dependencies:
     name: Licenses and advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
         with:
           manifest-path: Cargo.toml
           command: check
 
+  coverage:
+    name: Risk-weighted coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2
+        with:
+          tool: cargo-llvm-cov
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: . -> target
+      - name: Generate workspace coverage
+        run: cargo llvm-cov --workspace --all-features --branch --json --output-path target/coverage/coverage.json
+      - name: Enforce risk-weighted coverage policy
+        shell: pwsh
+        run: ./tools/check-coverage.ps1
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-${{ env.PHILO_GATE_SUBJECT }}
+          path: target/coverage/coverage.json
+          if-no-files-found: error
+
   hosted-ci-gate:
     name: Hosted CI gate
     if: always()
-    needs: [quality, platforms, msrv, features, dependencies]
+    needs: [quality, compatibility, platforms, msrv, features, dependencies, coverage]
     runs-on: ubuntu-latest
     steps:
       - name: Require every hosted check to pass
         env:
           QUALITY: ${{ needs.quality.result }}
+          COMPATIBILITY: ${{ needs.compatibility.result }}
           PLATFORMS: ${{ needs.platforms.result }}
           MSRV: ${{ needs.msrv.result }}
           FEATURES: ${{ needs.features.result }}
           DEPENDENCIES: ${{ needs.dependencies.result }}
+          COVERAGE: ${{ needs.coverage.result }}
         shell: bash
         run: |
           set -euo pipefail
-          for result in "$QUALITY" "$PLATFORMS" "$MSRV" "$FEATURES" "$DEPENDENCIES"; do
+          for result in "$QUALITY" "$COMPATIBILITY" "$PLATFORMS" "$MSRV" "$FEATURES" "$DEPENDENCIES" "$COVERAGE"; do
             test "$result" = "success"
           done
           {
             echo "## Hosted CI gate passed"
             echo ""
             echo "- Subject commit: \`$PHILO_GATE_SUBJECT\`"
-            echo "- Contract: \`philo/reliability-p4 1.0.0\`"
+            echo "- Contract: \`philo/reliability 1.0.0\`"
           } >> "$GITHUB_STEP_SUMMARY"

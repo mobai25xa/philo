@@ -276,7 +276,7 @@ pub struct HeaderPipeline {
 }
 
 impl HeaderPipeline {
-    /// Creates the phase-one header policy.
+    /// Creates the official `OpenAI` header policy.
     pub fn new() -> Self {
         Self::default()
     }
