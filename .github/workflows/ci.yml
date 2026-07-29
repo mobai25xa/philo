@@ -179,7 +179,7 @@ jobs:
         with:
           workspaces: . -> target
       - name: Generate workspace coverage
-        run: cargo llvm-cov --workspace --all-features --branch --json --output-path target/coverage/coverage.json
+        run: cargo +nightly llvm-cov --workspace --all-features --branch --json --output-path target/coverage/coverage.json
       - name: Enforce risk-weighted coverage policy
         shell: pwsh
         run: ./tools/check-coverage.ps1
