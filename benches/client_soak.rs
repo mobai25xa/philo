@@ -209,8 +209,11 @@ fn exchange(iteration: usize) -> MockExchange {
 async fn main() {
     let budgets = load_budgets();
     let context = PerformanceContext::new("soak", &budgets);
-    let args = std::env::args().collect::<Vec<_>>();
-    let profile = args.get(1).map_or("quick", String::as_str);
+    let args = std::env::args()
+        .skip(1)
+        .filter(|argument| argument != "--bench")
+        .collect::<Vec<_>>();
+    let profile = args.first().map_or("quick", String::as_str);
     let default_iterations = match profile {
         "quick" => budgets.quick_soak.default_iterations,
         "release" => budgets.release_soak.default_iterations,
@@ -218,7 +221,7 @@ async fn main() {
         _ => panic!("profile must be quick, release, or connection-churn"),
     };
     let iterations = args
-        .get(2)
+        .get(1)
         .map_or(default_iterations, |value| value.parse().unwrap());
     let mock = MockTransport::default();
     let runtime = TestProvider::new(ENDPOINT, "soak-fixture-key")

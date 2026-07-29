@@ -169,7 +169,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
         with:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2
