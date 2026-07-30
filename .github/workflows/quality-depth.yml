@@ -37,7 +37,7 @@ jobs:
         with:
           workspaces: fuzz -> fuzz/target
       - name: Replay and mutate bounded corpus
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time="$FUZZ_SECONDS" -max_len=1048576
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time="$FUZZ_SECONDS" -max_len=1048576
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
