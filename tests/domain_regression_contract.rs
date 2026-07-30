@@ -11,10 +11,10 @@ use philo::domain::message::ToolResultMessage;
 use philo::domain::request::CapabilityStatus;
 use philo::domain::schema::{SchemaLimits, ToolSchema};
 use philo::domain::tools::{ToolArguments, ToolCall};
-use philo::error::{HistoryFailure, SchemaFailure, ValidationReason};
+use philo::error::{HistoryFailure, SchemaFailure, ToolValidationFailure, ValidationReason};
 use philo::{ContentPart, Message, MessageRole};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -171,6 +171,109 @@ fn schema_pointer_escaping_and_numeric_keywords_are_strict() {
     }))
     .unwrap_err();
     assert_eq!(inverted.reason(), SchemaFailure::InvalidKeywordType);
+}
+
+#[test]
+fn schema_keyword_shapes_and_boundaries_fail_closed() {
+    let invalid_keyword_types = [
+        json!({"type": 1}),
+        json!({"type": []}),
+        json!({"type": ["string", 1]}),
+        json!({"type": ["string", "string"]}),
+        json!({"type": "unsupported"}),
+        json!({"required": "name"}),
+        json!({"properties": {"name": {"type": "string"}}, "required": [1]}),
+        json!({"properties": {"name": {"type": "string"}}, "required": ["name", "name"]}),
+        json!({"properties": {"name": {"type": "string"}}, "required": ["missing"]}),
+        json!({"required": ["name"]}),
+        json!({"additionalProperties": {}}),
+        json!({"properties": []}),
+        json!({"anyOf": {}}),
+        json!({"anyOf": []}),
+        json!({"$defs": []}),
+        json!({"type": "string", "minLength": "one"}),
+        json!({"type": "string", "minLength": 2, "maxLength": 1}),
+        json!({"type": "array", "minItems": 2, "maxItems": 1}),
+        json!({"type": "number", "minimum": "zero"}),
+    ];
+    for document in invalid_keyword_types {
+        let error = ToolSchema::new(document).unwrap_err();
+        assert_eq!(error.reason(), SchemaFailure::InvalidKeywordType);
+        assert!(error.path().is_some());
+    }
+
+    let nested_non_object = ToolSchema::new(json!({"properties": {"name": true}})).unwrap_err();
+    assert_eq!(nested_non_object.reason(), SchemaFailure::NotAnObject);
+    let oversized_array_bound = ToolSchema::with_limits(
+        json!({"type": "array", "maxItems": 3}),
+        SchemaLimits {
+            max_schema_bytes: 4096,
+            max_schema_depth: 16,
+            max_json_array_items: 2,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(oversized_array_bound.reason(), SchemaFailure::TooLarge);
+}
+
+#[test]
+fn compiled_schema_validates_each_supported_instance_constraint() {
+    let schema = ToolSchema::new(json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "minLength": 2, "maxLength": 4},
+            "score": {"type": "number", "minimum": 1, "maximum": 3},
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "items": {"type": "integer"}
+            },
+            "choice": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+            "fixed": {"const": true},
+            "kind": {"enum": ["a", "b"]},
+            "nullable": {"type": ["string", "null"]}
+        },
+        "required": ["name", "score", "items", "choice", "fixed", "kind", "nullable"],
+        "additionalProperties": false
+    }))
+    .unwrap();
+    let valid = json!({
+        "name": "okay",
+        "score": 2,
+        "items": [1, 2],
+        "choice": 7,
+        "fixed": true,
+        "kind": "a",
+        "nullable": null
+    });
+    schema
+        .validate_instance(&valid, SchemaLimits::official())
+        .unwrap();
+
+    let invalid_instances = [
+        json!([]),
+        json!({"name": "x", "score": 2, "items": [1], "choice": "ok", "fixed": true, "kind": "a", "nullable": null}),
+        json!({"name": "lengthy", "score": 2, "items": [1], "choice": "ok", "fixed": true, "kind": "a", "nullable": null}),
+        json!({"name": "okay", "score": 0, "items": [1], "choice": "ok", "fixed": true, "kind": "a", "nullable": null}),
+        json!({"name": "okay", "score": 4, "items": [1], "choice": "ok", "fixed": true, "kind": "a", "nullable": null}),
+        json!({"name": "okay", "score": 2, "items": [], "choice": "ok", "fixed": true, "kind": "a", "nullable": null}),
+        json!({"name": "okay", "score": 2, "items": [1, 2, 3], "choice": "ok", "fixed": true, "kind": "a", "nullable": null}),
+        json!({"name": "okay", "score": 2, "items": [false], "choice": "ok", "fixed": true, "kind": "a", "nullable": null}),
+        json!({"name": "okay", "score": 2, "items": [1], "choice": false, "fixed": true, "kind": "a", "nullable": null}),
+        json!({"name": "okay", "score": 2, "items": [1], "choice": "ok", "fixed": false, "kind": "a", "nullable": null}),
+        json!({"name": "okay", "score": 2, "items": [1], "choice": "ok", "fixed": true, "kind": "c", "nullable": null}),
+        json!({"name": "okay", "score": 2, "items": [1], "choice": "ok", "fixed": true, "kind": "a"}),
+        json!({"name": "okay", "score": 2, "items": [1], "choice": "ok", "fixed": true, "kind": "a", "nullable": false}),
+        json!({"name": "okay", "score": 2, "items": [1], "choice": "ok", "fixed": true, "kind": "a", "nullable": null, "extra": 1}),
+    ];
+    for instance in invalid_instances {
+        let error = schema
+            .validate_instance(&instance, SchemaLimits::official())
+            .unwrap_err();
+        assert_eq!(error.reason(), ToolValidationFailure::SchemaViolation);
+        assert!(error.path().is_some());
+    }
 }
 
 #[derive(Deserialize)]
