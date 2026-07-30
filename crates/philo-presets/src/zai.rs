@@ -165,7 +165,7 @@ zai_profile!(
     CredentialAudience::ZaiStandard,
     "glm-4.7-flash",
     "Z.AI GLM-4.7-Flash",
-    "p3-001-zai-standard-official-docs"
+    "zai-standard-official-docs-reviewed-2026-07-23"
 );
 
 zai_profile!(
@@ -176,5 +176,5 @@ zai_profile!(
     CredentialAudience::ZaiCoding,
     "glm-4.7-flash",
     "Z.AI GLM-4.7-Flash",
-    "p3-001-zai-coding-official-docs"
+    "zai-coding-official-docs-reviewed-2026-07-23"
 );

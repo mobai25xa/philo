@@ -1,0 +1,58 @@
+schema = "philo/test-ownership"
+version = 1
+
+[[capability]]
+name = "protocol-framing-and-state"
+risk = "high"
+owner = "protocol"
+tests = ["tests/sse_contract.rs", "tests/multi_protocol_conformance.rs", "tests/structured_usage_compat_contract.rs", "tests/fixture_contract.rs", "tests/fuzz_regression_contract.rs"]
+fixtures = ["tests/fixtures/protocol", "fuzz/corpus"]
+schedule = ["pull-request", "scheduled-fuzz", "release"]
+
+[[capability]]
+name = "provider-auth-endpoint-and-headers"
+risk = "high"
+owner = "provider-security"
+tests = ["tests/provider_auth_contract.rs", "tests/provider_header_contract.rs", "tests/provider_security.rs", "tests/endpoint_mapping_contract.rs"]
+fixtures = ["tests/fixtures/provider"]
+schedule = ["pull-request", "scheduled-fuzz", "release"]
+
+[[capability]]
+name = "history-schema-tools-and-structured-output"
+risk = "high"
+owner = "domain"
+tests = ["tests/domain_event_contract.rs", "tests/domain_regression_contract.rs", "tests/multimodal_thinking_contract.rs", "tests/fixture_property_contract.rs", "tests/tool_validation_history_contract.rs", "tests/tools_contract.rs"]
+fixtures = ["tests/fixtures/domain"]
+schedule = ["pull-request", "release"]
+
+[[capability]]
+name = "transport-retry-cancellation-and-resource-bounds"
+risk = "high"
+owner = "reliability"
+tests = ["src/transport/contract_tests.rs", "src/client/release_tests.rs", "tests/client_contract.rs", "tests/reliability_contract.rs", "tests/fault_injection_contract.rs"]
+fixtures = ["tests/fixtures/transport"]
+schedule = ["pull-request", "scheduled-soak", "release"]
+
+[[capability]]
+name = "public-api-config-and-serialization"
+risk = "medium"
+owner = "release"
+tests = ["tests/architecture_fitness.rs", "tests/public_api_contract.rs", "tests/release_boundary_contract.rs", "tests/serialization_stability_contract.rs", "crates/philo-config/tests/provider_config_contract.rs"]
+fixtures = ["crates/philo-config/tests/fixtures"]
+schedule = ["pull-request", "release"]
+
+[[capability]]
+name = "external-provider-drift"
+risk = "high"
+owner = "provider-canary"
+tests = ["tests/provider_conformance.rs", "tests/provider_diagnostics_contract.rs", "tests/provider_online_smoke.rs", "tests/custom_provider_online_smoke.rs", "tests/openai_smoke.rs", "tests/anthropic_smoke.rs"]
+fixtures = ["tests/fixtures/provider/compat"]
+schedule = ["protected-canary"]
+
+[[capability]]
+name = "provider-definition-catalog-registry-and-compatibility"
+risk = "high"
+owner = "provider-compatibility"
+tests = ["tests/custom_provider_definition_contract.rs", "tests/model_catalog_contract.rs", "tests/provider_compat_contract.rs", "tests/provider_registry_contract.rs", "tests/real_provider_contract.rs"]
+fixtures = ["tests/fixtures/provider"]
+schedule = ["pull-request", "release"]

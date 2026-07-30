@@ -1,4 +1,4 @@
-//! Phase-two multimodal and thinking/reasoning contract tests.
+//! Multimodal and thinking/reasoning capability contracts.
 
 use std::collections::BTreeSet;
 

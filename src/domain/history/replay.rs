@@ -8,11 +8,11 @@ pub fn drop_opaque_reasoning(opaque: &OpaqueReasoning) -> NormalizationDiagnosti
     NormalizationDiagnostic::new(DiagnosticCode::DroppedThinkingOpaque, 1)
 }
 
-/// Pure thinking replay helper for Official and synthetic P3 boundary tests.
+/// Pure thinking replay helper for official and synthetic dialect boundaries.
 ///
 /// Official `OpenAI` history always uses [`ThinkingReplayPolicy::DropAll`].
 /// [`ThinkingReplayPolicy::SameSourceOnly`] is retained as a pure domain helper
-/// for phase-three dialect fixtures and never mutates the input slice.
+/// for cross-dialect fixtures and never mutates the input slice.
 pub fn apply_thinking_replay_policy(
     thinking: &ThinkingContent,
     policy: ThinkingReplayPolicy,

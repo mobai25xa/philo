@@ -1,0 +1,89 @@
+schema_version = 1
+reviewed_at = "2026-07-29"
+
+[[group]]
+source = "src/provider/secret.rs"
+classification = "Public Stable Persistence"
+stability = "Stable"
+format_id = "philo/secret-reference"
+format_version = "1.0"
+migration = "Tagged reference variants remain readable within the Stable major; secret values are never serializable."
+types = ["SecretReference"]
+
+[[group]]
+source = "crates/philo-config/src/schema.rs"
+classification = "Public Stable Persistence"
+stability = "Experimental"
+format_id = "philo/provider-config"
+format_version = "1.1"
+migration = "Reader migrates 1.0 to 1.1, rejects unknown majors and fields, and the writer emits only 1.1."
+types = [
+    "ConfigSchemaVersion",
+    "ConfigValue",
+    "EndpointSpec",
+    "ClientIdentityConfig",
+    "ProviderConfigDocument",
+    "CredentialAudienceSpec",
+]
+
+[[group]]
+source = "crates/philo-config/src/source.rs"
+classification = "Public Diagnostic"
+stability = "Experimental"
+migration = "Value-free provenance shape may grow with migration notes; it is not an application persistence format."
+types = ["ConfigSourceKind", "ConfigSourceLocation"]
+
+[[group]]
+source = "src/protocol/anthropic_messages/wire.rs"
+classification = "Wire Protocol"
+stability = "Internal"
+migration = "Private request/response representation follows protocol adapters and is not an SDK persistence API."
+types = [
+    "MessagesRequestWire", "SystemBlockWire", "TextKindWire", "MessageWire",
+    "MessageRoleWire", "RequestContentBlockWire", "ImageSourceWire", "ToolWire",
+    "ToolChoiceWire", "OutputConfigWire", "ThinkingConfigWire", "ThinkingKindWire",
+    "ThinkingDisplayWire", "AnthropicEffortWire", "OutputFormatWire",
+    "MessageStartEventWire", "MessageStartWire", "ContentBlockStartEventWire",
+    "ContentBlockStartWire", "ContentBlockDeltaEventWire", "ContentBlockDeltaWire",
+    "IndexedEventWire", "MessageDeltaEventWire", "MessageDeltaWire", "UsageWire",
+    "TypeOnlyEventWire", "ErrorEventWire", "ErrorWire",
+]
+
+[[group]]
+source = "src/protocol/anthropic_messages/response/http_error.rs"
+classification = "Wire Protocol"
+stability = "Internal"
+migration = "Private provider error representation; only typed public error categories are stable."
+types = ["ErrorEnvelopeWire", "ErrorBodyWire"]
+
+[[group]]
+source = "src/protocol/openai_chat/structured_wire.rs"
+classification = "Wire Protocol"
+stability = "Internal"
+migration = "Private request representation; public structured-output behavior is owned by protocol contracts."
+types = ["ResponseFormatWire", "JsonSchemaWire"]
+
+[[group]]
+source = "src/protocol/openai_chat/tool_wire.rs"
+classification = "Wire Protocol"
+stability = "Internal"
+migration = "Private tool request representation; public tool/domain types are not serde persistence formats."
+types = [
+    "FunctionKindWire", "ToolWire", "FunctionDefinitionWire", "ToolChoiceWire",
+    "ToolChoiceKeywordWire", "SpecificToolChoiceWire", "SpecificFunctionWire",
+]
+
+[[group]]
+source = "src/protocol/openai_chat/wire.rs"
+classification = "Wire Protocol"
+stability = "Internal"
+migration = "Private request/response representation follows the OpenAI adapter and is not persisted by users."
+types = [
+    "ChatCompletionRequestWire", "MessageWire", "MessageContentWire",
+    "MessageContentPartWire", "ImageUrlWire", "ImageDetailWire",
+    "AssistantToolCallWire", "AssistantFunctionCallWire", "FunctionKindWire",
+    "MessageRoleWire", "StreamOptionsWire", "ReasoningEffortWire",
+    "ChatCompletionChunkWire", "ChoiceWire", "DeltaWire", "ToolCallDeltaWire",
+    "FunctionDeltaWire", "ToolArgumentsWire", "UsageWire",
+    "PromptTokensDetailsWire", "CompletionTokensDetailsWire",
+]

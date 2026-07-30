@@ -74,25 +74,26 @@ mod tests {
     use super::{AnthropicMessagesStreamContext, decode_anthropic_messages_stream};
 
     const TEXT: &[u8] =
-        include_bytes!("../../../../tests/fixtures/phase-5/anthropic-messages/stream/text.sse");
-    const TOOL: &[u8] =
-        include_bytes!("../../../../tests/fixtures/phase-5/anthropic-messages/stream/tool-use.sse");
+        include_bytes!("../../../../tests/fixtures/protocol/anthropic_messages/stream/text.sse");
+    const TOOL: &[u8] = include_bytes!(
+        "../../../../tests/fixtures/protocol/anthropic_messages/stream/tool-use.sse"
+    );
     const THINKING: &[u8] = include_bytes!(
-        "../../../../tests/fixtures/phase-5/anthropic-messages/stream/thinking-signature.sse"
+        "../../../../tests/fixtures/protocol/anthropic_messages/stream/thinking-signature.sse"
     );
     const PING_UNKNOWN: &[u8] = include_bytes!(
-        "../../../../tests/fixtures/phase-5/anthropic-messages/stream/ping-unknown.sse"
+        "../../../../tests/fixtures/protocol/anthropic_messages/stream/ping-unknown.sse"
     );
     const ERROR: &[u8] =
-        include_bytes!("../../../../tests/fixtures/phase-5/anthropic-messages/stream/error.sse");
+        include_bytes!("../../../../tests/fixtures/protocol/anthropic_messages/stream/error.sse");
     const TRUNCATED: &[u8] = include_bytes!(
-        "../../../../tests/fixtures/phase-5/anthropic-messages/stream/truncated.sse"
+        "../../../../tests/fixtures/protocol/anthropic_messages/stream/truncated.sse"
     );
     const USAGE_FINISH: &[u8] = include_bytes!(
-        "../../../../tests/fixtures/phase-5/anthropic-messages/stream/usage-finish.sse"
+        "../../../../tests/fixtures/protocol/anthropic_messages/stream/usage-finish.sse"
     );
     const REDACTED: &[u8] = include_bytes!(
-        "../../../../tests/fixtures/phase-5/anthropic-messages/stream/redacted-thinking.sse"
+        "../../../../tests/fixtures/protocol/anthropic_messages/stream/redacted-thinking.sse"
     );
 
     fn body(chunks: Vec<Bytes>) -> ByteStream {

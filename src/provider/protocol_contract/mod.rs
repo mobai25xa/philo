@@ -7,8 +7,8 @@
 //! billing. They belong to the protocol contract, and they are frozen here at
 //! definition build time rather than merged per request.
 //!
-//! The layering that used to produce them (sparse patches, source precedence)
-//! is a tradeoff and lives in the `philo-compat` crate.
+//! Configuration layers, when used, must be resolved before they reach this
+//! module.
 
 mod binding;
 mod history;

@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::super::limits::ResourceLimits;
 use crate::error::{ToolValidationError, ToolValidationFailure};
 
-/// Official phase-two schema resource limits used by local validators.
+/// Official schema resource limits used by local validators.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SchemaLimits {
     /// Maximum UTF-8 byte size of one schema document.
@@ -17,7 +17,7 @@ pub struct SchemaLimits {
 }
 
 impl SchemaLimits {
-    /// Official `OpenAI` profile defaults frozen for phase two.
+    /// Official `OpenAI` profile defaults.
     pub const fn official() -> Self {
         Self {
             max_schema_bytes: 256 * 1024,

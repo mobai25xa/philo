@@ -1,38 +1,64 @@
-# Fixture manifest for the extracted configuration crate.
-#
-# These three fixtures moved out of the core with FR-005, together with the
-# module that reads them. The core manifest no longer lists them; this one
-# carries the same identity, purpose, and expectation fields so the guarantee
-# did not weaken, only relocate.
+schema_version = 3
+reviewed_at = "2026-07-29"
 
 [[fixture]]
-id = "p3-config-official-user"
+id = "config-official-user-previous-minor"
 path = "provider-config/official-user.json"
+category = "configuration/provider"
+format_version = 1
 contract_id = "philo/provider-config"
-purpose = "Compile an official profile from an explicit secret reference and safe overrides"
+contract_version = "1.1"
+protocol = "provider-independent"
+purpose = "Migrate an N-1 official profile document and compile safe overrides"
 source = "synthetic"
+captured_at = "2026-07-29"
+reviewed_at = "2026-07-29"
+redaction_status = "synthetic-no-user-data"
+sanitized_at = "2026-07-29"
+license_or_permission = "repository-authored-synthetic"
+public_allowed = true
 expected = "success"
-contract_version = "1.0"
+expected_summary = "Reader migrates schema 1.0 and the writer emits schema 1.1"
 notes = "Contains only an environment variable name and no credential value"
 
 [[fixture]]
-id = "p3-config-unknown-major"
+id = "config-unknown-major"
 path = "provider-config/unknown-major.json"
+category = "configuration/provider"
+format_version = 1
 contract_id = "philo/provider-config"
+contract_version = "1.1"
+protocol = "provider-independent"
 purpose = "Reject an unsupported provider configuration major version"
 source = "synthetic"
+captured_at = "2026-07-29"
+reviewed_at = "2026-07-29"
+redaction_status = "synthetic-no-user-data"
+sanitized_at = "2026-07-29"
+license_or_permission = "repository-authored-synthetic"
+public_allowed = true
 expected = "error"
 expected_error = "invalid_version"
-contract_version = "1.0"
-notes = "P3-002 version compatibility contract"
+expected_summary = "Unknown schema major is rejected before merge or secret resolution"
+notes = "Unknown-major compatibility contract"
 
 [[fixture]]
-id = "p3-config-unknown-field"
+id = "config-unknown-field"
 path = "provider-config/unknown-field.json"
+category = "configuration/provider"
+format_version = 1
 contract_id = "philo/provider-config"
+contract_version = "1.1"
+protocol = "provider-independent"
 purpose = "Reject unknown fields and arbitrary payload escape hatches"
 source = "synthetic"
+captured_at = "2026-07-29"
+reviewed_at = "2026-07-29"
+redaction_status = "synthetic-no-user-data"
+sanitized_at = "2026-07-29"
+license_or_permission = "repository-authored-synthetic"
+public_allowed = true
 expected = "error"
 expected_error = "invalid_document"
-contract_version = "1.0"
-notes = "P3-002 deny-unknown-fields contract"
+expected_summary = "Unknown fields fail closed without echoing their values"
+notes = "Deny-unknown-fields compatibility contract"

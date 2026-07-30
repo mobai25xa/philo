@@ -16,4 +16,4 @@ deliberate blocking cannot be preempted by the SDK.
 Default diagnostics do not contain prompt/output/tool/thinking content, Header
 values, error bodies, complete URLs, idempotency keys, or secrets. Identifiers may
 be used for trace correlation but must not be metrics labels. New content logging
-requires a separate opt-in API, ADR, and security review; Phase 4 provides none.
+requires a separate opt-in API, ADR, and security review; the stable SDK provides none.

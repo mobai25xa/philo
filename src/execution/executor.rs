@@ -370,7 +370,7 @@ mod tests {
     use crate::observability::{AttemptId, AttemptIdentity};
     use crate::protocol::openai_chat::OpenAiChatDriver;
     use crate::protocol::{OpenAiChatResponsePlan, ProtocolResponsePlan};
-    use crate::provider::TestOnlyProfile;
+    use crate::provider::profiles::TestProvider;
     use crate::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
     use crate::transport::{CancellationToken, RequestLifecycle};
 
@@ -378,7 +378,7 @@ mod tests {
 
     fn runtime(error_limit: usize) -> (crate::provider::ProviderRuntime, GenerateRequest) {
         let runtime =
-            TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/chat/completions", "executor-key")
+            TestProvider::localhost("http://127.0.0.1:8787/v1/chat/completions", "executor-key")
                 .unwrap()
                 .with_max_http_error_body_bytes(error_limit)
                 .unwrap()

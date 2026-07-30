@@ -1,14 +1,16 @@
-//! P3-012 real-provider preset, catalog, compat, and wire contracts.
+//! Real-provider preset, catalog, compatibility, and wire contracts.
+
+mod support;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use philo::domain::request::CapabilityStatus;
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{GenerateRequest, GenerationOptions, LlmClient, Message, ModelRef};
 use philo_presets::{
     DeepSeekProfile, OpenRouterAttribution, OpenRouterProfile, ZaiCodingProfile, ZaiStandardProfile,
 };
 use serde_json::json;
+use support::mock_transport::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 
 const CANARY: &str = "real-provider-credential-canary";
 
@@ -244,7 +246,7 @@ async fn openrouter_profile_normalizes_one_identical_terminal_replay() {
         StatusCode::OK,
         headers,
         vec![MockBodyItem::chunk(Bytes::from_static(include_bytes!(
-            "fixtures/provider-compat/openrouter/text.sse"
+            "fixtures/provider/compat/openrouter/text.sse"
         )))],
     );
     let transport = MockTransport::scripted([MockExchange::response(response)]);

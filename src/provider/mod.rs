@@ -56,9 +56,6 @@ pub use idempotency::{
     IdempotencyCapability, IdempotencyKey, IdempotencyKeySource, IdempotencyPolicy,
 };
 pub use profile::ProviderProfile;
-#[doc(hidden)]
-#[cfg(feature = "test-util")]
-pub use profiles::TestOnlyProfile;
 pub use profiles::{
     OFFICIAL_ANTHROPIC_API_VERSION, OfficialAnthropicProfile, OfficialOpenAiProfile,
 };

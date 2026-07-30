@@ -1,21 +1,26 @@
-//! Public API security and decision-table coverage for P1-007 through P1-010.
+//! Public API security and endpoint decision-table coverage.
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use http::{HeaderMap, HeaderName, HeaderValue, header};
 use philo::domain::request::CapabilityStatus;
-use philo::provider::auth::{ApiKey, AuthContext, BearerAuth, BearerCredential, ClientIdentity};
+use philo::provider::OfficialOpenAiProfile;
+use philo::provider::auth::{
+    ApiKey, AuthContext, AuthProvider, BearerAuth, BearerCredential, ClientIdentity,
+};
 use philo::provider::endpoint::{
-    CredentialAudience, EndpointConfig, RedirectPolicy, resolve_official, resolve_test_only,
+    CredentialAudience, EndpointConfig, EndpointNetworkPolicy, RedirectPolicy, resolve_official,
 };
 use philo::provider::headers::{
     HeaderLayer, HeaderOperation, HeaderPipeline, HeaderSource, SensitiveHeaderValue,
 };
-use philo::provider::{OfficialOpenAiProfile, TestOnlyProfile};
 use philo::{LlmError, SDK_VERSION};
+use philo_presets::{OpenRouterProfile, ZaiCodingProfile, ZaiStandardProfile};
 use url::Url;
 
 const CANARY: &str = "philo-canary-secret-8bd758";
+const HARDENING_CANARY: &str = "security-hardening-credential-canary";
 
 #[test]
 fn official_profile_builds_golden_endpoint_and_capabilities() {
@@ -70,22 +75,20 @@ fn endpoint_resolution_preserves_base_path_and_rejects_unsafe_parts() {
 }
 
 #[test]
-fn test_profile_is_explicit_and_loopback_only() {
-    assert!(
-        TestOnlyProfile::localhost("http://127.0.0.1:8080/v1/chat/completions", CANARY).is_ok()
-    );
-    assert!(
-        TestOnlyProfile::localhost("http://localhost:8080/v1/chat/completions", CANARY).is_ok()
-    );
-    assert!(TestOnlyProfile::localhost("https://example.com/v1/chat/completions", CANARY).is_err());
+fn production_endpoint_policy_rejects_loopback_http() {
+    for endpoint in [
+        "http://127.0.0.1:8080/v1/chat/completions",
+        "http://localhost:8080/v1/chat/completions",
+    ] {
+        assert!(resolve_official(&EndpointConfig::absolute(endpoint).unwrap()).is_err());
+    }
 }
 
 #[test]
-fn official_credential_cannot_be_sent_to_test_origin() {
-    let endpoint = resolve_test_only(
-        &EndpointConfig::absolute("http://127.0.0.1:8080/v1/chat/completions").unwrap(),
-    )
-    .unwrap();
+fn official_credential_cannot_be_sent_to_foreign_origin() {
+    let endpoint =
+        resolve_official(&EndpointConfig::absolute("https://example.com/v1/chat").unwrap())
+            .unwrap();
     let credential = BearerCredential::new(
         ApiKey::new(CANARY).unwrap(),
         CredentialAudience::OfficialOpenAi,
@@ -314,4 +317,171 @@ async fn runtime_is_shareable_and_request_headers_do_not_cross_talk() {
     for task in tasks {
         task.await.unwrap();
     }
+}
+
+#[test]
+fn dns_address_policy_rejects_private_link_local_metadata_and_mapped_addresses() {
+    let policy = EndpointNetworkPolicy::public_https();
+    assert!(
+        policy
+            .validate_resolved_addresses([IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))])
+            .is_ok()
+    );
+    for address in [
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+        IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
+        IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+        "fe80::1".parse().unwrap(),
+        "fd00::1".parse().unwrap(),
+        "::ffff:127.0.0.1".parse().unwrap(),
+    ] {
+        assert!(policy.validate_resolved_addresses([address]).is_err());
+    }
+    assert!(policy.validate_resolved_addresses([]).is_err());
+    assert!(
+        EndpointNetworkPolicy::test_loopback()
+            .validate_resolved_addresses([IpAddr::V4(Ipv4Addr::LOCALHOST)])
+            .is_ok()
+    );
+}
+
+#[test]
+fn product_scoped_credentials_cannot_cross_provider_or_zai_product_boundaries() {
+    let standard_auth = BearerAuth::new(BearerCredential::new(
+        ApiKey::new(HARDENING_CANARY).unwrap(),
+        CredentialAudience::ZaiStandard,
+    ));
+    assert!(
+        ZaiCodingProfile::from_api_key("bootstrap")
+            .unwrap()
+            .with_auth_provider(standard_auth)
+            .build()
+            .is_err()
+    );
+
+    let openrouter = OpenRouterProfile::from_api_key(HARDENING_CANARY)
+        .unwrap()
+        .build()
+        .unwrap();
+    let zai = ZaiStandardProfile::from_api_key(HARDENING_CANARY)
+        .unwrap()
+        .build()
+        .unwrap();
+    let openrouter_auth = BearerAuth::new(BearerCredential::new(
+        ApiKey::new(HARDENING_CANARY).unwrap(),
+        CredentialAudience::OpenRouterApi,
+    ));
+    assert!(
+        openrouter_auth
+            .resolve_immediate(AuthContext::new(zai.endpoint()))
+            .is_err()
+    );
+    assert!(
+        BearerAuth::new(BearerCredential::new(
+            ApiKey::new(HARDENING_CANARY).unwrap(),
+            CredentialAudience::ZaiStandard,
+        ))
+        .resolve_immediate(AuthContext::new(openrouter.endpoint()))
+        .is_err()
+    );
+}
+
+#[test]
+fn registered_provider_headers_are_owned_only_by_the_profile_layer() {
+    let name = HeaderName::from_static("http-referer");
+    let pipeline =
+        HeaderPipeline::with_registered_headers([http::header::AUTHORIZATION], [name.clone()]);
+    let layers = |source| {
+        vec![
+            HeaderLayer::new(
+                HeaderSource::Protocol,
+                vec![HeaderOperation::set(
+                    http::header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                )],
+            ),
+            HeaderLayer::new(
+                HeaderSource::Auth,
+                vec![HeaderOperation::set_sensitive(
+                    http::header::AUTHORIZATION,
+                    HeaderValue::from_static("Bearer redacted"),
+                )],
+            ),
+            HeaderLayer::new(
+                source,
+                vec![HeaderOperation::set(
+                    name.clone(),
+                    HeaderValue::from_static("https://example.invalid"),
+                )],
+            ),
+        ]
+    };
+    assert!(pipeline.resolve(layers(HeaderSource::Provider)).is_ok());
+    for source in [
+        HeaderSource::Model,
+        HeaderSource::DynamicPolicy,
+        HeaderSource::Request,
+        HeaderSource::ClientIdentity,
+    ] {
+        assert!(pipeline.resolve(layers(source)).is_err());
+    }
+}
+
+#[test]
+fn redirects_reject_query_userinfo_fragment_cross_origin_and_scheme_change() {
+    let runtime = OpenRouterProfile::from_api_key(HARDENING_CANARY)
+        .unwrap()
+        .build()
+        .unwrap();
+    let endpoint = runtime.endpoint();
+    for target in [
+        "https://openrouter.ai/api/v1/next?token=value",
+        "https://user@openrouter.ai/api/v1/next",
+        "https://openrouter.ai/api/v1/next#fragment",
+        "https://example.com/api/v1/next",
+        "http://openrouter.ai/api/v1/next",
+    ] {
+        assert!(
+            RedirectPolicy::SameOrigin
+                .validate_hop(
+                    endpoint,
+                    &Url::parse(target).unwrap(),
+                    &CredentialAudience::OpenRouterApi,
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn canary_workflow_is_exact_candidate_value_free_and_secret_scoped() {
+    let workflow = include_str!("../.github/workflows/canary.yml");
+    assert!(!workflow.contains("pull_request_target"));
+    assert!(workflow.contains("permissions:\n  contents: read"));
+    assert!(workflow.contains("environment: provider-canary"));
+    assert!(workflow.contains("ref: ${{ inputs.subject_commit }}"));
+    assert!(workflow.contains("test \"$(git rev-parse HEAD)\""));
+    assert!(workflow.contains("philo/provider-canary-result"));
+    assert!(workflow.contains("content_values_recorded:false"));
+    assert!(workflow.contains("stable-blocker"));
+    assert!(!workflow.contains("docs/apikey.md"));
+    for secret in [
+        "secrets.OPENAI_API_KEY",
+        "secrets.ANTHROPIC_API_KEY",
+        "secrets.OPENROUTER_API_KEY",
+        "secrets.DEEPSEEK_API_KEY",
+        "secrets.ZAI_API_KEY",
+        "secrets.ZAI_CODING_API_KEY",
+    ] {
+        assert_eq!(workflow.matches(secret).count(), 1);
+    }
+    assert!(workflow.contains("custom-openrouter-definition"));
+    assert!(workflow.contains("custom-zai-anthropic-definition"));
+    assert!(workflow.contains("nvidia/nemotron-3-ultra-550b-a55b:free"));
+    assert!(workflow.contains("glm-4.7-flash"));
+    assert!(workflow.contains("--test custom_provider_online_smoke"));
+    assert!(workflow.contains("cargo test --all-features --test anthropic_smoke -- --ignored"));
+    assert!(workflow.contains("cargo test --all-features --test openai_smoke -- --nocapture"));
 }

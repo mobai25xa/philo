@@ -19,7 +19,7 @@ use super::super::profile::ProviderProfile;
 use super::super::protocol_contract::CompatProfile;
 use super::super::runtime::ProviderRuntime;
 
-/// Stable phase-one official `OpenAI` profile constructor.
+/// Stable official `OpenAI` profile constructor.
 #[derive(Clone, Debug)]
 pub struct OfficialOpenAiProfile {
     auth: Arc<dyn AuthProvider>,

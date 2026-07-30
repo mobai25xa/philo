@@ -30,6 +30,12 @@ use super::super::{RateLimitHeaderKind, RateLimitHeaderSpec, RateLimitPolicy, Ra
 pub const OFFICIAL_ANTHROPIC_API_VERSION: &str = "2023-06-01";
 
 /// Official Anthropic Messages profile with a fixed origin, API version, and protocol.
+///
+/// # Stability
+///
+/// Experimental until an exact release candidate passes the protected Official
+/// Anthropic controlled smoke. The endpoint, credential audience, protected
+/// fields, limits, and redaction boundary remain fail-closed meanwhile.
 #[derive(Clone, Debug)]
 pub struct OfficialAnthropicProfile {
     auth: Arc<dyn AuthProvider>,

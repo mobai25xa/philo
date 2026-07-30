@@ -1,0 +1,152 @@
+name: Performance and resource budgets
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      subject_commit:
+        description: Full 40-character candidate SHA; defaults to the selected ref SHA
+        required: false
+        type: string
+      soak_profile:
+        description: Soak profile to run for this exact candidate
+        required: true
+        default: quick
+        type: choice
+        options:
+          - quick
+          - release
+      baseline_run_id:
+        description: Approved performance workflow run containing performance-result.jsonl
+        required: false
+        type: string
+  schedule:
+    - cron: "23 3 * * 1"
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PHILO_GATE_SUBJECT: ${{ inputs.subject_commit || github.event.pull_request.head.sha || github.sha }}
+  PHILO_SOAK_PROFILE: ${{ github.event_name == 'schedule' && 'release' || inputs.soak_profile || 'quick' }}
+  PHILO_PERFORMANCE_BUDGETS: support/performance-budgets.toml
+
+jobs:
+  pr-smoke:
+    name: PR benchmark compile, smoke, and deterministic resources
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: . -> target
+      - run: cargo test --all-features --test reliability_contract --test fault_injection_contract
+      - run: cargo bench --no-run --bench sdk_bench --bench client_soak
+      - run: cargo bench --bench sdk_bench -- --smoke
+      - run: cargo bench --bench client_soak -- quick
+
+  comparable-run:
+    name: Comparable benchmark and resource soak
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.PHILO_GATE_SUBJECT }}
+      - name: Verify exact candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PHILO_GATE_SUBJECT" =~ ^[0-9a-f]{40}$ ]]
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$PHILO_GATE_SUBJECT"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: . -> target
+      - name: Resolve approved comparison baseline
+        shell: bash
+        env:
+          BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$BASELINE_RUN_ID" ]]; then
+            if [[ "$EVENT_NAME" == "workflow_dispatch" && "$PHILO_SOAK_PROFILE" == "release" ]]; then
+              echo "A release soak requires baseline_run_id from an approved comparable run" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          [[ "$BASELINE_RUN_ID" =~ ^[0-9]+$ ]]
+          gh run download "$BASELINE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --dir baseline-download
+          mapfile -t baselines < <(find baseline-download -type f \
+            -name performance-result.jsonl -print)
+          test "${#baselines[@]}" -eq 1
+          baseline="$(realpath "${baselines[0]}")"
+          echo "PHILO_PERFORMANCE_BASELINE=$baseline" >> "$GITHUB_ENV"
+      - name: Fault and security contracts
+        run: cargo test --all-features --test reliability_contract --test fault_injection_contract
+      - name: Repeated fixed-fixture SDK benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > performance-result.jsonl
+          for repetition in 1 2 3 4 5; do
+            cargo bench --bench sdk_bench | tee -a performance-result.jsonl
+          done
+      - name: Exact-SHA client soak
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo bench --bench client_soak -- "$PHILO_SOAK_PROFILE" \
+            | tee soak-result.jsonl
+          result="$(tail -n 1 soak-result.jsonl)"
+          test -n "$result"
+          if [[ "$PHILO_SOAK_PROFILE" == "release" ]]; then
+            grep -q '"resource_metrics_available":true' soak-result.jsonl
+          fi
+      - name: Record safe gate identity
+        if: always()
+        shell: bash
+        run: |
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$PHILO_GATE_SUBJECT"
+          {
+            echo "## Performance and resource budgets"
+            echo ""
+            echo "- Subject commit: \`$actual\`"
+            echo "- Soak profile: \`$PHILO_SOAK_PROFILE\`"
+            echo "- Approved baseline run: \`${{ inputs.baseline_run_id || 'not supplied' }}\`"
+            echo "- Network: offline fixtures only"
+            echo "- Content artifacts: disabled"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f soak-result.jsonl ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Soak result" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 1 soak-result.jsonl >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload value-free soak evidence
+        if: always() && (hashFiles('performance-result.jsonl') != '' || hashFiles('soak-result.jsonl') != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: performance-${{ env.PHILO_GATE_SUBJECT }}-${{ env.PHILO_SOAK_PROFILE }}
+          path: |
+            performance-result.jsonl
+            soak-result.jsonl
+          if-no-files-found: error
+          retention-days: 90

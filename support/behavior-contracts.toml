@@ -1,0 +1,51 @@
+schema_version = 1
+review_policy = "Every golden or default change must be classified as Compatible, Bug Fix, Breaking, or External Drift and link docs/maintenance/change-approval-template.md."
+allowed_change_classes = ["Compatible", "Bug Fix", "Breaking", "External Drift"]
+
+[[contract]]
+id = "protocol.openai-chat"
+owner = "OpenAI Chat Protocol"
+test_files = ["tests/sse_contract.rs", "tests/structured_usage_compat_contract.rs", "tests/fixture_contract.rs"]
+golden_roots = ["tests/fixtures/protocol/openai_chat"]
+
+[[contract]]
+id = "protocol.anthropic-messages"
+owner = "Anthropic Messages Protocol"
+test_files = ["tests/multi_protocol_conformance.rs", "tests/fixture_contract.rs"]
+golden_roots = ["tests/fixtures/protocol/anthropic_messages"]
+
+[[contract]]
+id = "domain.event-collector"
+owner = "Core Domain"
+test_files = ["tests/domain_event_contract.rs", "tests/client_contract.rs"]
+golden_roots = ["tests/fixtures/domain"]
+
+[[contract]]
+id = "provider.security"
+owner = "Provider Security"
+test_files = ["tests/provider_auth_contract.rs", "tests/provider_header_contract.rs", "tests/provider_security.rs"]
+golden_roots = ["tests/fixtures/domain/security"]
+
+[[contract]]
+id = "history.normalization"
+owner = "History"
+test_files = ["tests/tool_validation_history_contract.rs", "tests/fixture_property_contract.rs"]
+golden_roots = ["tests/fixtures/domain/history"]
+
+[[contract]]
+id = "reliability.lifecycle"
+owner = "Reliability"
+test_files = ["tests/reliability_contract.rs", "tests/fault_injection_contract.rs", "src/transport/contract_tests.rs"]
+golden_roots = ["tests/fixtures/transport"]
+
+[[contract]]
+id = "config.layered-schema"
+owner = "Configuration"
+test_files = ["crates/philo-config/tests/provider_config_contract.rs"]
+golden_roots = ["crates/philo-config/tests/fixtures"]
+
+[[contract]]
+id = "provider.support-registry"
+owner = "Provider Compatibility"
+test_files = ["tests/provider_diagnostics_contract.rs", "tests/provider_conformance.rs"]
+golden_roots = ["tests/fixtures/provider"]

@@ -1,4 +1,6 @@
 /target/
+/fuzz/target/
+/consumers/*/target/
 .env
 .env.*
 !.env.example

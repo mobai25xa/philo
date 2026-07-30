@@ -50,7 +50,7 @@ impl ValidatedProtocolBinding {
         })
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(test)]
     pub(crate) fn openai_chat() -> Self {
         Self::new(
             ProtocolId::new("openai-chat-completions")
@@ -61,7 +61,7 @@ impl ValidatedProtocolBinding {
         .expect("static OpenAI protocol binding must remain valid")
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(test)]
     pub(crate) fn anthropic_messages() -> Self {
         Self::new(
             ProtocolId::new("anthropic-messages").expect("static protocol ID must remain valid"),
@@ -87,7 +87,7 @@ impl ValidatedProtocolBinding {
         &self.contract
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(test)]
     pub(crate) fn with_contract(
         self,
         contract: ResolvedProtocolContract,

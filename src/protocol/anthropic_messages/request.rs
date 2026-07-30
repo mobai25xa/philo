@@ -196,13 +196,14 @@ mod tests {
     use crate::protocol_options::{
         AnthropicEffort, AnthropicMessagesOptions, AnthropicRawExtension, AnthropicThinkingDisplay,
     };
-    use crate::provider::{ModelCapabilityProfile, TestOnlyProfile};
+    use crate::provider::ModelCapabilityProfile;
+    use crate::provider::profiles::TestProvider;
 
     use super::super::AnthropicMessagesDriver;
 
     fn plan(messages: Vec<Message>, options: GenerationOptions) -> ResolvedCallPlan {
         let runtime =
-            TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
+            TestProvider::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
                 .unwrap()
                 .with_anthropic_messages()
                 .with_model_capabilities(
@@ -226,7 +227,7 @@ mod tests {
 
     fn plan_with_replay(messages: Vec<Message>) -> ResolvedCallPlan {
         let runtime =
-            TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
+            TestProvider::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
                 .unwrap()
                 .with_anthropic_messages()
                 .build()
@@ -238,13 +239,11 @@ mod tests {
     }
 
     fn openai_plan(messages: Vec<Message>, options: GenerationOptions) -> ResolvedCallPlan {
-        let runtime = TestOnlyProfile::localhost(
-            "http://127.0.0.1:8787/chat/completions",
-            "request-test-key",
-        )
-        .unwrap()
-        .build()
-        .unwrap();
+        let runtime =
+            TestProvider::localhost("http://127.0.0.1:8787/chat/completions", "request-test-key")
+                .unwrap()
+                .build()
+                .unwrap();
         let request =
             GenerateRequest::new(ModelRef::new("test-only", "claude-test").unwrap(), messages)
                 .with_options(options);
@@ -253,7 +252,7 @@ mod tests {
 
     fn anthropic_plan(options: GenerationOptions) -> ResolvedCallPlan {
         let runtime =
-            TestOnlyProfile::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
+            TestProvider::localhost("http://127.0.0.1:8787/v1/messages", "request-test-key")
                 .unwrap()
                 .with_anthropic_messages()
                 .with_model_capabilities(
@@ -280,7 +279,7 @@ mod tests {
         let prepared = AnthropicMessagesDriver.prepare(&plan).unwrap();
         let actual: Value = serde_json::from_slice(&prepared.request.body).unwrap();
         let expected: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/phase-5/anthropic-messages/request/minimal-text.json"
+            "../../../tests/fixtures/protocol/anthropic_messages/request/minimal-text.json"
         ))
         .unwrap();
         assert_eq!(actual, expected);
@@ -334,13 +333,11 @@ mod tests {
 
     #[test]
     fn anthropic_options_fail_against_openai_runtime_before_preparation() {
-        let runtime = TestOnlyProfile::localhost(
-            "http://127.0.0.1:8787/chat/completions",
-            "request-test-key",
-        )
-        .unwrap()
-        .build()
-        .unwrap();
+        let runtime =
+            TestProvider::localhost("http://127.0.0.1:8787/chat/completions", "request-test-key")
+                .unwrap()
+                .build()
+                .unwrap();
         let request = GenerateRequest::new(
             ModelRef::new("test-only", "gpt-test").unwrap(),
             vec![Message::user("Hello")],
@@ -432,7 +429,7 @@ mod tests {
             .unwrap();
         let actual: Value = serde_json::from_slice(&prepared.request.body).unwrap();
         let expected: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/phase-5/anthropic-messages/request/system-tools-image.json"
+            "../../../tests/fixtures/protocol/anthropic_messages/request/system-tools-image.json"
         ))
         .unwrap();
         assert_eq!(actual, expected);
@@ -458,7 +455,7 @@ mod tests {
             .unwrap();
         let actual: Value = serde_json::from_slice(&prepared.request.body).unwrap();
         let expected: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/phase-5/anthropic-messages/request/structured-json-schema.json"
+            "../../../tests/fixtures/protocol/anthropic_messages/request/structured-json-schema.json"
         ))
         .unwrap();
         assert_eq!(actual, expected);

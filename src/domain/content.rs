@@ -169,7 +169,7 @@ impl fmt::Debug for ImageSource {
     }
 }
 
-/// Image MIME types supported by the phase-two contract.
+/// Image MIME types supported by the multimodal contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageMime {
     /// PNG image.

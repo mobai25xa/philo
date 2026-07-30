@@ -1,4 +1,4 @@
-//! Phase-two tool validation, tool result pairing, and history normalization tests.
+//! Tool validation, tool result pairing, and history normalization contracts.
 
 use philo::domain::content::{ImageContent, ImageDetail, ThinkingContent};
 use philo::domain::history::normalize_history;

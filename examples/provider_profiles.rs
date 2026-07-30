@@ -1,4 +1,4 @@
-//! Builds every Phase 3 real-provider preset without making a network request.
+//! Builds every Experimental third-party Provider preset without making a request.
 
 use std::error::Error;
 

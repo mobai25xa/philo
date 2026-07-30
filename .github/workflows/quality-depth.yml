@@ -1,0 +1,47 @@
+name: Scheduled fuzz depth
+
+on:
+  schedule:
+    - cron: "41 2 * * 2,5"
+  workflow_dispatch:
+    inputs:
+      seconds_per_target:
+        description: Mutation time for each target
+        required: true
+        default: "300"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FUZZ_SECONDS: ${{ inputs.seconds_per_target || '300' }}
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [sse_decoder, openai_stream, anthropic_stream, endpoint_and_headers, domain_schema_history_tools, raw_body_and_error, config_parser]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
+      - uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: fuzz -> fuzz/target
+      - name: Replay and mutate bounded corpus
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time="$FUZZ_SECONDS" -max_len=1048576
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-${{ matrix.target }}-${{ github.sha }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

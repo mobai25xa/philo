@@ -1,7 +1,7 @@
 //! Deterministic field, list, and map merge operations.
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use philo::error::{ProviderConfigError, ProviderConfigFailure};
 
@@ -14,180 +14,6 @@ use super::schema::{
 use super::source::{
     ConfigSource, ConfigSourceKind, ConfigSourceLocation, FieldProvenance, FieldState,
 };
-
-/// List update semantics for ordered configuration values.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ListMerge<T> {
-    /// Leave the lower-precedence list unchanged.
-    Unset,
-    /// Replace the complete list.
-    Replace(Vec<T>),
-    /// Append values in declared order.
-    Append(Vec<T>),
-    /// Remove the complete list.
-    Remove,
-}
-
-impl<T> ListMerge<T> {
-    /// Applies this operation to a lower-precedence list.
-    pub fn apply(self, mut base: Vec<T>) -> Vec<T> {
-        match self {
-            Self::Unset => base,
-            Self::Replace(values) => values,
-            Self::Append(values) => {
-                base.extend(values);
-                base
-            }
-            Self::Remove => Vec::new(),
-        }
-    }
-}
-
-/// One value in an ID-merged configuration list.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NamedConfigValue<T> {
-    id: String,
-    value: T,
-}
-
-impl<T> NamedConfigValue<T> {
-    /// Creates a value with a validated merge identity.
-    pub fn new(id: impl Into<String>, value: T) -> Result<Self, ProviderConfigError> {
-        let id = id.into();
-        if id.is_empty() || id.trim() != id || id.len() > 128 {
-            return Err(ProviderConfigError::new(
-                "list.id",
-                ProviderConfigFailure::InvalidValue,
-                "list merge id must be non-empty and bounded",
-            ));
-        }
-        Ok(Self { id, value })
-    }
-
-    /// Returns the merge identity.
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Returns the stored value.
-    pub fn value(&self) -> &T {
-        &self.value
-    }
-
-    /// Consumes this entry.
-    pub fn into_parts(self) -> (String, T) {
-        (self.id, self.value)
-    }
-}
-
-/// Update semantics for a list whose entries have stable IDs.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum NamedListMerge<T> {
-    /// Leave the lower-precedence list unchanged.
-    Unset,
-    /// Replace the complete list.
-    Replace(Vec<NamedConfigValue<T>>),
-    /// Append entries; duplicate IDs are rejected.
-    Append(Vec<NamedConfigValue<T>>),
-    /// Replace matching IDs and append new IDs while preserving base order.
-    MergeById(Vec<NamedConfigValue<T>>),
-    /// Remove the complete list.
-    Remove,
-}
-
-impl<T> NamedListMerge<T> {
-    /// Applies this operation with deterministic duplicate handling.
-    pub fn apply(
-        self,
-        base: Vec<NamedConfigValue<T>>,
-    ) -> Result<Vec<NamedConfigValue<T>>, ProviderConfigError> {
-        match self {
-            Self::Unset => Ok(base),
-            Self::Remove => Ok(Vec::new()),
-            Self::Replace(values) => {
-                ensure_unique_ids(&values)?;
-                Ok(values)
-            }
-            Self::Append(values) => {
-                ensure_unique_ids(&base)?;
-                ensure_unique_ids(&values)?;
-                let mut ids = base
-                    .iter()
-                    .map(|entry| entry.id.clone())
-                    .collect::<BTreeSet<_>>();
-                if values.iter().any(|entry| !ids.insert(entry.id.clone())) {
-                    return Err(merge_conflict("list", "append contains an existing id"));
-                }
-                let mut merged = base;
-                merged.extend(values);
-                Ok(merged)
-            }
-            Self::MergeById(values) => {
-                ensure_unique_ids(&base)?;
-                ensure_unique_ids(&values)?;
-                let mut updates = values
-                    .into_iter()
-                    .map(|entry| (entry.id.clone(), entry))
-                    .collect::<BTreeMap<_, _>>();
-                let mut merged = Vec::with_capacity(base.len() + updates.len());
-                for entry in base {
-                    if let Some(replacement) = updates.remove(&entry.id) {
-                        merged.push(replacement);
-                    } else {
-                        merged.push(entry);
-                    }
-                }
-                merged.extend(updates.into_values());
-                Ok(merged)
-            }
-        }
-    }
-}
-
-fn ensure_unique_ids<T>(values: &[NamedConfigValue<T>]) -> Result<(), ProviderConfigError> {
-    let mut ids = BTreeSet::new();
-    if values.iter().any(|entry| !ids.insert(entry.id.as_str())) {
-        Err(merge_conflict("list", "list contains a duplicate id"))
-    } else {
-        Ok(())
-    }
-}
-
-/// Update semantics for a deterministically ordered configuration map.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MapMerge<V> {
-    /// Leave the lower-precedence map unchanged.
-    Unset,
-    /// Replace the complete map.
-    Replace(BTreeMap<String, V>),
-    /// Insert or replace individual keys.
-    Merge(BTreeMap<String, V>),
-    /// Remove named keys.
-    RemoveKeys(Vec<String>),
-    /// Remove the complete map.
-    Remove,
-}
-
-impl<V> MapMerge<V> {
-    /// Applies this operation using `BTreeMap` ordering.
-    pub fn apply(self, mut base: BTreeMap<String, V>) -> BTreeMap<String, V> {
-        match self {
-            Self::Unset => base,
-            Self::Replace(values) => values,
-            Self::Merge(values) => {
-                base.extend(values);
-                base
-            }
-            Self::RemoveKeys(keys) => {
-                for key in keys {
-                    base.remove(&key);
-                }
-                base
-            }
-            Self::Remove => BTreeMap::new(),
-        }
-    }
-}
 
 /// Fields addressable in a resolved provider configuration snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,7 +101,7 @@ impl ProviderConfigLayer {
         document: ProviderConfigDocument,
         source: ConfigSource,
     ) -> Result<Self, ProviderConfigError> {
-        document.schema_version.validate()?;
+        let document = document.into_current()?;
         Ok(Self {
             version: document.schema_version,
             source,
@@ -653,8 +479,4 @@ impl<T> ResolvedField<T> {
             .as_ref()
             .map(|provenance| provenance.source().id().as_str())
     }
-}
-
-fn merge_conflict(field: &'static str, message: &'static str) -> ProviderConfigError {
-    ProviderConfigError::new(field, ProviderConfigFailure::MergeConflict, message)
 }

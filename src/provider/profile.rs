@@ -15,7 +15,10 @@ use super::capability::{
     ModelCapabilityProfile, ProtocolDialect, ProviderCapabilities, ProviderTransportOptions,
 };
 use super::catalog::{ModelCatalog, ProductId};
-use super::endpoint::{CredentialBinding, EndpointConfig, resolve_official, resolve_test_only};
+use super::endpoint::{
+    CredentialBinding, EndpointConfig, ResolvedModelMapping, resolve_official,
+    resolve_official_for, resolve_test_only, resolve_test_only_for,
+};
 use super::headers::{DynamicHeaderPolicy, HeaderOperation};
 use super::protocol_contract::ValidatedProtocolBinding;
 use super::{IdempotencyPolicy, RateLimitPolicy};
@@ -89,7 +92,19 @@ impl ProviderProfile {
         for contract in parts.model_protocol_contracts.values() {
             parts.protocol.validate_contract(contract)?;
         }
-        let endpoint = if parts.test_only {
+        let endpoint = if parts.endpoint.requires_mapping() {
+            let entry = parts.catalog.entries().next().ok_or_else(|| {
+                LlmError::Configuration(
+                    "endpoint template variables require an exact catalog entry".to_owned(),
+                )
+            })?;
+            let mapping = ResolvedModelMapping::from_entry(entry);
+            if parts.test_only {
+                resolve_test_only_for(&parts.endpoint, mapping.endpoint_values())?
+            } else {
+                resolve_official_for(&parts.endpoint, mapping.endpoint_values())?
+            }
+        } else if parts.test_only {
             resolve_test_only(&parts.endpoint)?
         } else {
             resolve_official(&parts.endpoint)?

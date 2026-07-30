@@ -17,8 +17,11 @@ use crate::domain::LocalRequestId;
 use crate::error::{BodySummary, LlmError, TimeoutError, TimeoutStage};
 use crate::provider::{RedirectPolicy, ResolvedEndpoint};
 
-#[doc(hidden)]
-pub mod mock;
+#[cfg(test)]
+mod contract_tests;
+#[cfg(test)]
+#[path = "../../tests/support/mock_transport.rs"]
+pub(crate) mod mock;
 mod network;
 mod reqwest;
 mod sse;
@@ -57,7 +60,8 @@ impl CancellationToken {
         self.0.is_cancelled()
     }
 
-    pub(crate) async fn cancelled(&self) {
+    /// Waits until cancellation is requested.
+    pub async fn cancelled(&self) {
         self.0.cancelled().await;
     }
 }

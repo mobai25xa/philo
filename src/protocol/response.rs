@@ -221,7 +221,9 @@ mod tests {
 
     #[tokio::test]
     async fn response_session_ignores_empty_usage_without_losing_done() {
-        let input = include_bytes!("../../tests/fixtures/phase-2/repair/response/empty-usage.sse");
+        let input = include_bytes!(
+            "../../tests/fixtures/protocol/openai_chat/stream/regression/empty-usage.sse"
+        );
         let events = ResponseSession::open(response(input, ResponseFormat::Text))
             .unwrap()
             .collect::<Vec<_>>()
@@ -243,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn response_session_dispatches_anthropic_with_fresh_state_per_attempt() {
         let input =
-            include_bytes!("../../tests/fixtures/phase-5/anthropic-messages/stream/text.sse");
+            include_bytes!("../../tests/fixtures/protocol/anthropic_messages/stream/text.sse");
         for _ in 0..2 {
             let events = ResponseSession::open(anthropic_response(input))
                 .unwrap()

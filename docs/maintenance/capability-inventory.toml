@@ -1,0 +1,193 @@
+schema_version = 1
+reviewed_at = "2026-07-29"
+inventory_base_commit = "13a6f5c212e469fa06fb571ebd9cb70bc3f2934f"
+inventory_base_tree = "a31c80a0e89d9bbf6175b8737420179b977b200d"
+source_state = "release-candidate repository boundary"
+api_baseline_created = false
+
+[release_boundary]
+stable_packages = ["philo"]
+experimental_packages = ["philo-config", "philo-presets"]
+deferred_capabilities = ["openai-responses", "count-tokens", "cache-control-write", "audio", "cross-provider-fallback", "automatic-tool-execution"]
+
+[[package]]
+name = "philo"
+decision = "Stable"
+publish = "required for 1.0"
+version_policy = "1.x SemVer"
+owner = "Core API"
+notes = "Only package selected for the first Stable release."
+
+[[package]]
+name = "philo-config"
+decision = "Experimental"
+publish = "optional after independent Beta/RC evidence"
+version_policy = "independent 0.x"
+owner = "Configuration"
+notes = "Keep separate; schema and merge policy are not yet a Stable 1.0 promise."
+
+[[package]]
+name = "philo-presets"
+decision = "Experimental"
+publish = "optional after provider Canary and expiry ownership exist"
+version_policy = "independent 0.x"
+owner = "Provider Compatibility"
+notes = "Exact third-party products drift independently from core."
+
+[[feature]]
+name = "default"
+decision = "Stable"
+contract = "Enables rustls-tls only. Changing the set is a breaking behavior change."
+
+[[feature]]
+name = "rustls-tls"
+decision = "Stable"
+contract = "Supported TLS implementation for the 1.0 release."
+
+[[feature]]
+name = "tracing"
+decision = "Experimental"
+contract = "Opt-in value-free lifecycle adapter; no SDK-owned subscriber or exporter."
+
+[[capability]]
+id = "domain.request-event-model"
+stability = "Stable"
+public_entry_points = ["philo::domain", "philo::{GenerateRequest, GenerationOptions, Message, AssistantEvent, AssistantMessage}"]
+protocols = ["openai-chat", "anthropic-messages"]
+behavior_owner = "Core API"
+test_owner = "domain and multi-protocol contract tests"
+documentation_owner = "Core Concepts"
+security_boundary = "fail-closed validation and bounded content"
+known_limitations = ["no automatic tool execution", "unknown capability rejects use"]
+external_verification = "OpenAI same-tree smoke; Anthropic promotion pending same-candidate smoke"
+decision = "Keep"
+
+[[capability]]
+id = "client.streaming-completion"
+stability = "Stable"
+public_entry_points = ["philo::LlmClient", "philo::AssistantStream", "philo::RequestControl"]
+protocols = ["openai-chat", "anthropic-messages"]
+behavior_owner = "Client"
+test_owner = "client, SSE, cancellation, and conformance contracts"
+documentation_owner = "Getting Started and Streaming"
+security_boundary = "single-consumer stream, bounded body, cancellation and drop"
+known_limitations = ["one upstream stream per request"]
+external_verification = "offline cross-protocol conformance"
+decision = "Keep"
+
+[[capability]]
+id = "protocol.openai-chat"
+stability = "Stable"
+public_entry_points = ["philo::provider::profiles::OfficialOpenAiProfile", "philo::protocol_options::OpenAiChatOptions"]
+protocols = ["openai-chat"]
+behavior_owner = "OpenAI Chat Protocol"
+test_owner = "OpenAI fixture, conformance, and controlled smoke"
+documentation_owner = "Providers and Models"
+security_boundary = "official HTTPS origin, bearer auth, protected fields"
+known_limitations = ["Responses API excluded"]
+external_verification = "Prior exact-tree Official OpenAI controlled smoke Pass"
+decision = "Keep"
+
+[[capability]]
+id = "protocol.anthropic-messages"
+stability = "Experimental"
+public_entry_points = ["philo::provider::profiles::OfficialAnthropicProfile", "philo::protocol_options::AnthropicMessagesOptions"]
+protocols = ["anthropic-messages"]
+behavior_owner = "Anthropic Messages Protocol"
+test_owner = "Anthropic fixture and cross-protocol conformance"
+documentation_owner = "Providers and Models"
+security_boundary = "official HTTPS origin, x-api-key auth, fixed API version"
+known_limitations = ["same-candidate Official Anthropic controlled smoke missing"]
+external_verification = "offline conformance and independent review only"
+decision = "Promote to Stable only after same-candidate smoke"
+
+[[capability]]
+id = "tools.history.multimodal"
+stability = "Stable"
+public_entry_points = ["philo::domain::tools", "philo::domain::history", "philo::domain::content"]
+protocols = ["openai-chat", "anthropic-messages"]
+behavior_owner = "Domain"
+test_owner = "tools, history, multimodal, and multi-protocol contracts"
+documentation_owner = "Tools and Multimodal"
+security_boundary = "schema, argument, history, and content limits"
+known_limitations = ["application owns tool authorization and execution"]
+external_verification = "offline two-protocol conformance"
+decision = "Keep"
+
+[[capability]]
+id = "thinking.structured-output"
+stability = "Experimental"
+public_entry_points = ["philo::domain::{ThinkingContent, ThinkingRequest, ResponseFormat}", "philo::protocol_options"]
+protocols = ["openai-chat", "anthropic-messages"]
+behavior_owner = "Protocol and Domain"
+test_owner = "thinking, structured output, and conformance contracts"
+documentation_owner = "Thinking and Structured Output"
+security_boundary = "bounded opaque reasoning and protected output fields"
+known_limitations = ["provider/model support varies", "reasoning replay is policy controlled"]
+external_verification = "offline contracts; provider-specific online evidence incomplete"
+decision = "Keep as Experimental"
+
+[[capability]]
+id = "reliability.lifecycle"
+stability = "Stable"
+public_entry_points = ["philo::{RetryPolicy, RetryWaitPolicy, TimeoutPolicy}", "philo::transport", "philo::observability"]
+protocols = ["openai-chat", "anthropic-messages"]
+behavior_owner = "Reliability"
+test_owner = "fault matrix, reliability, transport, and soak contracts"
+documentation_owner = "Errors, Retry, Timeout, and Cancellation"
+security_boundary = "bounded retries, no retry after public delivery, deadline and cancellation"
+known_limitations = ["same-provider retry only", "no cross-provider fallback"]
+external_verification = "Prior exact-tree reliability gate and current regression tests"
+decision = "Keep"
+
+[[capability]]
+id = "provider.definition-registry"
+stability = "Stable"
+public_entry_points = ["philo::{ProviderDefinition, ProviderDefinitionBuilder, ProviderDeploymentConfig, ProviderRuntime}", "philo::provider"]
+protocols = ["openai-chat", "anthropic-messages"]
+behavior_owner = "Provider Runtime"
+test_owner = "definition, registry, routing, auth, and endpoint contracts"
+documentation_owner = "Custom Provider"
+security_boundary = "explicit protocol, exact HTTPS origin, credential audience"
+known_limitations = ["custom protocol/plugin ABI is not supported"]
+external_verification = "offline official and custom definition conformance"
+decision = "Keep"
+
+[[capability]]
+id = "raw-extension"
+stability = "Escape Hatch"
+public_entry_points = ["philo::protocol_options::{OpenAiChatRawExtension, AnthropicRawExtension}"]
+protocols = ["openai-chat", "anthropic-messages"]
+behavior_owner = "Protocol Security"
+test_owner = "raw extension and provider security contracts"
+documentation_owner = "Protocol-specific Options"
+security_boundary = "Stable protected-key, size, depth, and redaction rules"
+known_limitations = ["raw fields are non-portable and provider semantics are not guaranteed"]
+external_verification = "offline security contracts"
+decision = "Keep as Escape Hatch"
+
+[[capability]]
+id = "config.layered-schema"
+stability = "Experimental"
+public_entry_points = ["philo_config::*"]
+protocols = ["provider-independent"]
+behavior_owner = "Configuration"
+test_owner = "philo-config schema, merge, provenance, and migration contracts"
+documentation_owner = "Configuration"
+security_boundary = "secret references only; values stay outside core diagnostics"
+known_limitations = ["not selected for Stable 1.0", "schema remains Experimental"]
+external_verification = "local consumer example and contract tests"
+decision = "Keep and trim as Experimental"
+
+[[capability]]
+id = "provider.third-party-presets"
+stability = "Experimental"
+public_entry_points = ["philo_presets::*"]
+protocols = ["openai-chat-compatible"]
+behavior_owner = "Provider Compatibility"
+test_owner = "preset conformance and provider Canary"
+documentation_owner = "Support Matrix"
+security_boundary = "exact HTTPS destinations and credential audiences"
+known_limitations = ["DeepSeek and Z.AI Standard same-candidate smoke missing", "catalogs drift"]
+external_verification = "OpenRouter and Z.AI Coding same-tree smoke; other products incomplete"
+decision = "Keep as Experimental with owner, Canary, and expiry"

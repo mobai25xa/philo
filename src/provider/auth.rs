@@ -237,7 +237,7 @@ pub trait AuthProvider: fmt::Debug + Send + Sync {
     }
 }
 
-/// Phase-one Bearer authentication provider.
+/// Bearer authentication provider.
 #[derive(Clone)]
 pub struct BearerAuth {
     credential: BearerCredential,

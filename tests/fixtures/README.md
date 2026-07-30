@@ -1,16 +1,17 @@
-# Phase Fixtures
+# Capability-owned fixtures
 
-Fixtures are added with the implementation task that consumes them. This directory starts with the metadata contract so fixtures cannot become unexplained response dumps.
-
-Phase-two fixtures live under `phase-2/` and cover tools, multimodal requests, structured output, tool streams, history metadata, schema validation, and security canaries. Synthetic P3 thinking-boundary fixtures are tagged `protocol: synthetic-p3-boundary` and are not Official OpenAI conformance.
+Fixtures are organized by their long-lived owner: `domain/`, `protocol/`,
+`provider/`, or `transport/`. A fixture exists only when it reproduces a public
+behavior, protocol boundary, security invariant, or provider compatibility case.
 
 Every fixture entry in [`manifest.toml`](./manifest.toml) must include:
 
 - a stable ID and relative path;
 - its purpose and expected result or typed error;
 - `synthetic`, `official-doc-example`, or `sanitized-observation` as source;
-- source URL and capture/sanitization dates when applicable;
-- the behavior contract version and, for repair-era P2 fixtures, the explicit contract ID;
+- category, format version, protocol, and provider/product when applicable;
+- source URL, review date, redaction status, license/permission, and public allowance;
+- the explicit behavior contract ID and version;
 - notes explaining intentional deviations.
 
 Real observations must remove credentials, endpoints, prompts, outputs, personal information, and all request/generation/trace IDs. A canary scan and human review are required before commit. Replacing text may invalidate observed usage values; mark such usage as synthetic.
@@ -23,14 +24,14 @@ unsafe relative paths, and credential canaries. Invalid UTF-8 is stored as ASCII
 and CRLF data as escaped bytes so repository-wide LF normalization cannot alter the
 fixture; contract tests decode both representations before use.
 
-Manifest schema v2 keeps historical P1/P2 entries unchanged, while every
-`phase-2/repair/` entry must explicitly declare `philo/openai-chat-p2` `1.1.0`.
+Manifest schema v3 does not infer metadata from a directory name. IDs and paths
+are semantic and contain no development-stage number.
 
 SSE property tests run 96 cases locally unless `PROPTEST_CASES` is set; CI sets
 256. Proptest prints `PROPTEST_RNG_SEED` on failure and accepts the same variable
 for deterministic replay. Shrunk failures use Proptest's source-adjacent regression
 persistence and may be promoted into this manifest after provenance review.
 
-Phase-one response fixtures live under `responses/openai_chat/`. They are synthetic,
-contain no real provider output or identifiers, and cover the frozen text, usage,
-finish/DONE, fail-closed choice/tool semantics, JSON error, and truncation matrix.
+OpenAI response fixtures live under `protocol/openai_chat/stream/`. They are
+synthetic, contain no real provider output or identifiers, and cover text,
+usage, finish/DONE, fail-closed choice/tool semantics, JSON error, and truncation.

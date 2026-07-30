@@ -6,7 +6,7 @@ use crate::error::LlmError;
 use crate::provider::catalog::CatalogCapabilities;
 use crate::provider::endpoint::RedirectPolicy;
 
-/// Date on which official phase-two capability declarations were last reviewed.
+/// Date on which official `OpenAI` capability declarations were last reviewed.
 pub const OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE: &str = "2026-07-19";
 
 /// Date on which the official Anthropic Messages capability declarations were reviewed.

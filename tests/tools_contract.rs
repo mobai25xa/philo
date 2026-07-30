@@ -1,4 +1,4 @@
-//! Phase-two tool definition, schema, choice, and request-wire contract tests.
+//! Tool definition, schema, choice, and request-wire contracts.
 
 use philo::domain::ids::ToolName;
 use philo::domain::request::{CapabilitySet, CapabilityStatus};
@@ -353,7 +353,7 @@ mod wire {
     #[test]
     fn golden_fixture_files_are_valid_json_objects() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/phase-2/requests/tools");
+            .join("tests/fixtures/protocol/openai_chat/request/tools");
         for name in [
             "tool-minimal-auto.json",
             "tool-none.json",
@@ -376,7 +376,7 @@ mod wire {
     #[test]
     fn documented_failure_fixtures_match_typed_error_paths() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/phase-2/requests/tools/failures");
+            .join("tests/fixtures/protocol/openai_chat/request/tools/failures");
         for name in [
             "duplicate-tool-name.json",
             "specific-tool-missing.json",
@@ -451,7 +451,7 @@ mod wire {
     #[test]
     fn schema_fixture_files_cover_valid_invalid_and_unsupported() {
         let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/phase-2/schemas");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/domain/schema");
         let valid: Value = serde_json::from_str(
             &std::fs::read_to_string(root.join("valid/object-required.json")).unwrap(),
         )

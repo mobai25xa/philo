@@ -28,7 +28,7 @@ pub enum LifecycleErrorCategory {
     HttpStatus,
     /// SSE, JSON, or protocol state.
     Protocol(ErrorStage),
-    /// Response semantics unsupported by this SDK phase.
+    /// Response semantics unsupported by this SDK implementation.
     UnsupportedResponseSemantics,
     /// Unknown completion reason.
     UnknownFinishReason,

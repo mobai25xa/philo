@@ -219,7 +219,7 @@ impl ProviderRuntime {
         &self.endpoint
     }
 
-    /// Returns the phase-one HTTP method.
+    /// Returns the request HTTP method.
     pub fn method(&self) -> Method {
         Method::POST
     }

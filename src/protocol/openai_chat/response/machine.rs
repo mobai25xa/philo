@@ -653,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn text_fixture_produces_exact_event_sequence() {
         let events = decode(include_bytes!(
-            "../../../../tests/fixtures/responses/openai_chat/text.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/text.sse"
         ))
         .await
         .into_iter()
@@ -710,12 +710,16 @@ mod tests {
     #[tokio::test]
     async fn successful_fixture_variants_preserve_boundaries_and_usage() {
         for fixture in [
-            include_bytes!("../../../../tests/fixtures/responses/openai_chat/usage-only.sse")
+            include_bytes!("../../../../tests/fixtures/protocol/openai_chat/stream/usage-only.sse")
                 .as_slice(),
-            include_bytes!("../../../../tests/fixtures/responses/openai_chat/empty-content.sse")
-                .as_slice(),
-            include_bytes!("../../../../tests/fixtures/responses/openai_chat/unknown-fields.sse")
-                .as_slice(),
+            include_bytes!(
+                "../../../../tests/fixtures/protocol/openai_chat/stream/empty-content.sse"
+            )
+            .as_slice(),
+            include_bytes!(
+                "../../../../tests/fixtures/protocol/openai_chat/stream/unknown-fields.sse"
+            )
+            .as_slice(),
         ] {
             let events = decode(fixture)
                 .await
@@ -743,8 +747,9 @@ mod tests {
 
     #[tokio::test]
     async fn single_tool_call_stream_emits_start_delta_end_and_tool_calls_finish() {
-        let fixture =
-            include_bytes!("../../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse");
+        let fixture = include_bytes!(
+            "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/single-call.sse"
+        );
         let events = decode(fixture)
             .await
             .into_iter()
@@ -788,7 +793,7 @@ mod tests {
     #[tokio::test]
     async fn parallel_tool_calls_preserve_first_seen_domain_order() {
         let fixture = include_bytes!(
-            "../../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/parallel-interleaved.sse"
         );
         let events = decode(fixture)
             .await
@@ -816,18 +821,18 @@ mod tests {
     #[tokio::test]
     async fn name_and_argument_splits_reassemble_identically() {
         for fixture in [
-            include_bytes!("../../../../tests/fixtures/phase-2/streams/tool-calls/name-split.sse")
+            include_bytes!("../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/name-split.sse")
                 .as_slice(),
             include_bytes!(
-                "../../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
+                "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/arguments-char-split.sse"
             )
             .as_slice(),
             include_bytes!(
-                "../../../../tests/fixtures/phase-2/streams/tool-calls/id-first-chunk-only.sse"
+                "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/id-first-chunk-only.sse"
             )
             .as_slice(),
             include_bytes!(
-                "../../../../tests/fixtures/phase-2/streams/tool-calls/usage-after-tool.sse"
+                "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/usage-after-tool.sse"
             )
             .as_slice(),
         ] {
@@ -865,30 +870,32 @@ mod tests {
         let cases: &[ErrorCase] = &[
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/phase-2/streams/tool-calls/incomplete-arguments.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/incomplete-arguments.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/phase-2/streams/tool-calls/conflicting-id.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/conflicting-id.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/phase-2/streams/tool-calls/duplicate-finish.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/duplicate-finish.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/phase-2/streams/tool-calls/done-before-call-end.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/done-before-call-end.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
-                include_bytes!("../../../../tests/fixtures/responses/openai_chat/tool-finish.sse"),
+                include_bytes!(
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/tool-finish.sse"
+                ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
         ];
@@ -912,7 +919,7 @@ mod tests {
     #[tokio::test]
     async fn oversized_tool_arguments_fail_with_reduced_limits() {
         let fixture = include_bytes!(
-            "../../../../tests/fixtures/phase-2/streams/tool-calls/oversized-arguments.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/oversized-arguments.sse"
         );
         let limits = ResourceLimits::builder()
             .with_max_tool_arguments_bytes(16)
@@ -949,16 +956,18 @@ mod tests {
     #[tokio::test]
     async fn random_and_forced_partitions_match_single_chunk_baseline() {
         let fixtures: &[&[u8]] = &[
-            include_bytes!("../../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse"),
             include_bytes!(
-                "../../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+                "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/single-call.sse"
             ),
             include_bytes!(
-                "../../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
+                "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/parallel-interleaved.sse"
             ),
-            include_bytes!("../../../../tests/fixtures/responses/openai_chat/text.sse"),
             include_bytes!(
-                "../../../../tests/fixtures/phase-2/streams/usage/usage-only-after-stop.sse"
+                "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/arguments-char-split.sse"
+            ),
+            include_bytes!("../../../../tests/fixtures/protocol/openai_chat/stream/text.sse"),
+            include_bytes!(
+                "../../../../tests/fixtures/protocol/openai_chat/stream/usage/usage-only-after-stop.sse"
             ),
         ];
 
@@ -1003,19 +1012,19 @@ mod tests {
         #![proptest_config(property_config())]
 
         #[test]
-        fn phase2_tool_arguments_random_split_is_stable(
+        fn tool_arguments_random_split_is_stable(
             chunk_sizes in prop::collection::vec(1usize..48, 0..64),
         ) {
             let fixtures: &[&[u8]] = &[
-                include_bytes!("../../../../tests/fixtures/phase-2/streams/tool-calls/single-call.sse"),
+                include_bytes!("../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/single-call.sse"),
                 include_bytes!(
-                    "../../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/parallel-interleaved.sse"
                 ),
                 include_bytes!(
-                    "../../../../tests/fixtures/phase-2/streams/tool-calls/arguments-char-split.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/arguments-char-split.sse"
                 ),
                 include_bytes!(
-                    "../../../../tests/fixtures/phase-2/streams/tool-calls/name-split.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/name-split.sse"
                 ),
             ];
 
@@ -1044,9 +1053,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn phase2_unknown_finish_fails_closed() {
+    async fn unknown_finish_fails_closed() {
         let results = decode(include_bytes!(
-            "../../../../tests/fixtures/phase-2/streams/finish/unknown-finish-fail-closed.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/finish/unknown-finish-fail-closed.sse"
         ))
         .await;
         let errors: Vec<_> = results
@@ -1063,9 +1072,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn phase2_tool_stream_preserves_parallel_calls() {
+    async fn tool_stream_preserves_parallel_calls() {
         let events = decode(include_bytes!(
-            "../../../../tests/fixtures/phase-2/streams/tool-calls/parallel-interleaved.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/tool-calls/parallel-interleaved.sse"
         ))
         .await
         .into_iter()
@@ -1084,7 +1093,7 @@ mod tests {
     #[tokio::test]
     async fn usage_only_after_stop_merges_without_extra_text() {
         let events = decode(include_bytes!(
-            "../../../../tests/fixtures/phase-2/streams/usage/usage-only-after-stop.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/usage/usage-only-after-stop.sse"
         ))
         .await
         .into_iter()
@@ -1118,7 +1127,7 @@ mod tests {
     #[tokio::test]
     async fn official_reasoning_content_is_ignored_and_usage_tokens_are_kept() {
         let events = decode(include_bytes!(
-            "../../../../tests/fixtures/phase-2/streams/thinking/official-reasoning-content-ignored.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/thinking/official-reasoning-content-ignored.sse"
         ))
         .await
         .into_iter()
@@ -1146,7 +1155,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_tool_argument_json_fails_without_tool_call_end() {
         let results = decode(include_bytes!(
-            "../../../../tests/fixtures/phase-2/streams/malformed/tool-arguments-invalid-json.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/malformed/tool-arguments-invalid-json.sse"
         ))
         .await;
         assert!(
@@ -1163,61 +1172,61 @@ mod tests {
         let cases: &[ErrorCase] = &[
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/unknown-finish-reason.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/unknown-finish-reason.sse"
                 ),
                 |error| matches!(error, LlmError::UnknownFinishReason(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/content-filter.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/content-filter.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/nonzero-choice-index.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/nonzero-choice-index.sse"
                 ),
                 |error| matches!(error, LlmError::UnsupportedResponseSemantics(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/done-without-finish.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/done-without-finish.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/finish-without-done.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/finish-without-done.sse"
                 ),
                 |error| matches!(error, LlmError::TruncatedStream(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/duplicate-finish.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/duplicate-finish.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/duplicate-done.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/duplicate-done.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/data-after-done.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/data-after-done.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/json-error-object.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/json-error-object.sse"
                 ),
                 |error| matches!(error, LlmError::Protocol(_)),
             ),
             (
                 include_bytes!(
-                    "../../../../tests/fixtures/responses/openai_chat/malformed-json.sse"
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/malformed-json.sse"
                 ),
                 |error| {
                     matches!(
@@ -1227,7 +1236,9 @@ mod tests {
                 },
             ),
             (
-                include_bytes!("../../../../tests/fixtures/responses/openai_chat/truncated.sse"),
+                include_bytes!(
+                    "../../../../tests/fixtures/protocol/openai_chat/stream/truncated.sse"
+                ),
                 |error| matches!(error, LlmError::TruncatedStream(_)),
             ),
         ];
@@ -1251,7 +1262,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_json_diagnostics_do_not_echo_data() {
         let results = decode(include_bytes!(
-            "../../../../tests/fixtures/responses/openai_chat/malformed-json.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/malformed-json.sse"
         ))
         .await;
         let error = results.last().unwrap().as_ref().unwrap_err();
@@ -1261,7 +1272,8 @@ mod tests {
 
     #[tokio::test]
     async fn byte_by_byte_chat_fixture_matches_single_chunk() {
-        let fixture = include_bytes!("../../../../tests/fixtures/responses/openai_chat/text.sse");
+        let fixture =
+            include_bytes!("../../../../tests/fixtures/protocol/openai_chat/stream/text.sse");
         let baseline = decode(fixture)
             .await
             .into_iter()
@@ -1368,7 +1380,7 @@ mod tests {
     #[tokio::test]
     async fn structured_output_is_validated_before_done_is_emitted() {
         let invalid = include_bytes!(
-            "../../../../tests/fixtures/phase-2/repair/response/structured-invalid-json.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/regression/structured-invalid-json.sse"
         );
         let results = decode_with_format(
             invalid,
@@ -1388,7 +1400,7 @@ mod tests {
         );
 
         let valid = include_bytes!(
-            "../../../../tests/fixtures/phase-2/repair/response/structured-valid.sse"
+            "../../../../tests/fixtures/protocol/openai_chat/stream/regression/structured-valid.sse"
         );
         let events = decode_with_format(
             valid,
@@ -1416,7 +1428,7 @@ mod tests {
         );
         let results = decode_with_format(
             include_bytes!(
-                "../../../../tests/fixtures/phase-2/repair/response/structured-schema-violation.sse"
+                "../../../../tests/fixtures/protocol/openai_chat/stream/regression/structured-schema-violation.sse"
             ),
             format,
             ResourceLimits::official().into(),

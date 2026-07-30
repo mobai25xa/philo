@@ -1,0 +1,11 @@
+{
+  "fixture_id": "security-opaque-thinking-canary",
+  "protocol": "synthetic-opaque-boundary",
+  "source": "synthetic",
+  "expected": "success",
+  "canary_visible": "visible-thinking-canary",
+  "canary_opaque": "opaque-thinking-canary",
+  "scenario": "thinking-debug-redaction",
+  "redaction_status": "synthetic-no-secrets",
+  "notes": "Synthetic P3 boundary fixture; default Debug hides visible and opaque thinking"
+}

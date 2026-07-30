@@ -1,6 +1,6 @@
 # Reliability configuration
 
-Phase 4 remains an LLM SDK reliability layer. It does not implement agent loops,
+The reliability layer remains an LLM SDK concern. It does not implement agent loops,
 tool execution, cross-provider fallback, circuit breakers, tenant queues, or service SLOs.
 
 ## Defaults and precedence

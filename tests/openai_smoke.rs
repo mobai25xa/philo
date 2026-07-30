@@ -1,4 +1,4 @@
-//! Explicitly enabled, sequential official `OpenAI` phase-two smoke suite.
+//! Explicitly enabled, sequential official `OpenAI` Chat smoke suite.
 #![allow(clippy::too_many_lines)]
 
 use std::collections::{BTreeSet, HashSet};
@@ -17,7 +17,7 @@ use philo::provider::capability::{ModelCapabilityProfile, OFFICIAL_OPENAI_CAPABI
 use philo::provider::profiles::OfficialOpenAiProfile;
 use philo::{
     AssistantEvent, ContentPart, FinishReason, GenerateRequest, GenerationOptions, LlmClient,
-    Message, MessageRole, ModelId, ModelRef, PHASE_TWO_CONTRACT_ID, PHASE_TWO_CONTRACT_VERSION,
+    Message, MessageRole, ModelId, ModelRef, OPENAI_CHAT_CONTRACT_ID, OPENAI_CHAT_CONTRACT_VERSION,
     TokenCount,
 };
 use serde_json::json;
@@ -87,8 +87,8 @@ impl SmokeConfig {
         println!(
             "smoke_status=passed case={case} commit={} contract={}/{} profile=official-openai model={} review_date={} {summary}",
             self.commit,
-            PHASE_TWO_CONTRACT_ID,
-            PHASE_TWO_CONTRACT_VERSION,
+            OPENAI_CHAT_CONTRACT_ID,
+            OPENAI_CHAT_CONTRACT_VERSION,
             self.model,
             OFFICIAL_OPENAI_CAPABILITY_REVIEW_DATE,
         );
@@ -97,7 +97,7 @@ impl SmokeConfig {
     fn skip(&self, case: &str, capability: &str) {
         println!(
             "smoke_status=skipped case={case} capability={capability} reason=capability_unsupported commit={} contract={}/{} model={}",
-            self.commit, PHASE_TWO_CONTRACT_ID, PHASE_TWO_CONTRACT_VERSION, self.model,
+            self.commit, OPENAI_CHAT_CONTRACT_ID, OPENAI_CHAT_CONTRACT_VERSION, self.model,
         );
     }
 }
@@ -167,7 +167,7 @@ async fn summarize_stream(
 }
 
 #[tokio::test]
-async fn official_openai_phase_two_smoke_suite() {
+async fn official_openai_chat_smoke_suite() {
     if std::env::var(ENABLED).as_deref() != Ok("true") {
         println!("smoke_status=skipped reason=disabled");
         return;
@@ -183,7 +183,7 @@ async fn official_openai_phase_two_smoke_suite() {
     reasoning_smoke(&config).await;
     println!(
         "smoke_suite_status=passed commit={} contract={}/{} profile=official-openai model={} result=pass",
-        config.commit, PHASE_TWO_CONTRACT_ID, PHASE_TWO_CONTRACT_VERSION, config.model,
+        config.commit, OPENAI_CHAT_CONTRACT_ID, OPENAI_CHAT_CONTRACT_VERSION, config.model,
     );
 }
 

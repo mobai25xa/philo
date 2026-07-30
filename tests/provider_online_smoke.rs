@@ -14,7 +14,7 @@ use support::conformance::{
 };
 
 #[tokio::test]
-#[ignore = "requires protected provider-conformance environment and explicit opt-in"]
+#[ignore = "requires protected provider-canary environment and explicit opt-in"]
 async fn protected_provider_conformance_smoke() {
     if std::env::var("PHILO_PROVIDER_ONLINE_ENABLED").as_deref() != Ok("true") {
         return;

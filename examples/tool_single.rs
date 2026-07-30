@@ -87,7 +87,7 @@ async fn main() -> ExampleResult {
         return offline_demo(tool);
     }
 
-    let client = support::client_with_phase2_capabilities()?;
+    let client = support::client_with_example_capabilities()?;
     let options = GenerationOptions::new()
         .with_tools(vec![tool.clone()])
         .with_tool_choice(ToolChoice::Required);

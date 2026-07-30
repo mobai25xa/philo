@@ -1,0 +1,10 @@
+[package]
+name = "philo-consumer-configuration"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+philo.workspace = true
+philo-config.workspace = true

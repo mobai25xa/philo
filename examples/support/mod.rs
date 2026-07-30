@@ -24,8 +24,8 @@ pub(crate) fn model_from_env(provider: &str) -> ExampleResult<ModelRef> {
     Ok(ModelRef::new(provider, std::env::var("OPENAI_MODEL")?)?)
 }
 
-/// Builds a client whose exact model profile enables selected phase-two features.
-pub(crate) fn client_with_phase2_capabilities() -> ExampleResult<LlmClient> {
+/// Builds a client whose exact model profile enables the example capabilities.
+pub(crate) fn client_with_example_capabilities() -> ExampleResult<LlmClient> {
     let key = std::env::var("OPENAI_API_KEY")?;
     let model = std::env::var("OPENAI_MODEL")?;
     let profile = ModelCapabilityProfile::new(ModelId::new(model)?)

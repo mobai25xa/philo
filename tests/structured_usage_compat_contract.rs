@@ -1,4 +1,4 @@
-//! Phase-two structured output, usage/cost, and dialect combination contracts.
+//! Structured output, usage/cost, and dialect combination contracts.
 
 use std::collections::BTreeSet;
 
@@ -150,10 +150,10 @@ fn estimate_cost_uses_price_profile_and_half_up_micros() {
 }
 
 #[tokio::test]
-async fn collector_accepts_detailed_usage_and_preserves_p1_usage() {
+async fn collector_accepts_detailed_usage_and_preserves_core_usage() {
     let events = stream::iter(vec![
         Ok(AssistantEvent::Start {
-            local_request_id: LocalRequestId::new("local-p2").unwrap(),
+            local_request_id: LocalRequestId::new("local-detailed-usage").unwrap(),
             provider_request_id: None,
             generation_id: None,
         }),

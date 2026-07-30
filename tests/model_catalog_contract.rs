@@ -1,17 +1,19 @@
-//! P3-004 exact model catalog, provenance, and planner contracts.
+//! Exact model catalog, provenance, and planner contracts.
+
+mod support;
 
 use std::collections::BTreeMap;
 
 use philo::domain::ids::ProtocolId;
 use philo::domain::request::{CapabilityStatus, ReasoningEffortSupport};
-use philo::provider::TestOnlyProfile;
 use philo::provider::catalog::{
     CatalogCapabilities, CatalogSource, CatalogSourceId, ModelCatalog, ModelEntry, ModelKey,
     ModelLimits, ProductId, ProviderModelId, WireModelValue,
 };
 use philo::{ModelId, ProviderId};
+use support::provider::TestProvider;
 
-const ENDPOINT: &str = "http://127.0.0.1:41993/v1/chat/completions";
+const ENDPOINT: &str = "https://test.invalid/v1/chat/completions";
 
 fn source(id: &str, expires: Option<&str>) -> CatalogSource {
     CatalogSource::new(
@@ -165,7 +167,7 @@ fn duplicate_and_cross_provider_catalog_entries_fail_closed() {
     };
     let catalog = ModelCatalog::from_entries([foreign]).unwrap();
     assert!(
-        TestOnlyProfile::localhost(ENDPOINT, "test-key")
+        TestProvider::new(ENDPOINT, "test-key")
             .unwrap()
             .with_catalog(catalog)
             .build()

@@ -6,6 +6,8 @@
 //! explicit secret resolution. These tests pin that path and the isolation
 //! guarantees that survived the extraction.
 
+mod support;
+
 use std::sync::{Arc, Barrier};
 use std::thread;
 
@@ -14,13 +16,18 @@ use http::{HeaderMap, HeaderValue, StatusCode, header};
 use philo::domain::request::CapabilityStatus;
 use philo::error::{ProviderConfigFailure, ProviderRegistryFailure};
 use philo::provider::auth::ApiKey;
+use philo::provider::definition::AuthScheme;
+use philo::provider::endpoint::EndpointConfig;
+use philo::provider::factory::{ProviderSelectionInput, ProviderSelectionSource, ProviderSelector};
 use philo::provider::profiles::{OfficialAnthropicProfile, OfficialOpenAiProfile};
 use philo::provider::registry::{ProviderRegistration, ProviderRegistry};
 use philo::provider::secret::{SecretReference, SecretResolver};
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
+use philo::provider::{ProductId, ProviderCapabilities, ProviderDefinition};
 use philo::{
     GenerateRequest, LlmClient, Message, ModelId, ModelRef, ProviderDeploymentConfig, ProviderId,
 };
+use support::mock_transport::{MockBodyItem, MockExchange, MockResponse, MockTransport};
+use support::provider::TestProvider;
 
 const KEY_CANARY: &str = "philo-registry-secret-canary-1734";
 const SECRET_NAME: &str = "PHILO_REGISTRY_API_KEY";
@@ -133,7 +140,7 @@ fn anthropic_success_response() -> MockResponse {
         StatusCode::OK,
         headers,
         vec![MockBodyItem::chunk(Bytes::from_static(include_bytes!(
-            "fixtures/phase-5/anthropic-messages/stream/text.sse"
+            "fixtures/protocol/anthropic_messages/stream/text.sse"
         )))],
     )
 }
@@ -458,4 +465,99 @@ fn registry_releases_its_lock_before_resolving_a_secret() {
     release.wait();
     let runtime = build.join().unwrap();
     assert_eq!(runtime.provider_id().as_str(), "official-openai");
+}
+
+#[test]
+fn provider_selection_precedence_is_explicit() {
+    let request = ProviderSelector::select(
+        &ProviderSelectionInput::new()
+            .with_request_provider(provider("request-provider"))
+            .with_model_provider(provider("model-provider"))
+            .with_provider(provider("configured-provider"))
+            .with_built_in_profile(provider("built-in-provider")),
+    );
+    assert_eq!(request.provider_id().unwrap().as_str(), "request-provider");
+    assert_eq!(request.source(), ProviderSelectionSource::RequestExplicit);
+
+    let model = ProviderSelector::select(
+        &ProviderSelectionInput::new()
+            .with_model_provider(provider("model-provider"))
+            .with_provider(provider("configured-provider"))
+            .with_built_in_profile(provider("built-in-provider")),
+    );
+    assert_eq!(model.provider_id().unwrap().as_str(), "model-provider");
+    assert_eq!(model.source(), ProviderSelectionSource::ModelExplicit);
+
+    let configured = ProviderSelector::select(
+        &ProviderSelectionInput::new()
+            .with_provider(provider("configured-provider"))
+            .with_built_in_profile(provider("built-in-provider")),
+    );
+    assert_eq!(
+        configured.provider_id().unwrap().as_str(),
+        "configured-provider"
+    );
+    assert_eq!(
+        configured.source(),
+        ProviderSelectionSource::ProviderExplicit
+    );
+
+    let profile = ProviderSelector::select(
+        &ProviderSelectionInput::new().with_built_in_profile(provider("built-in-provider")),
+    );
+    assert_eq!(profile.provider_id().unwrap().as_str(), "built-in-provider");
+    assert_eq!(profile.source(), ProviderSelectionSource::BuiltInProfile);
+}
+
+#[test]
+fn undeclared_provider_selection_never_guesses_from_an_endpoint() {
+    let selection = ProviderSelector::select(&ProviderSelectionInput::new());
+    assert!(selection.provider_id().is_none());
+    assert_eq!(selection.source(), ProviderSelectionSource::Undeclared);
+    assert_ne!(
+        selection.provider_id().map(ProviderId::as_str),
+        Some("official-openai")
+    );
+}
+
+#[tokio::test]
+async fn undeclared_request_fails_before_transport() {
+    let runtime = TestProvider::new("https://test.invalid/v1/chat/completions", "key")
+        .unwrap()
+        .build()
+        .unwrap();
+    let transport = MockTransport::default();
+    let request = GenerateRequest::new(
+        ModelRef::new("undeclared-provider", "some-model").unwrap(),
+        vec![Message::user("hello")],
+    );
+    let error = LlmClient::new(runtime, transport.clone())
+        .stream(request)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        philo::LlmError::Validation(ref error)
+            if error.reason() == philo::error::ValidationReason::ProviderMismatch
+    ));
+    assert!(transport.captured_requests().is_empty());
+}
+
+#[test]
+fn explicit_definition_is_the_only_provider_identity_replacement() {
+    let definition = ProviderDefinition::openai_chat(
+        provider("official-openai"),
+        ProductId::new("chat-completions").unwrap(),
+    )
+    .with_endpoint(
+        EndpointConfig::base_and_path("https://api.openai.com/v1", "/chat/completions").unwrap(),
+    )
+    .bind_credential_to_endpoint_origin()
+    .with_auth_scheme(AuthScheme::bearer())
+    .with_capabilities(ProviderCapabilities::conservative_chat_completions())
+    .allow_unregistered_models()
+    .build()
+    .unwrap();
+    assert_eq!(definition.provider_id().as_str(), "official-openai");
+    assert_eq!(definition.product_id().as_str(), "chat-completions");
 }

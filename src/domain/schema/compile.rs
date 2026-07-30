@@ -211,7 +211,7 @@ fn validate_schema_node(
             "schema.additionalProperties",
             SchemaFailure::InvalidKeywordType,
             Some(format!("{path}/additionalProperties")),
-            "additionalProperties must be a boolean in phase two",
+            "additionalProperties must be a boolean",
         ));
     }
 

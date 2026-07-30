@@ -1,20 +1,22 @@
-//! P3-007 header ownership, identity, and dynamic policy contracts.
+//! Header ownership, identity, and dynamic policy contracts.
+
+mod support;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use philo::error::{HeaderPolicyError, HeaderPolicyFailure};
-use philo::provider::TestOnlyProfile;
 use philo::provider::headers::{
     ClientIdentity, ClientIdentityFragment, DynamicHeaderContext, DynamicHeaderFuture,
-    DynamicHeaderPolicy, DynamicHeaderSource, HeaderLayer, HeaderOperation, HeaderPipeline,
-    HeaderSource,
+    DynamicHeaderPolicy, DynamicHeaderSource, DynamicResponseFormat, HeaderLayer, HeaderOperation,
+    HeaderPipeline, HeaderSource,
 };
-use philo::transport::mock::{MockExchange, MockResponse, MockTransport};
 use philo::{GenerateRequest, LlmClient, LlmError, Message, ModelRef};
+use support::mock_transport::{MockExchange, MockResponse, MockTransport};
+use support::provider::TestProvider;
 
-const ENDPOINT: &str = "http://127.0.0.1:42007/v1/chat/completions";
+const ENDPOINT: &str = "https://test.invalid/v1/chat/completions";
 
 fn request() -> GenerateRequest {
     GenerateRequest::new(
@@ -106,6 +108,15 @@ impl DynamicHeaderSource for RecordingPolicy {
         let operation = self.operation.clone();
         let delay = self.delay;
         Box::pin(async move {
+            let _ = context.product_id();
+            let _ = context.model_id();
+            let _ = context.protocol_id();
+            let _ = context.local_request_id();
+            let _ = context.contains_images();
+            let _ = context.reasoning_enabled();
+            assert_eq!(context.response_format(), DynamicResponseFormat::Text);
+            assert!(context.deadline().is_none());
+            assert!(!context.cancellation().is_cancelled());
             seen.lock().unwrap().push((
                 context.provider_id().as_str().to_owned(),
                 context.attempt_number(),
@@ -127,7 +138,7 @@ async fn dynamic_policy_sees_value_free_facts_and_applies_allowlisted_header() {
         delay: Duration::ZERO,
     });
     let policy = DynamicHeaderPolicy::new(source, vec![name.clone()]).unwrap();
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "header-key")
+    let runtime = TestProvider::new(ENDPOINT, "header-key")
         .unwrap()
         .with_dynamic_header_policy(policy)
         .build()
@@ -151,7 +162,7 @@ async fn dynamic_policy_illegal_sensitive_value_fails_before_io() {
         delay: Duration::ZERO,
     });
     let policy = DynamicHeaderPolicy::new(source, vec![name]).unwrap();
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "header-key")
+    let runtime = TestProvider::new(ENDPOINT, "header-key")
         .unwrap()
         .with_dynamic_header_policy(policy)
         .build()
@@ -181,7 +192,7 @@ async fn dynamic_policy_timeout_fails_before_io() {
         .unwrap()
         .with_timeout(Duration::from_millis(5))
         .unwrap();
-    let runtime = TestOnlyProfile::localhost(ENDPOINT, "header-key")
+    let runtime = TestProvider::new(ENDPOINT, "header-key")
         .unwrap()
         .with_dynamic_header_policy(policy)
         .build()
@@ -209,4 +220,137 @@ fn dynamic_allowlist_rejects_security_owner_headers_at_configuration_time() {
     assert!(matches!(result, Err(LlmError::HeaderPolicy(_))));
     let error = HeaderPolicyError::new(HeaderPolicyFailure::InvalidOperation);
     assert_eq!(error.kind(), HeaderPolicyFailure::InvalidOperation);
+}
+
+#[test]
+fn dynamic_policy_configuration_enforces_allowlist_and_budgets() {
+    let name = HeaderName::from_static("x-philo-session");
+    let source = Arc::new(RecordingPolicy {
+        seen: Arc::new(Mutex::new(Vec::new())),
+        operation: HeaderOperation::remove(name.clone()),
+        delay: Duration::ZERO,
+    });
+    assert!(DynamicHeaderPolicy::new(source.clone(), Vec::new()).is_err());
+    assert!(DynamicHeaderPolicy::new(source.clone(), vec![name.clone(); 33]).is_err());
+    let policy = DynamicHeaderPolicy::new(source, vec![name.clone()]).unwrap();
+    assert_eq!(policy.allowed_headers(), &[name]);
+    assert!(format!("{policy:?}").contains("DynamicHeaderPolicy"));
+    assert!(policy.clone().with_timeout(Duration::ZERO).is_err());
+    for (operations, bytes) in [(0, 1), (65, 1), (1, 0), (1, 65 * 1024)] {
+        assert!(policy.clone().with_budget(operations, bytes).is_err());
+    }
+    assert!(policy.with_budget(1, 64).is_ok());
+}
+
+#[derive(Debug)]
+struct OperationsPolicy {
+    operations: Vec<HeaderOperation>,
+    failure: Option<HeaderPolicyFailure>,
+}
+
+impl DynamicHeaderSource for OperationsPolicy {
+    fn resolve(&self, _context: DynamicHeaderContext) -> DynamicHeaderFuture {
+        let operations = self.operations.clone();
+        let failure = self.failure;
+        Box::pin(async move {
+            if let Some(failure) = failure {
+                Err(HeaderPolicyError::new(failure))
+            } else {
+                Ok(operations)
+            }
+        })
+    }
+}
+
+async fn policy_error(
+    source: OperationsPolicy,
+    allowlist: Vec<HeaderName>,
+    budget: (usize, usize),
+) -> HeaderPolicyFailure {
+    let policy = DynamicHeaderPolicy::new(Arc::new(source), allowlist)
+        .unwrap()
+        .with_budget(budget.0, budget.1)
+        .unwrap();
+    let runtime = TestProvider::new(ENDPOINT, "header-key")
+        .unwrap()
+        .with_dynamic_header_policy(policy)
+        .build()
+        .unwrap();
+    let error = LlmClient::new(runtime, MockTransport::default())
+        .stream(request())
+        .await
+        .unwrap_err();
+    match error {
+        LlmError::HeaderPolicy(error) => error.kind(),
+        unexpected => panic!("unexpected error: {unexpected:?}"),
+    }
+}
+
+#[tokio::test]
+async fn dynamic_policy_enforces_callback_operation_and_byte_results() {
+    let allowed = HeaderName::from_static("x-allowed");
+    let other = HeaderName::from_static("x-other");
+    let failure = policy_error(
+        OperationsPolicy {
+            operations: Vec::new(),
+            failure: Some(HeaderPolicyFailure::InvalidOperation),
+        },
+        vec![allowed.clone()],
+        (1, 64),
+    )
+    .await;
+    assert_eq!(failure, HeaderPolicyFailure::Callback);
+
+    let failure = policy_error(
+        OperationsPolicy {
+            operations: vec![
+                HeaderOperation::remove(allowed.clone()),
+                HeaderOperation::remove(allowed.clone()),
+            ],
+            failure: None,
+        },
+        vec![allowed.clone()],
+        (1, 64),
+    )
+    .await;
+    assert_eq!(failure, HeaderPolicyFailure::BudgetExceeded);
+
+    let failure = policy_error(
+        OperationsPolicy {
+            operations: vec![HeaderOperation::set(
+                other,
+                HeaderValue::from_static("value"),
+            )],
+            failure: None,
+        },
+        vec![allowed.clone()],
+        (1, 64),
+    )
+    .await;
+    assert_eq!(failure, HeaderPolicyFailure::InvalidOperation);
+
+    let failure = policy_error(
+        OperationsPolicy {
+            operations: vec![HeaderOperation::remove(HeaderName::from_static("x-other"))],
+            failure: None,
+        },
+        vec![allowed.clone()],
+        (1, 64),
+    )
+    .await;
+    assert_eq!(failure, HeaderPolicyFailure::InvalidOperation);
+
+    let failure = policy_error(
+        OperationsPolicy {
+            operations: vec![HeaderOperation::set(
+                allowed.clone(),
+                HeaderValue::from_static("a-long-value"),
+            )],
+            failure: None,
+        },
+        vec![allowed],
+        (1, 1),
+    )
+    .await;
+    assert_eq!(failure, HeaderPolicyFailure::BudgetExceeded);
 }

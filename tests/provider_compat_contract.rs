@@ -1,4 +1,6 @@
-//! Cross-provider compatibility contracts for the existing official and test-only profiles.
+//! Cross-provider compatibility contracts for official and test support profiles.
+
+mod support;
 
 use std::collections::BTreeSet;
 
@@ -13,26 +15,26 @@ use philo::domain::request::{CapabilityStatus, ReasoningEffort, ReasoningEffortS
 use philo::domain::schema::ToolSchema;
 use philo::domain::structured::{ResponseFormat, StructuredSchema};
 use philo::domain::tools::{ParallelToolCalls, ToolChoice, ToolDefinition};
-use philo::provider::TestOnlyProfile;
 use philo::provider::capability::{ModelCapabilityProfile, ProtocolDialect};
 use philo::provider::profiles::OfficialOpenAiProfile;
 use philo::provider::protocol_contract::{
     CompatProfile, FinishReasonCompat, MaxOutputTokensWireFormat, ToolArgumentsCompat, UsageCompat,
 };
-use philo::transport::mock::{MockBodyItem, MockExchange, MockResponse, MockTransport};
 use philo::{
     ContentPart, GenerateRequest, GenerationOptions, Message, MessageRole, ModelId, ModelRef,
 };
 use serde_json::json;
+use support::mock_transport::{MockBodyItem, MockExchange, MockResponse, MockTransport};
+use support::provider::TestProvider;
 
-const OFFICIAL_KEY: &str = "philo-compat-official-key-canary";
-const TEST_KEY: &str = "philo-compat-test-key-canary";
-const TEST_ENDPOINT: &str = "http://127.0.0.1:41992/v1/chat/completions";
+const OFFICIAL_KEY: &str = "provider-compat-official-key-canary";
+const TEST_KEY: &str = "provider-compat-test-key-canary";
+const TEST_ENDPOINT: &str = "https://test.invalid/v1/chat/completions";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EndpointClass {
     OfficialHttps,
-    LoopbackHttp,
+    TestHttps,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,7 +80,7 @@ fn official_runtime() -> ProviderRuntime {
 }
 
 fn test_only_runtime() -> ProviderRuntime {
-    TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+    TestProvider::new(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .build()
         .unwrap()
@@ -115,7 +117,7 @@ fn official_runtime_with_capabilities(status: CapabilityStatus) -> ProviderRunti
 }
 
 fn test_only_runtime_with_capabilities(status: CapabilityStatus) -> ProviderRuntime {
-    TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+    TestProvider::new(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .with_model_capabilities(model_capability_status(status, "gpt-test"))
         .build()
@@ -136,11 +138,11 @@ fn cases() -> [ProviderContractCase; 2] {
             build_with_capabilities: official_runtime_with_capabilities,
         },
         ProviderContractCase {
-            name: "test-only-loopback",
+            name: "test-support-definition",
             expected_provider: "test-only",
             expected_protocol: "openai-chat-completions",
             model: "gpt-test",
-            endpoint_class: EndpointClass::LoopbackHttp,
+            endpoint_class: EndpointClass::TestHttps,
             expected_dialect: ProtocolDialect::OpenAiChatCompletions,
             default_capabilities: DEFAULT_CAPABILITIES,
             build: test_only_runtime,
@@ -151,7 +153,7 @@ fn cases() -> [ProviderContractCase; 2] {
 
 #[tokio::test]
 async fn typed_request_compat_selects_max_tokens_without_a_public_payload_escape_hatch() {
-    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+    let runtime = TestProvider::new(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .with_model_compat(
             ModelId::new("gpt-compat-wire").unwrap(),
@@ -180,7 +182,7 @@ async fn typed_request_compat_selects_max_tokens_without_a_public_payload_escape
 
 #[test]
 fn illegal_capability_compat_pairs_fail_when_the_definition_is_built() {
-    let error = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+    let error = TestProvider::new(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .with_model_compat(
             ModelId::new("gpt-invalid-compat").unwrap(),
@@ -222,7 +224,7 @@ data: [DONE]
 
 #[tokio::test]
 async fn strict_usage_compat_rejects_reasoning_larger_than_output() {
-    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+    let runtime = TestProvider::new(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .build()
         .unwrap();
@@ -249,7 +251,7 @@ data: [DONE]
 
 #[tokio::test]
 async fn strict_finish_compat_still_rejects_an_identical_repeat() {
-    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+    let runtime = TestProvider::new(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .build()
         .unwrap();
@@ -318,7 +320,7 @@ data: [DONE]
 }
 
 fn duplicate_finish_runtime() -> ProviderRuntime {
-    TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+    TestProvider::new(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .with_model_compat(
             ModelId::new("gpt-duplicate-finish").unwrap(),
@@ -356,7 +358,7 @@ fn sse_response(body: impl AsRef<[u8]>) -> MockResponse {
 
 #[tokio::test]
 async fn typed_response_compat_normalizes_object_tool_arguments_in_the_private_adapter() {
-    let runtime = TestOnlyProfile::localhost(TEST_ENDPOINT, TEST_KEY)
+    let runtime = TestProvider::new(TEST_ENDPOINT, TEST_KEY)
         .unwrap()
         .with_model_capabilities(model_capability_status(
             CapabilityStatus::Supported,
@@ -505,7 +507,7 @@ fn success_response() -> MockResponse {
 }
 
 #[test]
-fn official_and_test_only_profiles_compile_to_typed_runtime() {
+fn official_and_test_support_profiles_compile_to_typed_runtime() {
     for case in cases() {
         let runtime = (case.build)();
         assert_eq!(
@@ -527,9 +529,9 @@ fn official_and_test_only_profiles_compile_to_typed_runtime() {
                 assert_eq!(runtime.endpoint().url().scheme(), "https");
                 assert_eq!(runtime.endpoint().url().host_str(), Some("api.openai.com"));
             }
-            EndpointClass::LoopbackHttp => {
-                assert_eq!(runtime.endpoint().url().scheme(), "http");
-                assert_eq!(runtime.endpoint().url().host_str(), Some("127.0.0.1"));
+            EndpointClass::TestHttps => {
+                assert_eq!(runtime.endpoint().url().scheme(), "https");
+                assert_eq!(runtime.endpoint().url().host_str(), Some("test.invalid"));
             }
         }
         assert!(
