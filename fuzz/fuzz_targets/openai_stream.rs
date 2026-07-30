@@ -15,6 +15,7 @@ use provider::TestProvider;
 
 fuzz_target!(|data: &[u8]| {
     let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
         .build()
         .expect("runtime");
     runtime.block_on(async {
