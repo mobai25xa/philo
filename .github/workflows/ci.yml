@@ -19,7 +19,7 @@ jobs:
     name: Format, lint, test, and docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
       - name: Verify and record the gate subject
@@ -69,7 +69,7 @@ jobs:
     name: API and behavior compatibility
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
           fetch-depth: 0
@@ -102,7 +102,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -118,7 +118,7 @@ jobs:
       # Override rust-toolchain.toml's development "stable" channel for this gate.
       RUSTUP_TOOLCHAIN: 1.97.1
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
@@ -137,7 +137,7 @@ jobs:
     name: Feature combinations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -154,7 +154,7 @@ jobs:
     name: Licenses and advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
@@ -166,7 +166,7 @@ jobs:
     name: Risk-weighted coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.PHILO_GATE_SUBJECT }}
       - uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
