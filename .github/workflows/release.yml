@@ -70,7 +70,7 @@ jobs:
     outputs:
       artifact_name: ${{ steps.identity.outputs.artifact_name }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.subject_commit }}
           fetch-depth: 0
@@ -268,7 +268,7 @@ jobs:
       PHILO_CANDIDATE_SHA: ${{ inputs.subject_commit }}
       PHILO_VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.subject_commit }}
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
