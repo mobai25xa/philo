@@ -94,7 +94,7 @@ max_idle_connections_per_host = 64
 enforced_by = "src/transport/network.rs and src/transport/reqwest.rs"
 
 [benchmark_thresholds]
-status = "provisional-until-first-approved-baseline"
+status = "approved"
 warning_relative_regression_percent = 25
 blocking_relative_regression_percent = 50
 hook_enabled_overhead_warning_percent = 20
